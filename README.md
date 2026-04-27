@@ -83,11 +83,22 @@ OpenSearch: **http://localhost:9200** · API: **http://localhost:8020**. First b
 
 #### Health, embeddings readiness, warmup
 
+From the **host** (ports published by compose):
+
 ```bash
 curl -s http://localhost:9200/ | head
 curl -s http://localhost:8020/health
 curl -s http://localhost:8020/health/embeddings
 curl -s -X POST http://localhost:8020/health/embeddings/warmup
+```
+
+From **inside** the API container (`opensearch-nada` is the Compose service name on the Docker network; the API listens on **`127.0.0.1:8020`** inside that container):
+
+```bash
+docker exec nada-ai-api-dev curl -s http://opensearch-nada:9200/ | head
+docker exec nada-ai-api-dev curl -s http://127.0.0.1:8020/health
+docker exec nada-ai-api-dev curl -s http://127.0.0.1:8020/health/embeddings
+docker exec nada-ai-api-dev curl -s -X POST http://127.0.0.1:8020/health/embeddings/warmup
 ```
 
 Use **warmup** after restarts so the first vector/hybrid search is not blocked by model load. `GET /health/embeddings` reports `not_initialized` until warmup or the first vector/hybrid request.
