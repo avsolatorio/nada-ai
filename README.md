@@ -240,3 +240,18 @@ Integration tests against a live OpenSearch cluster are optional (`@pytest.mark.
 ## MCP
 
 Not implemented in this phase; reserve `nada_ai/mcp/` or an optional `[project.optional-dependencies] mcp = [...]` when you add MCP servers.
+
+
+```bash
+docker compose -f docker-compose.opensearch.yml up --build -d
+mkdir -p data/nada-discovery
+docker exec nada-ai-api-dev python -m nada_ai.ingest.cli create_index
+docker exec -it nada-ai-api-dev \
+  python -m nada_ai.ingest.cli index_from_catalog --catalog_type=timeseries
+
+docker exec nada-ai-api-dev curl -s -X POST http://127.0.0.1:8020/health/embeddings/warmup
+
+
+uv run python -m nada_ai.ingest.cli index_from_catalog --catalog_type=timeseries
+
+```

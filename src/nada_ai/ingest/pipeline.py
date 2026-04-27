@@ -7,6 +7,7 @@ from typing import Any
 from ai4data.discovery.catalog import get_langdoc_uuid
 from ai4data.discovery.metadata.handler import MetadataLoader
 from opensearchpy.helpers import bulk
+from tqdm.auto import tqdm
 
 from nada_ai.search.backend.opensearch.client import build_client
 from nada_ai.search.backend.opensearch.documents import langdoc_to_source
@@ -50,7 +51,10 @@ def iter_bulk_actions(
         items = buffer
         buffer = []
         if use_ml:
-            for doc, raw_meta in items:
+            ml_iter = enumerate(items)
+            if show_progress_bar:
+                ml_iter = tqdm(ml_iter, total=len(items), unit="doc", desc="Pack bulk actions", leave=False)
+            for _, (doc, raw_meta) in ml_iter:
                 doc_id = get_langdoc_uuid(doc)
                 source = langdoc_to_source(doc, None, raw_metadata=raw_meta)
                 yield {
@@ -65,7 +69,10 @@ def iter_bulk_actions(
             raise RuntimeError("embedding service required for local embedding backend")
         texts = [d.page_content for d, _ in items]
         vectors = embedding.encode_corpus(texts, show_progress_bar=show_progress_bar)
-        for i, (doc, raw_meta) in enumerate(items):
+        pack_iter = enumerate(items)
+        if show_progress_bar:
+            pack_iter = tqdm(pack_iter, total=len(items), unit="doc", desc="Pack bulk actions", leave=False)
+        for i, (doc, raw_meta) in pack_iter:
             vec = vectors[i].tolist()
             doc_id = get_langdoc_uuid(doc)
             source = langdoc_to_source(doc, vec, raw_metadata=raw_meta)
@@ -76,7 +83,12 @@ def iter_bulk_actions(
                 "_source": source,
             }
 
-    for idno, metadata_type in pairs:
+    pairs_iter: Iterable[tuple[str, str]] = pairs
+    if show_progress_bar:
+        total_rows = len(pairs) if isinstance(pairs, list) else None
+        pairs_iter = tqdm(pairs, total=total_rows, unit="row", desc="Load metadata")
+
+    for idno, metadata_type in pairs_iter:
         try:
             loader = MetadataLoader(idno=idno, metadata_type=metadata_type, force=force)
             raw = loader.metadata
