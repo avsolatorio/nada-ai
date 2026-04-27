@@ -1,0 +1,779 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NADA OpenSearch — search demo</title>
+    <style>
+      :root {
+        --bg: #0f1419;
+        --surface: #1a2332;
+        --border: #2d3a4d;
+        --text: #e7edf5;
+        --muted: #8b9cb3;
+        --accent: #5b9fd4;
+        --error: #e07070;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        margin: 0;
+        line-height: 1.5;
+        min-height: 100vh;
+      }
+      .wrap {
+        max-width: 56rem;
+        margin: 0 auto;
+        padding: 1.5rem 1.25rem 3rem;
+      }
+      header {
+        margin-bottom: 1.5rem;
+      }
+      header h1 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin: 0 0 0.25rem;
+      }
+      header p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.875rem;
+      }
+      header a {
+        color: var(--accent);
+      }
+      form {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 1.25rem;
+        display: grid;
+        gap: 1rem;
+      }
+      label {
+        display: block;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        margin-bottom: 0.35rem;
+      }
+      .hint {
+        font-size: 0.7rem;
+        text-transform: none;
+        letter-spacing: 0;
+        font-weight: 400;
+        color: var(--muted);
+      }
+      input[type="text"],
+      input[type="number"],
+      select,
+      textarea {
+        width: 100%;
+        padding: 0.5rem 0.65rem;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        font-size: 0.9375rem;
+      }
+      textarea {
+        min-height: 4rem;
+        resize: vertical;
+        font-family: inherit;
+      }
+      .row {
+        display: grid;
+        gap: 1rem;
+      }
+      @media (min-width: 640px) {
+        .row.cols-2 {
+          grid-template-columns: 1fr 1fr;
+        }
+        .row.cols-3 {
+          grid-template-columns: repeat(3, 1fr);
+        }
+      }
+      .check {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .check input {
+        width: auto;
+      }
+      .check label {
+        margin: 0;
+        text-transform: none;
+        font-size: 0.875rem;
+        color: var(--text);
+      }
+      button {
+        justify-self: start;
+        padding: 0.55rem 1.25rem;
+        border-radius: 8px;
+        border: none;
+        background: var(--accent);
+        color: var(--bg);
+        font-weight: 600;
+        font-size: 0.9375rem;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      details.filter-block {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        background: rgba(0, 0, 0, 0.15);
+      }
+      details.filter-block > summary {
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 0.875rem;
+        font-weight: 500;
+      }
+      details.filter-block .inner {
+        margin-top: 0.85rem;
+      }
+      #status {
+        font-size: 0.8125rem;
+        color: var(--muted);
+        min-height: 1.25rem;
+      }
+      #status.err {
+        color: var(--error);
+      }
+      #results {
+        margin-top: 1.5rem;
+      }
+      #results h2 {
+        font-size: 1rem;
+        margin: 0 0 0.75rem;
+      }
+      .empty-hits {
+        color: var(--muted);
+        font-size: 0.875rem;
+        padding: 1rem;
+        text-align: center;
+        border: 1px dashed var(--border);
+        border-radius: 10px;
+      }
+      pre.raw,
+      pre.os-body {
+        overflow: auto;
+        max-height: 22rem;
+        font-size: 0.7rem;
+        line-height: 1.4;
+        color: var(--muted);
+        margin: 0.5rem 0 0;
+        padding: 0.75rem;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+      }
+      pre.os-body {
+        color: #c8d4e0;
+        max-height: 28rem;
+      }
+      #query-preview-section {
+        margin-top: 1.5rem;
+      }
+      #query-preview-section h2 {
+        font-size: 0.95rem;
+        margin: 0 0 0.5rem;
+        color: var(--muted);
+      }
+      /* Collapsible panel below query */
+      details.search-controls {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 0;
+        background: rgba(0, 0, 0, 0.12);
+        overflow: hidden;
+      }
+      details.search-controls > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 0.75rem 1rem;
+        font-size: 0.875rem;
+        font-weight: 600;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        user-select: none;
+      }
+      details.search-controls > summary::-webkit-details-marker {
+        display: none;
+      }
+      details.search-controls > summary::after {
+        content: "▸";
+        font-size: 0.75rem;
+        opacity: 0.7;
+        transition: transform 0.15s ease;
+      }
+      details.search-controls[open] > summary::after {
+        transform: rotate(90deg);
+      }
+      details.search-controls .controls-inner {
+        padding: 0 1rem 1rem;
+        display: grid;
+        gap: 1rem;
+        border-top: 1px solid var(--border);
+      }
+      .search-actions {
+        margin-top: 0.75rem;
+      }
+      .search-actions button {
+        width: 100%;
+      }
+      @media (min-width: 480px) {
+        .search-actions button {
+          width: auto;
+        }
+      }
+      /* Result cards */
+      .hits-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+      .hit-card {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: linear-gradient(165deg, rgba(91, 159, 212, 0.06) 0%, var(--surface) 48%);
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      }
+      .hit-card__head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem 0.75rem;
+        padding: 0.85rem 1rem;
+        border-bottom: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.2);
+      }
+      .hit-card__rank {
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: var(--muted);
+        min-width: 1.75rem;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.2rem 0.55rem;
+        border-radius: 6px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        border: 1px solid var(--border);
+      }
+      .badge--type {
+        background: rgba(91, 159, 212, 0.18);
+        color: #a8d4f5;
+        border-color: rgba(91, 159, 212, 0.35);
+      }
+      .badge--type-indicator {
+        background: rgba(94, 234, 212, 0.12);
+        color: #7ee0cf;
+        border-color: rgba(94, 234, 212, 0.3);
+      }
+      .badge--type-microdata {
+        background: rgba(196, 181, 253, 0.12);
+        color: #c4b5fd;
+        border-color: rgba(196, 181, 253, 0.3);
+      }
+      .badge--type-document {
+        background: rgba(251, 191, 36, 0.1);
+        color: #fcd34d;
+        border-color: rgba(251, 191, 36, 0.28);
+      }
+      .badge--type-geospatial {
+        background: rgba(52, 211, 153, 0.1);
+        color: #6ee7b7;
+        border-color: rgba(52, 211, 153, 0.28);
+      }
+      .badge--qfield {
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
+        font-weight: 500;
+        font-family: ui-monospace, monospace;
+        font-size: 0.68rem;
+      }
+      .badge--score {
+        margin-left: auto;
+        background: rgba(0, 0, 0, 0.25);
+        color: var(--accent);
+        font-variant-numeric: tabular-nums;
+      }
+      .hit-card__body {
+        padding: 1rem 1rem 1.1rem;
+      }
+      .hit-card__snippet {
+        font-size: 0.9rem;
+        line-height: 1.55;
+        color: #dce6f0;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .hit-card__foot {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 1.25rem;
+        margin-top: 0.85rem;
+        padding-top: 0.75rem;
+        border-top: 1px dashed rgba(45, 58, 77, 0.8);
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+      .hit-card__foot .meta-k {
+        font-weight: 600;
+        color: #6b7c92;
+        margin-right: 0.35rem;
+      }
+      .hit-card__foot .meta-v {
+        font-family: ui-monospace, monospace;
+        font-size: 0.7rem;
+        color: var(--text);
+      }
+      .hit-card__foot > div {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+      }
+      .hit-card .inner-hits-block {
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px dashed var(--border);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1>NADA OpenSearch</h1>
+        <p>
+          Live search against the indexed metadata. API:
+          <a href="/docs">OpenAPI docs</a> · <a href="/health">health</a>
+        </p>
+      </header>
+
+      <form id="search-form" action="#" method="post">
+        <div>
+          <label for="q">Query</label>
+          <textarea id="q" required placeholder="e.g. GDP inflation labor">
+consumer price index</textarea
+          >
+        </div>
+
+        <details class="search-controls">
+          <summary>
+            <span>Search options, filters &amp; advanced</span>
+            <span class="hint" style="font-weight: 400">mode, size, filters, collapse, …</span>
+          </summary>
+          <div class="controls-inner">
+        <div class="row cols-3">
+          <div>
+            <label for="mode">Mode</label>
+            <select id="mode">
+              <option value="hybrid" selected>hybrid</option>
+              <option value="keyword">keyword</option>
+              <option value="vector">vector</option>
+            </select>
+          </div>
+          <div>
+            <label for="size">Size</label>
+            <input type="number" id="size" min="1" max="100" value="10" />
+          </div>
+          <div>
+            <label for="from">From (offset)</label>
+            <input type="number" id="from" min="0" value="0" />
+          </div>
+        </div>
+        <div class="row cols-2">
+          <div>
+            <label for="knn_k"
+              >knn_k <span class="hint">(vector / hybrid)</span></label
+            >
+            <input type="number" id="knn_k" min="1" max="500" value="50" />
+          </div>
+          <div class="check" style="align-self: end; padding-bottom: 0.25rem">
+            <input type="checkbox" id="include_embedding" />
+            <label for="include_embedding"
+              >Include embedding in _source (large)</label
+            >
+          </div>
+        </div>
+
+        <details class="filter-block" open>
+          <summary>
+            Search filters
+            <span class="hint"
+              >(optional — same as <code>POST /search</code>
+              <code>filters</code>)</span
+            >
+          </summary>
+          <div class="inner">
+            <div class="row cols-2">
+              <div>
+                <label for="f-type">type</label>
+                <input
+                  type="text"
+                  id="f-type"
+                  placeholder="indicator, microdata, document, geospatial"
+                />
+              </div>
+              <div>
+                <label for="f-idno">idno</label>
+                <input type="text" id="f-idno" placeholder="single idno" />
+              </div>
+            </div>
+            <div class="row cols-2">
+              <div>
+                <label for="f-idnos"
+                  >idnos <span class="hint">comma-separated</span></label
+                >
+                <input type="text" id="f-idnos" placeholder="id1, id2" />
+              </div>
+              <div>
+                <label for="f-source">source</label>
+                <input
+                  type="text"
+                  id="f-source"
+                  placeholder="one value, or a,b for multiple (terms query)"
+                />
+              </div>
+            </div>
+            <div class="row cols-2">
+              <div>
+                <label for="f-geographies"
+                  >geographies <span class="hint">comma-separated</span></label
+                >
+                <input
+                  type="text"
+                  id="f-geographies"
+                  placeholder="e.g. region codes"
+                />
+              </div>
+              <div>
+                <label for="f-authors"
+                  >authors <span class="hint">comma-separated</span></label
+                >
+                <input type="text" id="f-authors" placeholder="author names" />
+              </div>
+            </div>
+            <div class="row cols-3">
+              <div>
+                <label for="f-periodicity">periodicity</label>
+                <input
+                  type="text"
+                  id="f-periodicity"
+                  placeholder="e.g. annual"
+                />
+              </div>
+              <div>
+                <label for="f-document_type">document_type</label>
+                <input
+                  type="text"
+                  id="f-document_type"
+                  placeholder="for document records"
+                />
+              </div>
+              <div></div>
+            </div>
+            <div class="row cols-2">
+              <div>
+                <label for="f-year_start">year_start</label>
+                <input type="number" id="f-year_start" placeholder="min year" />
+              </div>
+              <div>
+                <label for="f-year_end">year_end</label>
+                <input type="number" id="f-year_end" placeholder="max year" />
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <details class="filter-block">
+          <summary>
+            Field collapse <span class="hint">(dedupe by idno, etc.)</span>
+          </summary>
+          <div class="inner">
+            <div class="row cols-2">
+              <div>
+                <label for="collapse_field">collapse_field</label>
+                <input type="text" id="collapse_field" placeholder="idno" />
+              </div>
+              <div>
+                <label for="inner_name">inner_hits name</label>
+                <input type="text" id="inner_name" value="variants" />
+              </div>
+            </div>
+            <div style="margin-top: 0.75rem">
+              <label for="inner_size">inner_hits size</label>
+              <input
+                type="number"
+                id="inner_size"
+                min="1"
+                max="100"
+                value="10"
+                style="max-width: 8rem"
+              />
+            </div>
+          </div>
+        </details>
+
+        <div class="check">
+          <input type="checkbox" id="show_os_body" />
+          <label for="show_os_body"
+            >Show OpenSearch request body
+            <span class="hint"
+              >(JSON sent as <code>body</code> to <code>search</code>)</span
+            ></label
+          >
+        </div>
+
+          </div>
+        </details>
+
+        <div class="search-actions">
+          <button type="submit" id="btn">Search</button>
+        </div>
+      </form>
+
+      <p id="status"></p>
+
+      <section id="query-preview-section" hidden>
+        <h2>OpenSearch request body</h2>
+        <p class="hint" style="margin: 0 0 0.5rem">
+          Exact payload passed to the client (query, size, from, collapse,
+          _source excludes, …).
+        </p>
+        <pre class="os-body" id="opensearch-preview"></pre>
+      </section>
+
+      <section id="results" hidden>
+        <h2>Results <span id="total"></span></h2>
+        <div id="hits" class="hits-grid"></div>
+      </section>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const statusEl = $("status");
+      const resultsEl = $("results");
+      const hitsEl = $("hits");
+      const totalEl = $("total");
+      const previewSection = $("query-preview-section");
+      const previewPre = $("opensearch-preview");
+
+      function splitCsv(id) {
+        const v = $(id).value.trim();
+        if (!v) return null;
+        const parts = v
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        return parts.length ? parts : null;
+      }
+
+      function collectFilters() {
+        const filters = {};
+        const t = $("f-type").value.trim();
+        if (t) filters.type = t;
+        const idno = $("f-idno").value.trim();
+        if (idno) filters.idno = idno;
+        const idnos = splitCsv("f-idnos");
+        if (idnos) filters.idnos = idnos;
+        const geo = splitCsv("f-geographies");
+        if (geo) filters.geographies = geo;
+        const src = $("f-source").value.trim();
+        if (src) {
+          const srcParts = src
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+          filters.source = srcParts.length > 1 ? srcParts : srcParts[0] || src;
+        }
+        const per = $("f-periodicity").value.trim();
+        if (per) filters.periodicity = per;
+        const dt = $("f-document_type").value.trim();
+        if (dt) filters.document_type = dt;
+        const auth = splitCsv("f-authors");
+        if (auth) filters.authors = auth;
+        const ys = $("f-year_start").value.trim();
+        const ye = $("f-year_end").value.trim();
+        if (ys !== "") {
+          const n = parseInt(ys, 10);
+          if (!Number.isNaN(n)) filters.year_start = n;
+        }
+        if (ye !== "") {
+          const n = parseInt(ye, 10);
+          if (!Number.isNaN(n)) filters.year_end = n;
+        }
+        return Object.keys(filters).length ? filters : undefined;
+      }
+
+      function buildPayload() {
+        const body = {
+          query: $("q").value.trim(),
+          mode: $("mode").value,
+          size: parseInt($("size").value, 10) || 10,
+          from: parseInt($("from").value, 10) || 0,
+          knn_k: parseInt($("knn_k").value, 10) || 50,
+          include_embedding: $("include_embedding").checked,
+          include_opensearch_body: $("show_os_body").checked,
+        };
+        const filters = collectFilters();
+        if (filters) body.filters = filters;
+
+        const cf = $("collapse_field").value.trim();
+        if (cf) {
+          body.collapse_field = cf;
+          body.collapse_inner_hits = {
+            name: $("inner_name").value.trim() || "variants",
+            size: parseInt($("inner_size").value, 10) || 10,
+          };
+        }
+        return body;
+      }
+
+      function formatTypeLabel(t) {
+        if (t == null || String(t).trim() === "") return "Unknown";
+        const s = String(t);
+        return s.charAt(0).toUpperCase() + s.slice(1);
+      }
+
+      function typeBadgeClass(raw) {
+        const x = (raw != null ? String(raw) : "").toLowerCase();
+        if (x === "indicator") return "badge--type-indicator";
+        if (x === "microdata") return "badge--type-microdata";
+        if (x === "document") return "badge--type-document";
+        if (x === "geospatial") return "badge--type-geospatial";
+        return "badge--type";
+      }
+
+      function renderHit(h, i) {
+        const src = h._source || {};
+        const idno = src.idno != null ? String(src.idno) : "—";
+        const qf = src.qfield != null ? String(src.qfield) : "—";
+        const dtype = src.type != null ? String(src.type) : "";
+        const typeLabel = formatTypeLabel(dtype || "unknown");
+        const typeCls = typeBadgeClass(dtype);
+        const text = (src.page_content || "").slice(0, 1200);
+        const scoreStr =
+          h._score != null ? Number(h._score).toFixed(4) : "—";
+        let innerHtml = "";
+        if (h.inner_hits && typeof h.inner_hits === "object") {
+          innerHtml =
+            '<div class="inner-hits-block"><strong style="font-size:0.75rem;color:var(--muted)">inner_hits</strong><pre class="raw">' +
+            escapeHtml(JSON.stringify(h.inner_hits, null, 2)) +
+            "</pre></div>";
+        }
+        return (
+          '<article class="hit-card">' +
+          '<header class="hit-card__head">' +
+          '<span class="hit-card__rank">#' +
+          (i + 1) +
+          "</span>" +
+          '<span class="badge ' +
+          typeCls +
+          '" title="Metadata type">' +
+          escapeHtml(typeLabel) +
+          "</span>" +
+          '<span class="badge badge--qfield" title="Indexed field (qfield)">' +
+          escapeHtml(qf) +
+          "</span>" +
+          '<span class="badge badge--score" title="Relevance score">' +
+          escapeHtml(scoreStr) +
+          "</span>" +
+          "</header>" +
+          '<div class="hit-card__body">' +
+          '<div class="hit-card__snippet">' +
+          escapeHtml(text) +
+          (text.length >= 1200 ? "…" : "") +
+          "</div>" +
+          '<div class="hit-card__foot">' +
+          "<div><span class=\"meta-k\">idno</span><span class=\"meta-v\">" +
+          escapeHtml(idno) +
+          "</span></div>" +
+          "<div><span class=\"meta-k\">_id</span><span class=\"meta-v\">" +
+          escapeHtml(h._id || "—") +
+          "</span></div>" +
+          "</div>" +
+          innerHtml +
+          "</div>" +
+          "</article>"
+        );
+      }
+
+      function escapeHtml(s) {
+        const d = document.createElement("div");
+        d.textContent = s;
+        return d.innerHTML;
+      }
+
+      $("search-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        statusEl.textContent = "Searching…";
+        statusEl.classList.remove("err");
+        resultsEl.hidden = true;
+        previewSection.hidden = true;
+        $("btn").disabled = true;
+        try {
+          const res = await fetch("/search", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify(buildPayload()),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const detail =
+              data.detail != null
+                ? typeof data.detail === "string"
+                  ? data.detail
+                  : JSON.stringify(data.detail)
+                : res.statusText;
+            throw new Error(detail || "Request failed");
+          }
+          if (data.opensearch_body != null) {
+            previewPre.textContent = JSON.stringify(
+              data.opensearch_body,
+              null,
+              2,
+            );
+            previewSection.hidden = false;
+          } else {
+            previewSection.hidden = true;
+          }
+          const total = data.total != null ? data.total : "—";
+          totalEl.textContent = "(total hits: " + total + ")";
+          const hits = data.hits || [];
+          hitsEl.innerHTML = hits.length
+            ? hits.map(renderHit).join("")
+            : '<p class="empty-hits">No hits for this query.</p>';
+          resultsEl.hidden = false;
+          statusEl.textContent = "OK · " + hits.length + " hit(s) in this page";
+        } catch (err) {
+          statusEl.textContent = String(err.message || err);
+          statusEl.classList.add("err");
+        } finally {
+          $("btn").disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling>=1.21.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nada-ai"
+version = "0.1.0"
+description = "NADA AI: OpenSearch ingestion and semantic search via ai4data discovery"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Aivin V. Solatorio", email = "avsolatorio@gmail.com" }]
+dependencies = [
+    "ai4data[discovery]",
+    "opensearch-py>=3.0.0,<4",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "numpy>=1.26.0",
+    "fire>=0.6.0",
+    "tqdm>=4.66.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+aws = ["boto3>=1.34.0"]
+local = ["sentence-transformers>=5.4.1"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "httpx>=0.28.0",
+    "ruff>=0.6.0",
+    "sentence-transformers>=5.4.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nada_ai"]
+
+# Pin standalone discovery package to a reproducible revision (Docker + CI use this; no sibling checkout required).
+[tool.uv.sources]
+ai4data = { git = "https://github.com/avsolatorio/ai4data.git", rev = "43f1c508fd5968a866e773e0f50c97d10441a614" }
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501", "E731"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that need OpenSearch or external services",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["nada_ai"]
+
+[tool.coverage.report]
+omit = ["*/tests/*"]

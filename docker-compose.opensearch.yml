@@ -1,0 +1,41 @@
+# Dev-only: single-node OpenSearch 3.6 LTS (no security plugin). Do not use in production.
+# Build context: this repo root (`ai4data` comes from the git pin in pyproject.toml / uv.lock).
+services:
+  nada-ai-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nada-ai-api:local
+    container_name: nada-ai-api-dev
+    ports:
+      - "8020:8020"
+    environment:
+      NADA_OPENSEARCH_URL: http://opensearch-nada:9200
+      NADA_EMBEDDING_MODEL_ID: microsoft/harrier-oss-v1-270m
+      NADA_QUERY_PROMPT_NAME: web_search_query
+      HF_HOME: /models/huggingface
+      SENTENCE_TRANSFORMERS_HOME: /models/sentence_transformers
+      AI4DATA_DISCOVERY_DATA_PATH: /workspace/data/nada-discovery
+    volumes:
+      - ${HOME}/.cache/huggingface:/models/huggingface
+      - ${HOME}/.cache/torch/sentence_transformers:/models/sentence_transformers
+      - ./data/nada-discovery:/workspace/data/nada-discovery
+    depends_on:
+      - opensearch-nada
+
+  opensearch-nada:
+    image: opensearchproject/opensearch:3.6.0
+    container_name: nada-ai-opensearch-dev
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - cluster.routing.allocation.disk.threshold_enabled=false
+      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+    ports:
+      - "9200:9200"
+    env_file:
+      - .env
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
