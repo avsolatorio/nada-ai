@@ -1,0 +1,32 @@
+# Development overlay — merge *after* the base file:
+#   docker compose -f docker-compose.opensearch.yml -f docker-compose.dev.yml up --build -d
+#
+# Optional (Unix): export COMPOSE_FILE=docker-compose.opensearch.yml:docker-compose.dev.yml
+# Windows (PowerShell): $env:COMPOSE_FILE="docker-compose.opensearch.yml;docker-compose.dev.yml"
+#
+# - Bind-mounts ./src so edits apply without rebuilding the API image.
+# - PYTHONPATH=/workspace/src so `nada_ai` loads from the mount (uv sync installs a wheel copy under .venv).
+# - uvicorn --reload watches /workspace/src.
+# - Loads repo .env when present; keys under `environment` in the base compose file still win on conflict.
+#
+# Rebuild nada-ai-api when pyproject.toml, uv.lock, or Dockerfile change.
+
+services:
+  nada-ai-api:
+    environment:
+      PYTHONPATH: /workspace/src
+    volumes:
+      - ./src:/workspace/src
+    command:
+      - uvicorn
+      - nada_ai.app.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8020"
+      - --reload
+      - --reload-dir
+      - /workspace/src
+    # env_file:
+    #   - path: .env
+    #     required: false

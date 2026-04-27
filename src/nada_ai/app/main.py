@@ -88,6 +88,14 @@ async def health(s: AppState = Depends(get_state)) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(e)) from e
 
 
+def _embedding_status_extras(s: AppState) -> dict[str, Any]:
+    """Fields common to local-backend embedding health payloads."""
+    return {
+        "model_id": s.settings.embedding_model_id,
+        "query_encoding": s.settings.describe_query_encoding(),
+    }
+
+
 @app.get("/health/embeddings")
 async def embedding_health(s: AppState = Depends(get_state)) -> dict[str, Any]:
     if s.settings.embedding_backend != "local":
@@ -97,33 +105,34 @@ async def embedding_health(s: AppState = Depends(get_state)) -> dict[str, Any]:
             "detail": "Embedding model is not used with this backend.",
         }
 
+    extras = _embedding_status_extras(s)
     if s.embedding is not None:
         return {
             "status": "ready",
             "backend": s.settings.embedding_backend,
-            "model_id": s.settings.embedding_model_id,
             "dimension": s.embedding.embedding_dimension(),
+            **extras,
         }
 
     if s.embedding_init_lock.locked():
         return {
             "status": "initializing",
             "backend": s.settings.embedding_backend,
-            "model_id": s.settings.embedding_model_id,
+            **extras,
         }
 
     if s.embedding_init_error:
         return {
             "status": "error",
             "backend": s.settings.embedding_backend,
-            "model_id": s.settings.embedding_model_id,
             "detail": s.embedding_init_error,
+            **extras,
         }
 
     return {
         "status": "not_initialized",
         "backend": s.settings.embedding_backend,
-        "model_id": s.settings.embedding_model_id,
+        **extras,
     }
 
 
@@ -147,8 +156,8 @@ async def embedding_warmup(s: AppState = Depends(get_state)) -> dict[str, Any]:
     return {
         "status": "ready",
         "backend": s.settings.embedding_backend,
-        "model_id": s.settings.embedding_model_id,
         "dimension": s.embedding.embedding_dimension(),
+        **_embedding_status_extras(s),
     }
 
 

@@ -61,17 +61,13 @@ class EmbeddingService:
         )
 
     def encode_query(self, text: str, show_progress_bar: bool = False) -> np.ndarray:
+        common = {
+            "batch_size": 1,
+            "normalize_embeddings": True,
+            "show_progress_bar": show_progress_bar,
+        }
+        if self._settings.query_prompt:
+            return self._model.encode([text], prompt=self._settings.query_prompt, **common)[0]
         if self._settings.query_prompt_name:
-            return self._model.encode(
-                [text],
-                prompt_name=self._settings.query_prompt_name,
-                batch_size=1,
-                normalize_embeddings=True,
-                show_progress_bar=show_progress_bar,
-            )[0]
-        return self._model.encode(
-            [text],
-            batch_size=1,
-            normalize_embeddings=True,
-            show_progress_bar=show_progress_bar,
-        )[0]
+            return self._model.encode([text], prompt_name=self._settings.query_prompt_name, **common)[0]
+        return self._model.encode([text], **common)[0]

@@ -103,10 +103,16 @@ def run_demo(
                 "embedding_backend": settings.embedding_backend,
                 "embedding_model_id": settings.embedding_model_id,
                 "opensearch_ml_model_id": settings.opensearch_ml_model_id,
+                "query_encoding": settings.describe_query_encoding(),
             },
             indent=2,
         ),
     )
+    if settings.embedding_backend != "local":
+        print(
+            "(query_encoding applies when embedding_backend=local; "
+            "opensearch_ml uses the cluster ingest model, not these prompts.)",
+        )
 
     pairs = fetch_catalog_pairs_first_page(catalog_type, max_items)
     if not pairs:

@@ -46,6 +46,32 @@
       header a {
         color: var(--accent);
       }
+      #embed-config {
+        margin: 0.75rem 0 0;
+        padding: 0.65rem 0.85rem;
+        font-size: 0.8125rem;
+        line-height: 1.45;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.18);
+      }
+      #embed-config strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+      #embed-config code {
+        font-size: 0.72rem;
+        color: #c8d4e0;
+        word-break: break-word;
+        white-space: pre-wrap;
+      }
+      #embed-config .embed-config__note {
+        display: block;
+        margin-top: 0.35rem;
+        font-size: 0.75rem;
+        opacity: 0.9;
+      }
       form {
         background: var(--surface);
         border: 1px solid var(--border);
@@ -364,8 +390,10 @@
         <h1>NADA OpenSearch</h1>
         <p>
           Live search against the indexed metadata. API:
-          <a href="/docs">OpenAPI docs</a> · <a href="/health">health</a>
+          <a href="/docs">OpenAPI docs</a> · <a href="/health">health</a> ·
+          <a href="/health/embeddings">embeddings</a>
         </p>
+        <p id="embed-config" class="hint" hidden></p>
       </header>
 
       <form id="search-form" action="#" method="post">
@@ -570,6 +598,73 @@ consumer price index</textarea
 
     <script>
       const $ = (id) => document.getElementById(id);
+      const embedConfigEl = $("embed-config");
+
+      function escapeHtml(s) {
+        const d = document.createElement("div");
+        d.textContent = s;
+        return d.innerHTML;
+      }
+
+      function formatQueryEncodingHtml(qe) {
+        if (!qe || typeof qe !== "object" || !qe.active) {
+          return "";
+        }
+        if (qe.active === "literal_prompt") {
+          const raw = qe.prompt != null ? String(qe.prompt) : "";
+          const preview = raw.length > 200 ? raw.slice(0, 200) + "…" : raw;
+          let html =
+            "<strong>Query vectors</strong>: literal <code>prompt=</code> — <code>" +
+            escapeHtml(preview) +
+            "</code>";
+          if (qe.prompt_name_configured) {
+            html +=
+              '<span class="embed-config__note"><code>prompt_name</code> in settings is <code>' +
+              escapeHtml(String(qe.prompt_name_configured)) +
+              "</code> (not used for encode_query).</span>";
+          }
+          return html;
+        }
+        if (qe.active === "prompt_name") {
+          return (
+            "<strong>Query vectors</strong>: <code>prompt_name=</code> <code>" +
+            escapeHtml(String(qe.prompt_name || "")) +
+            "</code>"
+          );
+        }
+        if (qe.active === "symmetric") {
+          return "<strong>Query vectors</strong>: symmetric encoding (no <code>prompt</code> / <code>prompt_name</code>).";
+        }
+        return "<strong>Query vectors</strong>: " + escapeHtml(JSON.stringify(qe));
+      }
+
+      async function loadEmbedConfig() {
+        if (!embedConfigEl) return;
+        try {
+          const res = await fetch("/health/embeddings", {
+            headers: { Accept: "application/json" },
+          });
+          const data = await res.json().catch(() => ({}));
+          if (data.status === "disabled") {
+            embedConfigEl.innerHTML =
+              "<strong>Query vectors</strong>: not used with this API (<code>embedding_backend</code> is not <code>local</code>).";
+            embedConfigEl.hidden = false;
+            embedConfigEl.classList.remove("hint");
+            return;
+          }
+          const qeHtml = formatQueryEncodingHtml(data.query_encoding);
+          if (qeHtml) {
+            embedConfigEl.innerHTML = qeHtml;
+            embedConfigEl.hidden = false;
+            embedConfigEl.classList.remove("hint");
+          }
+        } catch {
+          /* optional banner */
+        }
+      }
+
+      document.addEventListener("DOMContentLoaded", loadEmbedConfig);
+
       const statusEl = $("status");
       const resultsEl = $("results");
       const hitsEl = $("hits");
@@ -715,12 +810,6 @@ consumer price index</textarea
           "</div>" +
           "</article>"
         );
-      }
-
-      function escapeHtml(s) {
-        const d = document.createElement("div");
-        d.textContent = s;
-        return d.innerHTML;
       }
 
       $("search-form").addEventListener("submit", async (e) => {

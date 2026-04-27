@@ -35,7 +35,8 @@ Settings use the **`NADA_`** prefix (see `nada_ai.settings`). Common variables:
 | `NADA_INDEX_NAME` | Index name (default `nada-metadata`) |
 | `NADA_EMBEDDING_BACKEND` | `local` (default) or `opensearch_ml` |
 | `NADA_EMBEDDING_MODEL_ID` | Hugging Face model id for `local` |
-| `NADA_QUERY_PROMPT_NAME` | Optional asymmetric query prompt; empty for symmetric models |
+| `NADA_QUERY_PROMPT_NAME` | Named asymmetric prompt for `SentenceTransformer.encode(..., prompt_name=...)` when `NADA_QUERY_PROMPT` is unset |
+| `NADA_QUERY_PROMPT` | Optional literal prefix for `encode(..., prompt=...)`; when set, overrides `NADA_QUERY_PROMPT_NAME` for query vectors |
 | `NADA_OPENSEARCH_AUTH_MODE` | `basic` or `aws_sigv4` |
 | `NADA_AWS_REGION` | Required for SigV4 when not implicit from boto3 |
 
@@ -78,6 +79,19 @@ docker compose -f docker-compose.opensearch.yml ps
 docker logs nada-ai-opensearch-dev 2>&1 | tail -50
 docker logs nada-ai-api-dev 2>&1 | tail -50
 ```
+
+#### Dev overlay (bind-mount `src`, no rebuild for Python edits)
+
+Use **`docker-compose.dev.yml`** together with the base file. It bind-mounts **`./src`**, sets **`PYTHONPATH=/workspace/src`** so imports use the mount (not only the wheel under `.venv`), runs **uvicorn `--reload`**, and loads **`.env`** when it exists (`required: false`).
+
+```bash
+docker compose -f docker-compose.opensearch.yml -f docker-compose.dev.yml up --build -d
+# logs: docker logs -f nada-ai-api-dev
+```
+
+Optional: set **`COMPOSE_FILE`** so plain **`docker compose up`** uses both files (Unix uses `:` between paths; Git Bash/WSL same; Windows PowerShell uses `;`).
+
+Rebuild **`nada-ai-api`** when **`Dockerfile`**, **`pyproject.toml`**, or **`uv.lock`** change; day-to-day Python changes under **`src/`** only need a container restart if you are *not* using this overlay (with the overlay, save files and let reload pick them up).
 
 OpenSearch: **http://localhost:9200** · API: **http://localhost:8020**. First boot of OpenSearch can take ~30–60s until `curl -s http://localhost:9200/` returns JSON.
 

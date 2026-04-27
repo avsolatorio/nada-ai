@@ -16,6 +16,7 @@ services:
       HF_HOME: /models/huggingface
       SENTENCE_TRANSFORMERS_HOME: /models/sentence_transformers
       AI4DATA_DISCOVERY_DATA_PATH: /workspace/data/nada-discovery
+      NADA_QUERY_PROMPT: "Instruct: Retrieve semantically similar text that helps answer the user's query or find related information\nQuery: "
     volumes:
       - ${HOME}/.cache/huggingface:/models/huggingface
       - ${HOME}/.cache/torch/sentence_transformers:/models/sentence_transformers

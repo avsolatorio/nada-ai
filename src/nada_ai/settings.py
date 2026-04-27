@@ -25,7 +25,9 @@ class Settings(BaseSettings):
         description="basic: user/password; aws_sigv4: IAM (install optional extra `aws` for boto3).",
     )
     aws_region: str | None = Field(default=None, description="AWS region for SigV4; defaults from boto3 session")
-    aws_service: str = Field(default="es", description="AWS SigV4 service name (es for OpenSearch domain; aoss for Serverless)")
+    aws_service: str = Field(
+        default="es", description="AWS SigV4 service name (es for OpenSearch domain; aoss for Serverless)"
+    )
     aws_profile: str | None = Field(default=None, description="Optional boto3 profile name")
 
     index_name: str = Field(default="nada-metadata")
@@ -35,6 +37,15 @@ class Settings(BaseSettings):
 
     embedding_model_id: str = Field(default="microsoft/harrier-oss-v1-270m")
     query_prompt_name: str | None = Field(default="web_search_query")
+    #: Literal prefix for asymmetric query encoding (``SentenceTransformer.encode(..., prompt=...)``).
+    #: If unset, ``query_prompt_name`` is used when set; otherwise encoding is symmetric.
+    query_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Optional. E.g. 'Instruct: Retrieve semantically similar text\\nQuery: '. "
+            "When set, overrides query_prompt_name for encode_query."
+        ),
+    )
 
     embedding_model_kwargs_json: str | None = Field(default='{"dtype": "auto"}')
     embedding_device: str | None = Field(default=None)
@@ -52,9 +63,9 @@ class Settings(BaseSettings):
     hybrid_keyword_boost: float = Field(default=0.3)
     hybrid_vector_boost: float = Field(default=0.7)
 
-    @field_validator("query_prompt_name", mode="before")
+    @field_validator("query_prompt_name", "query_prompt", mode="before")
     @classmethod
-    def empty_prompt_to_none(cls, v: Any) -> str | None:
+    def empty_prompt_strings_to_none(cls, v: Any) -> str | None:
         if v is None or v == "":
             return None
         if isinstance(v, str):
@@ -69,6 +80,18 @@ class Settings(BaseSettings):
             return json.loads(self.embedding_model_kwargs_json)
         except json.JSONDecodeError:
             return {}
+
+    def describe_query_encoding(self) -> dict[str, Any]:
+        """How ``EmbeddingService.encode_query`` will call the model (local backend only)."""
+        if self.query_prompt:
+            return {
+                "active": "literal_prompt",
+                "prompt": self.query_prompt,
+                "prompt_name_configured": self.query_prompt_name,
+            }
+        if self.query_prompt_name:
+            return {"active": "prompt_name", "prompt_name": self.query_prompt_name}
+        return {"active": "symmetric"}
 
     @model_validator(mode="after")
     def validate_ml_backend(self) -> Settings:
