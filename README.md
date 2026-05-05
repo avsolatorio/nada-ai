@@ -39,6 +39,7 @@ Settings use the **`NADA_`** prefix (see `nada_ai.settings`). Common variables:
 | `NADA_QUERY_PROMPT` | Optional literal prefix for `encode(..., prompt=...)`; when set, overrides `NADA_QUERY_PROMPT_NAME` for query vectors |
 | `NADA_OPENSEARCH_AUTH_MODE` | `basic` or `aws_sigv4` |
 | `NADA_AWS_REGION` | Required for SigV4 when not implicit from boto3 |
+| `NADA_ADMIN_API_KEY` | When set, admin/ingest endpoints (`POST /admin/*`, `DELETE /admin/*`) require header `X-NADA-Admin-Key: <value>`. Unset = no auth (zero-config local dev). `/jobs*` is always open. |
 
 **Discovery caches** (standalone `ai4data`):
 
@@ -50,7 +51,7 @@ Optional: call `init_discovery_paths(Path(...))` from `ai4data.discovery.config`
 
 ## Search and OpenSearch
 
-The FastAPI app exposes **`POST /search`** (keyword, vector, hybrid), **`GET /demo`**, and health routes. Search query DSL lives under **`nada_ai.search.backend.opensearch`**.
+The FastAPI app exposes **`POST /search`** (keyword, vector, hybrid), **`GET /demo`**, health routes, and **admin/ingest** routes that mirror the CLI. Search query DSL lives under **`nada_ai.search.backend.opensearch`**.
 
 ### Version compatibility
 
@@ -213,6 +214,75 @@ For **`opensearch_ml`**, register a model in ML Commons, set `NADA_OPENSEARCH_ML
 uv run python -m nada_ai.ingest.cli setup_ingest_pipeline
 ```
 
+## Admin / ingest endpoints (HTTP)
+
+The 4 CLI commands are exposed as **non-blocking** HTTP endpoints. Each `POST` returns `202 Accepted` with a `job_id` and the work continues in the background. Submitting the same operation while it is still running returns **`409 Conflict`** with the existing job (single-flight by request key) — *the same operation never runs twice in parallel*. Poll `GET /jobs/{id}` for status.
+
+Auth: when `NADA_ADMIN_API_KEY` is set, all `/admin/*` endpoints require header `X-NADA-Admin-Key: <value>`. `/jobs*` endpoints are always open so progress can be polled.
+
+### CLI mirrors
+
+| Endpoint | CLI equivalent | Single-flight key |
+|---|---|---|
+| `POST /admin/index` `{recreate?: bool}` | `cli create_index --recreate=...` | `create_index` |
+| `POST /admin/setup-ingest-pipeline` | `cli setup_ingest_pipeline` | `setup_ingest_pipeline` |
+| `POST /admin/ingest/by-ids` `{idnos: [...], metadata_type, force?, recreate_index?, buffer_size?}` | `cli index --idnos=...` | `index:{metadata_type}:{sha1(sorted idnos)}` |
+| `POST /admin/ingest/from-catalog` `{catalog_type, ps?, limit?, force?, recreate_index?, buffer_size?}` | `cli index_from_catalog --catalog_type=...` | `index_from_catalog:{catalog_type}` |
+
+Different keys can run concurrently (e.g. `index_from_catalog timeseries` and `index_from_catalog document`); identical keys cannot.
+
+### Job control
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /jobs?status=...&limit=...` | List recent jobs, optionally filtered by status |
+| `GET /jobs/{id}` | Single job snapshot (status, started_at, finished_at, result, error, progress) |
+| `DELETE /jobs/{id}` | Best-effort cancel (the active OpenSearch bulk batch will complete; the job transitions to `cancelled` once the worker thread returns) |
+
+### Index and document admin
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /admin/index/stats` | Doc count, store size, primaries |
+| `GET /admin/index/mapping` | Current index mapping |
+| `POST /admin/index/refresh` | `_refresh` the index (useful right after ingest in tests) |
+| `DELETE /admin/index?confirm=true` | Drop the index (`?confirm=true` is required) |
+| `GET /admin/docs/{idno}` | Show all documents for an `idno` (helps verify ingest of a specific record) |
+| `DELETE /admin/docs/{idno}` | `delete_by_query` for that `idno` |
+| `POST /admin/embeddings/encode` `{texts, as_query?}` | Return vectors using the same `EmbeddingService` used by `/search`; useful for diagnosing dimension/prompt mismatches |
+| `GET /admin/ml/pipeline` | Show expected and currently installed `text_embedding` ingest pipeline (when `embedding_backend=opensearch_ml`) |
+
+### Quickstart (curl)
+
+```bash
+# (optional) gate admin endpoints
+export NADA_ADMIN_API_KEY=dev-secret
+H=(-H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY")
+
+# Create the index
+curl -s "${H[@]}" -X POST http://localhost:8020/admin/index \
+  -H 'Content-Type: application/json' -d '{"recreate": false}'
+# -> 202 {"id": "...", "kind": "create_index", "status": "pending", ...}
+
+# Trigger catalog ingest (returns immediately)
+curl -s "${H[@]}" -X POST http://localhost:8020/admin/ingest/from-catalog \
+  -H 'Content-Type: application/json' \
+  -d '{"catalog_type": "timeseries", "limit": 50}'
+# -> 202 {"id": "abc...", ...}
+
+# Re-trigger while running -> 409 with the SAME job id
+curl -s "${H[@]}" -X POST http://localhost:8020/admin/ingest/from-catalog \
+  -H 'Content-Type: application/json' -d '{"catalog_type": "timeseries"}'
+# -> 409 {"detail": "a job with this key is already running", "job": {...}}
+
+# Poll
+curl -s http://localhost:8020/jobs/abc...
+curl -s 'http://localhost:8020/jobs?status=running'
+
+# Index stats
+curl -s "${H[@]}" http://localhost:8020/admin/index/stats
+```
+
 ## Demos
 
 **CLI (live catalog + OpenSearch):**
@@ -236,16 +306,17 @@ uv run pytest tests -q
 uv run pytest tests --cov=nada_ai --cov-report=term-missing -p pytest_cov
 ```
 
-Integration tests against a live OpenSearch cluster are optional (`@pytest.mark.integration`) and can be run in CI or manually when compose is up.
+Integration tests against a live OpenSearch cluster are optional (`@pytest.mark.integration`) and can be run in CI or manually when compose is up. With `NADA_INTEGRATION_OPENSEARCH=1` and network access to the catalog API, `tests/integration/test_index_from_catalog_live.py` runs a small `index_from_catalog` (`limit=2`) end-to-end.
 
 ## Layout
 
 | Area | Role |
 |------|------|
-| `nada_ai.ingest` | Catalog-driven bulk indexing (`MetadataLoader`, CLI) |
+| `nada_ai.ingest` | Catalog-driven bulk indexing (`MetadataLoader`, CLI, shared `service.*_op` callables) |
 | `nada_ai.search` | Backend-agnostic surface (expand with protocols) |
 | `nada_ai.search.backend.opensearch` | Client, mappings, ML ingest pipeline, embeddings, query DSL |
-| `nada_ai.app` | FastAPI service |
+| `nada_ai.app` | FastAPI service (search, health, admin/ingest, jobs) |
+| `nada_ai.app.jobs` | In-memory single-flight job registry (`JobRegistry`) backing `/admin/*` and `/jobs/*` |
 
 **Import rule:** application code should import **`ai4data.discovery.*` only** (see `tests/test_ai4data_import_boundary.py`). Do not import `ai4data.config` etc. from package code.
 

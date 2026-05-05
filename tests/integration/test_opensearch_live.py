@@ -13,7 +13,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.skipif(
-    not os.environ.get("NADA_INTEGRATION_OPENSEARCH", "").lower() in ("1", "true", "yes"),
+    os.environ.get("NADA_INTEGRATION_OPENSEARCH", "").lower() not in ("1", "true", "yes"),
     reason="Set NADA_INTEGRATION_OPENSEARCH=1 and start OpenSearch to run",
 )
 def test_cluster_health_opensearch_reachable():

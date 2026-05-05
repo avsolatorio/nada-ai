@@ -15,31 +15,20 @@ OpenSearch ML (``NADA_EMBEDDING_BACKEND=opensearch_ml``)::
 
 from __future__ import annotations
 
-from nada_ai.ingest.pipeline import ensure_index, run_bulk_index
-from nada_ai.search.backend.opensearch.client import build_client
-from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
-from nada_ai.search.backend.opensearch.ml.setup import ensure_text_embedding_ingest_pipeline
+from nada_ai.ingest.service import (
+    create_index_op,
+    index_from_catalog_op,
+    index_ids_op,
+    setup_ingest_pipeline_op,
+)
 from nada_ai.settings import Settings
 
 
 def create_index(recreate: bool = False) -> None:
     """Create the OpenSearch index with k-NN mapping (local model dim or ``opensearch_ml_embedding_dimension``)."""
     settings = Settings()
-    client = build_client(settings)
-    if recreate and client.indices.exists(index=settings.index_name):
-        client.indices.delete(index=settings.index_name)
-    if settings.embedding_backend == "opensearch_ml":
-        ensure_text_embedding_ingest_pipeline(client, settings)
-        dim = int(settings.opensearch_ml_embedding_dimension or 0)
-    else:
-        embedding = EmbeddingService(settings)
-        dim = embedding.embedding_dimension()
-    ensure_index(client, settings, dim)
-    try:
-        client.transport.close()
-    except Exception:
-        pass
-    print(f"Index ready: {settings.index_name} (dim={dim})")
+    res = create_index_op(settings, recreate=recreate)
+    print(f"Index ready: {res['index']} (dim={res['dim']})")
 
 
 def setup_ingest_pipeline() -> None:
@@ -47,13 +36,8 @@ def setup_ingest_pipeline() -> None:
     settings = Settings()
     if settings.embedding_backend != "opensearch_ml":
         print("Note: embedding_backend is not opensearch_ml; pipeline may still be useful for manual indexing.")
-    client = build_client(settings)
-    ensure_text_embedding_ingest_pipeline(client, settings)
-    try:
-        client.transport.close()
-    except Exception:
-        pass
-    print(f"Ingest pipeline ready: {settings.opensearch_ml_ingest_pipeline_name}")
+    res = setup_ingest_pipeline_op(settings)
+    print(f"Ingest pipeline ready: {res['pipeline']}")
 
 
 def index(
@@ -69,10 +53,16 @@ def index(
     """
     settings = Settings()
     ids = [x.strip() for x in idnos.split(",") if x.strip()]
-    pairs = [(i, metadata_type) for i in ids]
-    n, err = run_bulk_index(settings, pairs, force=force, recreate_index=recreate_index, show_progress_bar=True)
-    err_part = f"{len(err)} bulk error(s)" if err else "ok"
-    print(f"Indexed {n} docs; {err_part}")
+    res = index_ids_op(
+        settings,
+        idnos=ids,
+        metadata_type=metadata_type,
+        force=force,
+        recreate_index=recreate_index,
+        show_progress_bar=True,
+    )
+    err_part = f"{len(res['errors'])} bulk error(s)" if res["errors"] else "ok"
+    print(f"Indexed {res['indexed']} docs; {err_part}")
 
 
 def index_from_catalog(
@@ -88,35 +78,19 @@ def index_from_catalog(
 
     Set ``limit`` to only use the first N catalog rows (pagination stops early).
     """
-    from ai4data.discovery.catalog import get_metadata_ids
-
-    # Map user-facing type to catalog API
-    params: dict = {"sk": "", "ps": ps, "type": catalog_type, "sort_by": "year", "sort_order": "asc"}
-    if catalog_type == "indicator":
-        params["type"] = "timeseries"
-    elif catalog_type == "microdata":
-        params["type"] = "survey"
-
-    rows = get_metadata_ids(params, max_items=limit)
-    pairs: list[tuple[str, str]] = []
-    for row in rows:
-        idno = row.get("idno")
-        t = row.get("type")
-        if not idno or not t:
-            continue
-        pairs.append((idno, t))
-
     settings = Settings()
-    n, err = run_bulk_index(
+    res = index_from_catalog_op(
         settings,
-        pairs,
+        catalog_type=catalog_type,
+        ps=ps,
+        limit=limit,
         force=force,
         recreate_index=recreate_index,
         show_progress_bar=show_progress_bar,
         buffer_size=buffer_size,
     )
-    err_part = f"{len(err)} bulk error(s)" if err else "ok"
-    print(f"Indexed {n} docs from catalog ({len(pairs)} ids); {err_part}")
+    err_part = f"{len(res['errors'])} bulk error(s)" if res["errors"] else "ok"
+    print(f"Indexed {res['indexed']} docs from catalog ({res['rows']} ids); {err_part}")
 
 
 if __name__ == "__main__":

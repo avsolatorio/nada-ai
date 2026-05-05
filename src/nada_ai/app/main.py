@@ -7,26 +7,16 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
-from opensearchpy import AsyncOpenSearch
 from opensearchpy.exceptions import NotFoundError, RequestError
 
 from nada_ai import __version__
+from nada_ai.app.admin import admin_router, jobs_router
+from nada_ai.app.jobs import JobRegistry
 from nada_ai.app.schemas import SearchRequest, SearchResponse
+from nada_ai.app.state import AppState, ensure_embedding_initialized, get_state, state
 from nada_ai.search.backend.opensearch.client import build_async_client
-from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
 from nada_ai.search.backend.opensearch.queries import build_search_query
 from nada_ai.settings import Settings
-
-
-class AppState:
-    settings: Settings
-    client: AsyncOpenSearch
-    embedding: EmbeddingService | None
-    embedding_init_lock: asyncio.Lock
-    embedding_init_error: str | None
-
-
-state = AppState()
 
 
 @asynccontextmanager
@@ -36,7 +26,12 @@ async def lifespan(app: FastAPI):
     state.embedding = None
     state.embedding_init_lock = asyncio.Lock()
     state.embedding_init_error = None
+    state.jobs = JobRegistry()
     yield
+    try:
+        await state.jobs.shutdown()
+    except Exception:
+        pass
     try:
         await state.client.close()
     except Exception:
@@ -44,30 +39,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="NADA AI Search", version=__version__, lifespan=lifespan)
+app.include_router(admin_router)
+app.include_router(jobs_router)
 
 _STATIC = Path(__file__).resolve().parent / "static"
-
-
-def get_state() -> AppState:
-    return state
-
-
-async def ensure_embedding_initialized(s: AppState) -> None:
-    """Lazily initialize local embedding backend once, on demand."""
-    if s.settings.embedding_backend != "local":
-        return
-    if s.embedding is not None:
-        return
-
-    async with s.embedding_init_lock:
-        if s.embedding is not None:
-            return
-        s.embedding_init_error = None
-        try:
-            s.embedding = await asyncio.to_thread(EmbeddingService, s.settings)
-        except Exception as e:
-            s.embedding_init_error = str(e)
-            raise
 
 
 @app.get("/demo", response_class=HTMLResponse, include_in_schema=False)
