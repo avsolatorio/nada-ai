@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      network: host
     image: nada-ai-api:local
     container_name: nada-ai-api-dev
     ports:
@@ -20,10 +21,13 @@ services:
       # AI4DATA_METADATA_CATALOG_URL: https://your-host.example/index.php
       # Optional if thumbnails live elsewhere: AI4DATA_METADATA_CATALOG_THUMBNAIL_URL
       NADA_QUERY_PROMPT: "Instruct: Retrieve semantically similar text that helps answer the user's query or find related information\nQuery: "
+      # NADA_ADMIN_API_KEY: ${NADA_ADMIN_API_KEY}
     volumes:
       - ${HOME}/.cache/huggingface:/models/huggingface
       - ${HOME}/.cache/torch/sentence_transformers:/models/sentence_transformers
       - ./data/nada-discovery:/workspace/data/nada-discovery
+    env_file:
+      - .env
     depends_on:
       - opensearch-nada
 
@@ -37,6 +41,8 @@ services:
       - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
     ports:
       - "9200:9200"
+    volumes:
+      - ./data/opensearch-data:/usr/share/opensearch/data
     env_file:
       - .env
     ulimits:
