@@ -1,5 +1,12 @@
 # Dev-only: single-node OpenSearch 3.6 LTS (no security plugin). Do not use in production.
 # Build context: this repo root (`ai4data` comes from the git pin in pyproject.toml / uv.lock).
+#
+# OpenSearch data uses a named volume so the container user (UID 1000) can write without
+# `chown` on a host bind mount. For a host path instead, use
+# `./data/opensearch-data:/usr/share/opensearch/data` and run `chown -R 1000:1000 ./data/opensearch-data`.
+volumes:
+  opensearch-nada-data:
+
 services:
   nada-ai-api:
     build:
@@ -42,7 +49,7 @@ services:
     ports:
       - "9200:9200"
     volumes:
-      - ./data/opensearch-data:/usr/share/opensearch/data
+      - opensearch-nada-data:/usr/share/opensearch/data
     env_file:
       - .env
     ulimits:
