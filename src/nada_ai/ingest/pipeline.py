@@ -90,7 +90,8 @@ def iter_bulk_actions(
 
     for idno, metadata_type in pairs_iter:
         try:
-            loader = MetadataLoader(idno=idno, metadata_type=metadata_type, force=force)
+            # We include resources to get the document url and other external resources
+            loader = MetadataLoader(idno=idno, metadata_type=metadata_type, force=force, include_resources=True)
             raw = loader.metadata
             docs = loader.get_metadata_handler().get_langdocs()
         except Exception as e:
