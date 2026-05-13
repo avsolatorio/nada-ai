@@ -28,6 +28,11 @@ services:
       # Optional: override Data Compass URL for ai4data discovery (see ai4data MetadataCatalogConfig).
       # AI4DATA_METADATA_CATALOG_URL: https://your-host.example/index.php
       # Optional if thumbnails live elsewhere: AI4DATA_METADATA_CATALOG_THUMBNAIL_URL
+      # Optional: authenticate catalog API calls and PDF downloads with an `x-api-key` header.
+      # AI4DATA_METADATA_CATALOG_X_API_KEY: ${AI4DATA_METADATA_CATALOG_X_API_KEY}
+      # If downloads are hosted on a different subdomain than the catalog (e.g. training.ihsn.org),
+      # allow-list the extra hosts that may receive the key:
+      # AI4DATA_METADATA_CATALOG_X_API_KEY_HOSTS: training.ihsn.org,files.ihsn.org
       NADA_QUERY_PROMPT: "Instruct: Retrieve semantically similar text that helps answer the user's query or find related information\nQuery: "
       # NADA_ADMIN_API_KEY: ${NADA_ADMIN_API_KEY}
     volumes:
