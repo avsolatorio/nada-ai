@@ -27,7 +27,7 @@ services:
       NADA_SEARCH_BACKEND: qdrant
       NADA_EMBEDDING_BACKEND: local
       NADA_QDRANT_URL: http://qdrant-nada:6333
-      NADA_EMBEDDING_MODEL_ID: microsoft/harrier-oss-v1-270m
+      # NADA_EMBEDDING_MODEL_ID: microsoft/harrier-oss-v1-270m
       NADA_QUERY_PROMPT_NAME: web_search_query
       HF_HOME: /models/huggingface
       SENTENCE_TRANSFORMERS_HOME: /models/sentence_transformers
