@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 SearchMode = Literal["keyword", "vector", "hybrid"]
 
@@ -47,11 +47,28 @@ class SearchRequest(BaseModel):
     )
     include_embedding: bool = Field(
         default=False,
-        description="If false, knn vectors are omitted from _source in the response (OpenSearch _source.excludes).",
+        description="If false, dense vectors are omitted from stored payloads / _source in the response.",
     )
-    include_opensearch_body: bool = Field(
+    include_debug_request: bool = Field(
         default=False,
-        description="If true, the response includes the exact JSON body sent to OpenSearch ``search`` (for debugging / demos).",
+        validation_alias=AliasChoices("include_debug_request", "include_opensearch_body"),
+        description="If true, include backend debug payload in the response (alias ``include_opensearch_body``).",
+    )
+    include_facets: bool = Field(
+        default=False, description="If true, include facet bucket counts for whitelisted fields."
+    )
+    facet_fields: list[str] | None = Field(
+        default=None,
+        description="Subset of facet field names to aggregate; default is the full whitelist when ``include_facets`` is true.",
+    )
+    vector_score_threshold: float | None = Field(
+        default=None,
+        description=(
+            "Qdrant vector / hybrid / recommend: minimum similarity score for dense neighbors "
+            "(``query_points`` ``score_threshold``). When set, search ``total`` uses a paginated count of neighbors "
+            "above this threshold (capped by ``NADA_QDRANT_VECTOR_COUNT_SCAN_CAP``). Omit to use "
+            "``NADA_QDRANT_VECTOR_SCORE_THRESHOLD`` or no threshold."
+        ),
     )
 
     model_config = {"populate_by_name": True}
@@ -63,6 +80,23 @@ class SearchRequest(BaseModel):
         return self
 
 
+class FacetBucket(BaseModel):
+    """One facet bucket (normalized OpenSearch ``terms`` agg / Qdrant facet hit)."""
+
+    value: Any = Field(description="Bucket key (string, int, …).")
+    count: int = Field(ge=0)
+
+
+def coerce_search_facets(facets: dict[str, list[dict[str, Any]]] | None) -> dict[str, list[FacetBucket]] | None:
+    """Coerce backend facet dicts into :class:`FacetBucket` lists for the API model."""
+    if not facets:
+        return None
+    out: dict[str, list[FacetBucket]] = {}
+    for field, rows in facets.items():
+        out[field] = [FacetBucket(value=r.get("value"), count=int(r.get("count", 0))) for r in rows]
+    return out
+
+
 class SearchHit(BaseModel):
     id: str | None = None
     score: float | None = None
@@ -72,7 +106,32 @@ class SearchHit(BaseModel):
 class SearchResponse(BaseModel):
     total: int | None = None
     hits: list[dict[str, Any]]
+    facets: dict[str, list[FacetBucket]] | None = None
     opensearch_body: dict[str, Any] | None = Field(
         default=None,
-        description="Present when the request set ``include_opensearch_body``; the ``body`` argument passed to the OpenSearch client.",
+        description="Deprecated. Same as ``debug_request`` when a debug payload was requested.",
     )
+    debug_request: dict[str, Any] | None = Field(
+        default=None,
+        description="Present when the request asked for a debug payload; backend-specific shape.",
+    )
+
+
+class RecommendRequest(BaseModel):
+    idno: str = Field(..., min_length=1)
+    size: int = Field(default=10, ge=1, le=100)
+    filters: SearchFilters | None = None
+    exclude_idno: bool = True
+    vector_strategy: Literal["mean", "max_pool"] = "mean"
+    knn_k: int = Field(default=50, ge=1, le=500)
+    include_facets: bool = False
+    facet_fields: list[str] | None = None
+    vector_score_threshold: float | None = Field(
+        default=None,
+        description="Qdrant recommendations: same semantics as ``SearchRequest.vector_score_threshold``.",
+    )
+
+
+class ExplainSearchRequest(BaseModel):
+    idno: str = Field(..., min_length=1)
+    filters: SearchFilters | None = None

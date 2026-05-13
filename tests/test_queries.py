@@ -5,8 +5,8 @@ from nada_ai.settings import Settings
 
 def test_build_filters_type_and_geo():
     f = build_filters({"type": "indicator", "geographies": ["US", "UK"]})
-    assert {"term": {"type": "indicator"}} in f
-    assert {"terms": {"geographies": ["US", "UK"]}} in f
+    assert {"term": {"metadata.type": "indicator"}} in f
+    assert {"terms": {"metadata.geographies": ["US", "UK"]}} in f
 
 
 def test_build_search_keyword():
@@ -73,7 +73,7 @@ def test_vector_mode_puts_filter_inside_knn_not_bool_post_filter():
     knn_field = q["knn"][EMBEDDING_FIELD]
     assert knn_field["k"] == 20
     assert knn_field["vector"] == vec
-    assert knn_field["filter"] == {"bool": {"filter": [{"term": {"type": "indicator"}}]}}
+    assert knn_field["filter"] == {"bool": {"filter": [{"term": {"metadata.type": "indicator"}}]}}
 
 
 def test_hybrid_mode_applies_filter_to_keyword_and_knn_branches():
@@ -100,11 +100,11 @@ def test_hybrid_mode_applies_filter_to_keyword_and_knn_branches():
                     }
                 }
             ],
-            "filter": [{"term": {"type": "indicator"}}],
+            "filter": [{"term": {"metadata.type": "indicator"}}],
         }
     }
     assert should[1]["knn"][EMBEDDING_FIELD]["filter"] == {
-        "bool": {"filter": [{"term": {"type": "indicator"}}]}
+        "bool": {"filter": [{"term": {"metadata.type": "indicator"}}]}
     }
 
 
@@ -119,7 +119,7 @@ def test_build_search_collapse_idno():
         size=5,
         collapse_field="idno",
     )
-    assert body["collapse"] == {"field": "idno"}
+    assert body["collapse"] == {"field": "metadata.idno"}
 
 
 def test_build_search_collapse_inner_hits():
@@ -135,7 +135,7 @@ def test_build_search_collapse_inner_hits():
         collapse_inner_hits={"name": "by_qfield", "size": 5},
     )
     assert body["collapse"] == {
-        "field": "idno",
+        "field": "metadata.idno",
         "inner_hits": {"name": "by_qfield", "size": 5},
     }
 
@@ -192,7 +192,7 @@ def test_vector_mode_opensearch_ml_uses_neural():
     assert n["query_text"] == "labor survey"
     assert n["model_id"] == "deployed-model-id"
     assert n["k"] == 20
-    assert n["filter"] == {"bool": {"filter": [{"term": {"type": "indicator"}}]}}
+    assert n["filter"] == {"bool": {"filter": [{"term": {"metadata.type": "indicator"}}]}}
 
 
 def test_hybrid_mode_opensearch_ml_neural_plus_keyword():

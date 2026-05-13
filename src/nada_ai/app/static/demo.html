@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NADA OpenSearch — search demo</title>
+    <title>NADA AI — search demo</title>
     <style>
       :root {
         --bg: #0f1419;
@@ -387,9 +387,9 @@
   <body>
     <div class="wrap">
       <header>
-        <h1>NADA OpenSearch</h1>
+        <h1>NADA AI search</h1>
         <p>
-          Live search against the indexed metadata. API:
+          Live search against indexed metadata (<code>POST /search</code>). API:
           <a href="/docs">OpenAPI docs</a> · <a href="/health">health</a> ·
           <a href="/health/embeddings">embeddings</a>
         </p>
@@ -428,12 +428,16 @@ consumer price index</textarea
             <input type="number" id="from" min="0" value="0" />
           </div>
         </div>
-        <div class="row cols-2">
+        <div class="row cols-3">
           <div>
             <label for="knn_k"
               >knn_k <span class="hint">(vector / hybrid)</span></label
             >
             <input type="number" id="knn_k" min="1" max="500" value="50" />
+          </div>
+          <div class="check" style="align-self: end; padding-bottom: 0.25rem">
+            <input type="checkbox" id="include_facets" />
+            <label for="include_facets">Include facet counts</label>
           </div>
           <div class="check" style="align-self: end; padding-bottom: 0.25rem">
             <input type="checkbox" id="include_embedding" />
@@ -564,9 +568,9 @@ consumer price index</textarea
         <div class="check">
           <input type="checkbox" id="show_os_body" />
           <label for="show_os_body"
-            >Show OpenSearch request body
+            >Show debug request JSON
             <span class="hint"
-              >(JSON sent as <code>body</code> to <code>search</code>)</span
+              >(<code>debug_request</code> / OpenSearch-style body)</span
             ></label
           >
         </div>
@@ -582,12 +586,16 @@ consumer price index</textarea
       <p id="status"></p>
 
       <section id="query-preview-section" hidden>
-        <h2>OpenSearch request body</h2>
+        <h2>Debug request</h2>
         <p class="hint" style="margin: 0 0 0.5rem">
-          Exact payload passed to the client (query, size, from, collapse,
-          _source excludes, …).
+          Backend debug payload when enabled (OpenSearch query body or Qdrant debug dict).
         </p>
         <pre class="os-body" id="opensearch-preview"></pre>
+      </section>
+
+      <section id="facets-section" hidden>
+        <h2>Facet counts</h2>
+        <pre class="os-body" id="facets-preview"></pre>
       </section>
 
       <section id="results" hidden>
@@ -671,6 +679,8 @@ consumer price index</textarea
       const totalEl = $("total");
       const previewSection = $("query-preview-section");
       const previewPre = $("opensearch-preview");
+      const facetsSection = $("facets-section");
+      const facetsPre = $("facets-preview");
 
       function splitCsv(id) {
         const v = $(id).value.trim();
@@ -727,6 +737,7 @@ consumer price index</textarea
           from: parseInt($("from").value, 10) || 0,
           knn_k: parseInt($("knn_k").value, 10) || 50,
           include_embedding: $("include_embedding").checked,
+          include_facets: $("include_facets").checked,
           include_opensearch_body: $("show_os_body").checked,
         };
         const filters = collectFilters();
@@ -760,9 +771,25 @@ consumer price index</textarea
 
       function renderHit(h, i) {
         const src = h._source || {};
-        const idno = src.idno != null ? String(src.idno) : "—";
-        const qf = src.qfield != null ? String(src.qfield) : "—";
-        const dtype = src.type != null ? String(src.type) : "";
+        const m = src.metadata && typeof src.metadata === "object" ? src.metadata : {};
+        const idno =
+          m.idno != null
+            ? String(m.idno)
+            : src.idno != null
+              ? String(src.idno)
+              : "—";
+        const qf =
+          m.qfield != null
+            ? String(m.qfield)
+            : src.qfield != null
+              ? String(src.qfield)
+              : "—";
+        const dtype =
+          m.type != null
+            ? String(m.type)
+            : src.type != null
+              ? String(src.type)
+              : "";
         const typeLabel = formatTypeLabel(dtype || "unknown");
         const typeCls = typeBadgeClass(dtype);
         const text = (src.page_content || "").slice(0, 1200);
@@ -818,6 +845,7 @@ consumer price index</textarea
         statusEl.classList.remove("err");
         resultsEl.hidden = true;
         previewSection.hidden = true;
+        if (facetsSection) facetsSection.hidden = true;
         $("btn").disabled = true;
         try {
           const res = await fetch("/search", {
@@ -838,15 +866,20 @@ consumer price index</textarea
                 : res.statusText;
             throw new Error(detail || "Request failed");
           }
-          if (data.opensearch_body != null) {
-            previewPre.textContent = JSON.stringify(
-              data.opensearch_body,
-              null,
-              2,
-            );
+          const dbg = data.debug_request != null ? data.debug_request : data.opensearch_body;
+          if (dbg != null) {
+            previewPre.textContent = JSON.stringify(dbg, null, 2);
             previewSection.hidden = false;
           } else {
             previewSection.hidden = true;
+          }
+          if (facetsSection && facetsPre) {
+            if (data.facets != null && Object.keys(data.facets).length) {
+              facetsPre.textContent = JSON.stringify(data.facets, null, 2);
+              facetsSection.hidden = false;
+            } else {
+              facetsSection.hidden = true;
+            }
           }
           const total = data.total != null ? data.total : "—";
           totalEl.textContent = "(total hits: " + total + ")";

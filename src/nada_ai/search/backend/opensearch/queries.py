@@ -2,10 +2,26 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, TEXT_FIELD
+from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, TEXT_FIELD, metadata_field
 from nada_ai.settings import Settings
 
 SearchMode = Literal["keyword", "vector", "hybrid"]
+
+# Fields safe for ``terms`` aggregations (facet counts whitelist).
+FACET_FIELD_WHITELIST: frozenset[str] = frozenset(
+    {
+        "type",
+        "idno",
+        "qfield",
+        "geographies",
+        "source",
+        "periodicity",
+        "document_type",
+        "authors",
+        "year_start",
+        "year_end",
+    }
+)
 
 
 def _neural_query_body(
@@ -49,31 +65,31 @@ def build_filters(filters: dict[str, Any] | None) -> list[dict[str, Any]]:
         return []
     clauses: list[dict[str, Any]] = []
     if t := filters.get("type"):
-        clauses.append({"term": {"type": t}})
+        clauses.append({"term": {metadata_field("type"): t}})
     if idno := filters.get("idno"):
-        clauses.append({"term": {"idno": idno}})
+        clauses.append({"term": {metadata_field("idno"): idno}})
     if idnos := filters.get("idnos"):
-        clauses.append({"terms": {"idno": idnos}})
+        clauses.append({"terms": {metadata_field("idno"): idnos}})
     if g := filters.get("geographies"):
-        clauses.append({"terms": {"geographies": g}})
+        clauses.append({"terms": {metadata_field("geographies"): g}})
     if s := filters.get("source"):
         if isinstance(s, list):
-            clauses.append({"terms": {"source": s}})
+            clauses.append({"terms": {metadata_field("source"): s}})
         else:
-            clauses.append({"term": {"source": s}})
+            clauses.append({"term": {metadata_field("source"): s}})
     if p := filters.get("periodicity"):
-        clauses.append({"term": {"periodicity": p}})
+        clauses.append({"term": {metadata_field("periodicity"): p}})
     if dt := filters.get("document_type"):
-        clauses.append({"term": {"document_type": dt}})
+        clauses.append({"term": {metadata_field("document_type"): dt}})
     if authors := filters.get("authors"):
-        clauses.append({"terms": {"authors": authors}})
+        clauses.append({"terms": {metadata_field("authors"): authors}})
     if filters.get("year_start") is not None or filters.get("year_end") is not None:
         yr: dict[str, int] = {}
         if filters.get("year_start") is not None:
             yr["gte"] = int(filters["year_start"])
         if filters.get("year_end") is not None:
             yr["lte"] = int(filters["year_end"])
-        clauses.append({"range": {"year_start": yr}})
+        clauses.append({"range": {metadata_field("year_start"): yr}})
     return clauses
 
 
@@ -212,6 +228,7 @@ def _search_body(
     collapse_field: str | None = None,
     collapse_inner_hits: dict[str, Any] | None = None,
     include_embedding: bool = True,
+    aggs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "query": query,
@@ -222,7 +239,7 @@ def _search_body(
     if not include_embedding:
         body["_source"] = {"excludes": [EMBEDDING_FIELD]}
     if collapse_field:
-        collapse: dict[str, Any] = {"field": collapse_field}
+        collapse: dict[str, Any] = {"field": metadata_field(collapse_field)}
         if collapse_inner_hits:
             inner: dict[str, Any] = {
                 "name": collapse_inner_hits["name"],
@@ -232,4 +249,54 @@ def _search_body(
                 inner["_source"] = {"excludes": [EMBEDDING_FIELD]}
             collapse["inner_hits"] = inner
         body["collapse"] = collapse
+    if aggs:
+        body["aggs"] = aggs
     return body
+
+
+def build_idno_fast_query(
+    idno: str,
+    filters: dict[str, Any] | None,
+    size: int,
+    from_: int,
+    collapse_field: str | None = None,
+    collapse_inner_hits: dict[str, Any] | None = None,
+    include_embedding: bool = True,
+    facet_fields: list[str] | None = None,
+) -> dict[str, Any]:
+    """Match-all under bool filter: all chunks for ``idno`` (metadata-first shortcut)."""
+    merged = dict(filters or {})
+    merged["idno"] = idno
+    clauses = build_filters(merged)
+    inner = {"bool": {"filter": clauses}}
+    aggs = _facet_aggs(facet_fields)
+    return _search_body(
+        inner,
+        size,
+        from_,
+        collapse_field=collapse_field,
+        collapse_inner_hits=collapse_inner_hits,
+        include_embedding=include_embedding,
+        aggs=aggs,
+    )
+
+
+def _facet_aggs(facet_fields: list[str] | None) -> dict[str, Any] | None:
+    if not facet_fields:
+        return None
+    aggs: dict[str, Any] = {}
+    for name in facet_fields:
+        if name not in FACET_FIELD_WHITELIST:
+            continue
+        aggs[name] = {"terms": {"field": metadata_field(name), "size": 200}}
+    return aggs or None
+
+
+def merge_facets_into_body(body: dict[str, Any], facet_fields: list[str] | None) -> None:
+    """Mutates ``body`` to add ``terms`` aggregations for facet counts (conjunctive with query)."""
+    extra = _facet_aggs(facet_fields)
+    if not extra:
+        return
+    existing = body.get("aggs") or {}
+    existing.update(extra)
+    body["aggs"] = existing

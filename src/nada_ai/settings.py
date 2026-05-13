@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 load_dotenv()
 
 EmbeddingBackend = Literal["local", "opensearch_ml"]
+SearchBackendKind = Literal["opensearch", "qdrant"]
 
 
 class Settings(BaseSettings):
@@ -31,6 +32,16 @@ class Settings(BaseSettings):
     aws_profile: str | None = Field(default=None, description="Optional boto3 profile name")
 
     index_name: str = Field(default="nada-metadata")
+
+    #: Active vector / keyword search engine.
+    search_backend: SearchBackendKind = Field(default="opensearch")
+
+    #: Qdrant HTTP API (``host:port`` or full URL per ``qdrant-client``).
+    qdrant_url: str = Field(default="http://localhost:6333")
+    qdrant_api_key: str | None = Field(default=None)
+    qdrant_prefer_grpc: bool = Field(default=False)
+    #: Defaults to ``index_name`` when unset for a single knob across engines.
+    qdrant_collection_name: str | None = Field(default=None)
 
     #: ``local``: SentenceTransformers embed + k-NN queries. ``opensearch_ml``: ingest pipeline ``text_embedding`` + ``neural`` queries (no local model).
     embedding_backend: EmbeddingBackend = Field(default="local")
@@ -63,6 +74,11 @@ class Settings(BaseSettings):
     hybrid_keyword_boost: float = Field(default=0.3)
     hybrid_vector_boost: float = Field(default=0.7)
 
+    #: Qdrant only: ``query_points`` / ``query_points_groups`` ``score_threshold`` (min similarity score; cosine ⇒ higher = closer). Per-request JSON overrides this.
+    qdrant_vector_score_threshold: float | None = Field(default=None)
+    #: Qdrant only: when counting neighbors above ``qdrant_vector_score_threshold``, stop after this many points (cost cap).
+    qdrant_vector_count_scan_cap: int = Field(default=100_000, ge=1, le=10_000_000)
+
     @field_validator("query_prompt_name", "query_prompt", mode="before")
     @classmethod
     def empty_prompt_strings_to_none(cls, v: Any) -> str | None:
@@ -92,6 +108,18 @@ class Settings(BaseSettings):
         if self.query_prompt_name:
             return {"active": "prompt_name", "prompt_name": self.query_prompt_name}
         return {"active": "symmetric"}
+
+    @property
+    def qdrant_collection(self) -> str:
+        return self.qdrant_collection_name or self.index_name
+
+    @model_validator(mode="after")
+    def validate_search_backend(self) -> Settings:
+        if self.search_backend == "qdrant" and self.embedding_backend == "opensearch_ml":
+            raise ValueError(
+                "embedding_backend opensearch_ml is only valid with search_backend=opensearch (OpenSearch ML Commons)."
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_ml_backend(self) -> Settings:

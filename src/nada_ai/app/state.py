@@ -16,11 +16,14 @@ if TYPE_CHECKING:
 
     from nada_ai.app.jobs import JobRegistry
     from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
+    from nada_ai.search.ports import SearchBackendPort
 
 
 class AppState:
     settings: Settings
-    client: AsyncOpenSearch
+    #: OpenSearch client; ``None`` when ``search_backend=qdrant`` (admin index routes unavailable).
+    client: AsyncOpenSearch | None
+    search: SearchBackendPort
     embedding: EmbeddingService | None
     embedding_init_lock: asyncio.Lock
     embedding_init_error: str | None

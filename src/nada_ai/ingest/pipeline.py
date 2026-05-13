@@ -6,14 +6,11 @@ from typing import Any
 
 from ai4data.discovery.catalog import get_langdoc_uuid
 from ai4data.discovery.metadata.handler import MetadataLoader
-from opensearchpy.helpers import bulk
 from tqdm.auto import tqdm
 
-from nada_ai.search.backend.opensearch.client import build_client
-from nada_ai.search.backend.opensearch.documents import langdoc_to_source
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
 from nada_ai.search.backend.opensearch.mapping import index_body
-from nada_ai.search.backend.opensearch.ml.setup import ensure_text_embedding_ingest_pipeline
+from nada_ai.search.documents import langdoc_to_source
 from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -27,24 +24,19 @@ def ensure_index(client, settings: Settings, embedding_dim: int) -> None:
     client.indices.create(index=name, body=index_body(embedding_dim))
 
 
-def iter_bulk_actions(
+def iter_langdoc_records(
     settings: Settings,
     embedding: EmbeddingService | None,
     pairs: Iterable[tuple[str, str]],
     force: bool = False,
     show_progress_bar: bool = True,
     buffer_size: int = 1000,
-) -> Iterator[dict[str, Any]]:
-    """pairs: (idno, metadata_type).
-
-    Langdocs are accumulated across records. **Local** backend: ``encode_corpus`` runs when the buffer reaches
-    ``buffer_size`` texts. **OpenSearch ML** backend: no local encoding; pipeline embeds ``page_content`` on ingest.
-    """
+) -> Iterator[tuple[str, list[float] | None, dict[str, Any]]]:
+    """Yield ``(document_id, embedding_or_none_if_ml_backend, source_payload)`` for each langdoc row."""
     use_ml = settings.embedding_backend == "opensearch_ml"
-    # (langdoc, raw_metadata for langdoc_to_source microdata branch)
     buffer: list[tuple[Any, Any | None]] = []
 
-    def flush() -> Iterator[dict[str, Any]]:
+    def flush() -> Iterator[tuple[str, list[float] | None, dict[str, Any]]]:
         nonlocal buffer
         if not buffer:
             return
@@ -53,17 +45,11 @@ def iter_bulk_actions(
         if use_ml:
             ml_iter = enumerate(items)
             if show_progress_bar:
-                ml_iter = tqdm(ml_iter, total=len(items), unit="doc", desc="Pack bulk actions", leave=False)
+                ml_iter = tqdm(ml_iter, total=len(items), unit="doc", desc="Pack records", leave=False)
             for _, (doc, raw_meta) in ml_iter:
                 doc_id = get_langdoc_uuid(doc)
                 source = langdoc_to_source(doc, None, raw_metadata=raw_meta)
-                yield {
-                    "_op_type": "index",
-                    "_index": settings.index_name,
-                    "_id": doc_id,
-                    "pipeline": settings.opensearch_ml_ingest_pipeline_name,
-                    "_source": source,
-                }
+                yield doc_id, None, source
             return
         if embedding is None:
             raise RuntimeError("embedding service required for local embedding backend")
@@ -71,17 +57,12 @@ def iter_bulk_actions(
         vectors = embedding.encode_corpus(texts, show_progress_bar=show_progress_bar)
         pack_iter = enumerate(items)
         if show_progress_bar:
-            pack_iter = tqdm(pack_iter, total=len(items), unit="doc", desc="Pack bulk actions", leave=False)
+            pack_iter = tqdm(pack_iter, total=len(items), unit="doc", desc="Pack records", leave=False)
         for i, (doc, raw_meta) in pack_iter:
             vec = vectors[i].tolist()
             doc_id = get_langdoc_uuid(doc)
             source = langdoc_to_source(doc, vec, raw_metadata=raw_meta)
-            yield {
-                "_op_type": "index",
-                "_index": settings.index_name,
-                "_id": doc_id,
-                "_source": source,
-            }
+            yield doc_id, vec, source
 
     pairs_iter: Iterable[tuple[str, str]] = pairs
     if show_progress_bar:
@@ -90,7 +71,6 @@ def iter_bulk_actions(
 
     for idno, metadata_type in pairs_iter:
         try:
-            # We include resources to get the document url and other external resources
             loader = MetadataLoader(idno=idno, metadata_type=metadata_type, force=force, include_resources=True)
             raw = loader.metadata
             docs = loader.get_metadata_handler().get_langdocs()
@@ -111,6 +91,40 @@ def iter_bulk_actions(
     yield from flush()
 
 
+def iter_bulk_actions(
+    settings: Settings,
+    embedding: EmbeddingService | None,
+    pairs: Iterable[tuple[str, str]],
+    force: bool = False,
+    show_progress_bar: bool = True,
+    buffer_size: int = 1000,
+) -> Iterator[dict[str, Any]]:
+    """pairs: (idno, metadata_type).
+
+    Langdocs are accumulated across records. **Local** backend: ``encode_corpus`` runs when the buffer reaches
+    ``buffer_size`` texts. **OpenSearch ML** backend: no local encoding; pipeline embeds ``page_content`` on ingest.
+    """
+    use_ml = settings.embedding_backend == "opensearch_ml"
+    for doc_id, vec, source in iter_langdoc_records(
+        settings, embedding, pairs, force=force, show_progress_bar=show_progress_bar, buffer_size=buffer_size
+    ):
+        if use_ml:
+            yield {
+                "_op_type": "index",
+                "_index": settings.index_name,
+                "_id": doc_id,
+                "pipeline": settings.opensearch_ml_ingest_pipeline_name,
+                "_source": source,
+            }
+        else:
+            yield {
+                "_op_type": "index",
+                "_index": settings.index_name,
+                "_id": doc_id,
+                "_source": source,
+            }
+
+
 def run_bulk_index(
     settings: Settings,
     pairs: list[tuple[str, str]],
@@ -119,30 +133,16 @@ def run_bulk_index(
     show_progress_bar: bool = True,
     buffer_size: int = 1000,
 ) -> tuple[int, list | None]:
-    if settings.embedding_backend == "opensearch_ml":
-        embedding: EmbeddingService | None = None
-        dim = int(settings.opensearch_ml_embedding_dimension or 0)
-    else:
-        embedding = EmbeddingService(settings)
-        dim = embedding.embedding_dimension()
-    client = build_client(settings)
-    if recreate_index and client.indices.exists(index=settings.index_name):
-        client.indices.delete(index=settings.index_name)
-    ensure_index(client, settings, dim)
-    if settings.embedding_backend == "opensearch_ml":
-        ensure_text_embedding_ingest_pipeline(client, settings)
+    from nada_ai.ingest.factory import create_ingest_writer
 
-    # Pass a generator into ``bulk`` so OpenSearch receives chunked HTTP requests as actions
-    # are produced; do not ``list()`` the full iterator (memory + delayed first flush).
-    actions = iter_bulk_actions(
-        settings, embedding, pairs, force=force, show_progress_bar=show_progress_bar, buffer_size=buffer_size
+    writer = create_ingest_writer(settings)
+    return writer.run_bulk(
+        pairs,
+        force=force,
+        recreate_target=recreate_index,
+        show_progress_bar=show_progress_bar,
+        buffer_size=buffer_size,
     )
-    success, errors = bulk(client, actions, raise_on_error=False, refresh="wait_for")
-    err_list: list | None = None
-    if isinstance(errors, list) and errors:
-        err_list = errors
-        logger.error("Bulk indexing errors: %s", errors[:5])
-    return int(success), err_list
 
 
 def index_ids(

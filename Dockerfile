@@ -18,13 +18,13 @@ ENV UV_COMPILE_BYTECODE=1
 # 1) Install third-party deps only. Cache key = (pyproject.toml, uv.lock).
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev --extra local
+    uv sync --frozen --no-install-project --no-dev --extra local --extra qdrant
 
 # 2) Copy source + project metadata, then install the project itself.
 COPY README.md LICENSE ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --extra local
+    uv sync --frozen --no-dev --extra local --extra qdrant
 
 ENV PATH="/workspace/.venv/bin:$PATH"
 ENV AI4DATA_DISCOVERY_DATA_PATH=/workspace/data/nada-discovery
