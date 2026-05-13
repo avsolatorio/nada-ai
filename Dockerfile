@@ -13,11 +13,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /workspace
 
-COPY pyproject.toml uv.lock README.md LICENSE ./
-COPY src ./src
-
 ENV UV_COMPILE_BYTECODE=1
-RUN uv sync --frozen --no-dev --extra local
+
+# 1) Install third-party deps only. Cache key = (pyproject.toml, uv.lock).
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev --extra local
+
+# 2) Copy source + project metadata, then install the project itself.
+COPY README.md LICENSE ./
+COPY src ./src
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --extra local
 
 ENV PATH="/workspace/.venv/bin:$PATH"
 ENV AI4DATA_DISCOVERY_DATA_PATH=/workspace/data/nada-discovery
