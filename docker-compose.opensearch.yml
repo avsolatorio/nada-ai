@@ -15,6 +15,7 @@ services:
       network: host
     image: nada-ai-api:local
     container_name: nada-ai-api-dev
+    restart: always
     ports:
       - "8020:8020"
     environment:
@@ -41,6 +42,7 @@ services:
   opensearch-nada:
     image: opensearchproject/opensearch:3.6.0
     container_name: nada-ai-opensearch-dev
+    restart: always
     environment:
       - discovery.type=single-node
       - plugins.security.disabled=true
