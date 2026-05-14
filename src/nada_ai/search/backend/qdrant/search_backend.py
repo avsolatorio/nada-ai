@@ -320,7 +320,10 @@ class QdrantSearchBackend:
         thr = params.vector_score_threshold
         if params.collapse_field and collapse:
             inner = params.collapse_inner_hits or {"name": "variants", "size": 10}
-            gsize = 1 + int(inner.get("size", 10))
+            # Match OpenSearch collapse.inner_hits: top `size` docs in the group **including** the
+            # representative (same doc can appear as the outer hit and first inner hit).
+            inner_size = max(1, int(inner.get("size", 10)))
+            gsize = inner_size
             group_limit = params.from_ + params.size
             (total, total_basis, capped_sim), groups_resp = await asyncio.gather(
                 self._vector_total_for_response(coll, params.query_vector, base_fl, thr),
@@ -344,14 +347,14 @@ class QdrantSearchBackend:
                     continue
                 top = pts[0]
                 hit = _scored_point_to_hit(top, include_embedding=params.include_embedding)
-                rest = pts[1:]
-                if rest:
-                    name = inner.get("name", "variants")
+                name = inner.get("name", "variants")
+                inner_pts = pts[:inner_size]
+                if inner_pts:
                     hit["inner_hits"] = {
                         str(name): {
                             "hits": {
                                 "hits": [
-                                    _scored_point_to_hit(p, include_embedding=params.include_embedding) for p in rest
+                                    _scored_point_to_hit(p, include_embedding=params.include_embedding) for p in inner_pts
                                 ]
                             }
                         }
