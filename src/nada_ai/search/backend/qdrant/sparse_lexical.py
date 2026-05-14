@@ -1,4 +1,4 @@
-"""FastEmbed BM25 sparse vectors for Qdrant lexical search (optional ``qdrant_sparse_lexical``)."""
+"""FastEmbed BM25 sparse vectors for Qdrant lexical search (``qdrant_sparse_lexical``, on by default)."""
 
 from __future__ import annotations
 

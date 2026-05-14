@@ -87,8 +87,8 @@ class Settings(BaseSettings):
     #: Qdrant only: when counting neighbors above ``qdrant_vector_score_threshold``, stop after this many points (cost cap).
     qdrant_vector_count_scan_cap: int = Field(default=100_000, ge=1, le=10_000_000)
 
-    #: Qdrant: enable FastEmbed BM25 sparse vectors for ranked keyword/hybrid lexical leg (requires reindex / recreate collection).
-    qdrant_sparse_lexical: bool = Field(default=False)
+    #: Qdrant: FastEmbed BM25 sparse vectors for ranked keyword/hybrid lexical leg (requires ``fastembed`` from the ``qdrant`` extra; recreate collection if enabling on an existing dense-only collection).
+    qdrant_sparse_lexical: bool = Field(default=True)
     #: Named sparse vector in Qdrant; must match collection ``sparse_vectors_config`` and ingest upserts.
     qdrant_sparse_vector_name: str = Field(default="bm25")
     #: ``SparseTextEmbedding`` model id (e.g. ``Qdrant/bm25``); install ``uv sync --extra qdrant`` for ``fastembed``.

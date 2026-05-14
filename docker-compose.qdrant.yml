@@ -26,8 +26,9 @@ services:
     environment:
       NADA_SEARCH_BACKEND: qdrant
       NADA_EMBEDDING_BACKEND: local
-      # Ranked keyword/hybrid lexical leg (requires collection recreate + full reindex):
-      # NADA_QDRANT_SPARSE_LEXICAL: "true"
+      # Sparse BM25 leg is on by default (``NADA_QDRANT_SPARSE_LEXICAL``). New collections get ``sparse_vectors_config`` automatically.
+      # Opt out: NADA_QDRANT_SPARSE_LEXICAL: "false"
+      # If you already have a dense-only volume, either recreate the collection + reindex or set sparse to false until you migrate.
       NADA_QDRANT_URL: http://qdrant-nada:6333
       # NADA_EMBEDDING_MODEL_ID: microsoft/harrier-oss-v1-270m
       NADA_QUERY_PROMPT_NAME: web_search_query
