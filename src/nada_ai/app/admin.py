@@ -38,6 +38,7 @@ from nada_ai.ingest.service import (
     create_index_op,
     index_from_catalog_op,
     index_ids_op,
+    put_index_template_op,
     setup_ingest_pipeline_op,
 )
 from nada_ai.search.backend.opensearch.mapping import metadata_field
@@ -114,6 +115,13 @@ async def admin_create_index(body: CreateIndexRequest, s: AppState = Depends(get
         factory=factory,
         params={"recreate": recreate},
     )
+
+
+@admin_router.post("/admin/index/template", dependencies=[Depends(admin_auth)])
+async def admin_put_index_template(s: AppState = Depends(get_state)) -> dict[str, Any]:
+    """Install composable index template (knn_vector mapping) for ``index_name``; optional cluster auto-create."""
+    _require_opensearch(s)
+    return await asyncio.to_thread(put_index_template_op, s.settings)
 
 
 @admin_router.post("/admin/setup-ingest-pipeline", dependencies=[Depends(admin_auth)])

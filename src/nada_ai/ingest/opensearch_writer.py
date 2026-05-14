@@ -11,6 +11,10 @@ from nada_ai.ingest.pipeline import ensure_index, iter_bulk_actions
 from nada_ai.ingest.ports import IngestWriterPort
 from nada_ai.search.backend.opensearch.client import build_client
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
+from nada_ai.search.backend.opensearch.index_template import (
+    put_cluster_auto_create_index,
+    put_composable_index_template,
+)
 from nada_ai.search.backend.opensearch.ml.setup import ensure_text_embedding_ingest_pipeline
 from nada_ai.settings import Settings
 
@@ -35,6 +39,10 @@ class OpenSearchIngestWriter(IngestWriterPort):
                 client.indices.delete(index=self._settings.index_name)
             if self._settings.embedding_backend == "opensearch_ml":
                 ensure_text_embedding_ingest_pipeline(client, self._settings)
+            if self._settings.opensearch_put_composable_index_template:
+                put_composable_index_template(client, self._settings, embedding_dim)
+            if self._settings.opensearch_cluster_auto_create_index:
+                put_cluster_auto_create_index(client, self._settings.opensearch_cluster_auto_create_index)
             ensure_index(client, self._settings, embedding_dim)
         finally:
             _close_quiet(client)
@@ -61,6 +69,10 @@ class OpenSearchIngestWriter(IngestWriterPort):
                 client.indices.delete(index=self._settings.index_name)
             if self._settings.embedding_backend == "opensearch_ml":
                 ensure_text_embedding_ingest_pipeline(client, self._settings)
+            if self._settings.opensearch_put_composable_index_template:
+                put_composable_index_template(client, self._settings, dim)
+            if self._settings.opensearch_cluster_auto_create_index:
+                put_cluster_auto_create_index(client, self._settings.opensearch_cluster_auto_create_index)
             ensure_index(client, self._settings, dim)
 
             actions = iter_bulk_actions(

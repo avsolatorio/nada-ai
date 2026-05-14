@@ -4,6 +4,8 @@ Examples (run from repo root with ``uv run`` so env vars apply)::
 
     uv run python -m nada_ai.ingest.cli create_index
 
+    uv run python -m nada_ai.ingest.cli put_index_template
+
     uv run python -m nada_ai.ingest.cli index --idnos=WB_123,WB_456 --metadata_type=indicator
 
     uv run python -m nada_ai.ingest.cli index_from_catalog --catalog_type=timeseries
@@ -19,9 +21,17 @@ from nada_ai.ingest.service import (
     create_index_op,
     index_from_catalog_op,
     index_ids_op,
+    put_index_template_op,
     setup_ingest_pipeline_op,
 )
 from nada_ai.settings import Settings
+
+
+def put_index_template() -> None:
+    """Install composable index template (+ optional cluster ``action.auto_create_index`` from env)."""
+    settings = Settings()
+    res = put_index_template_op(settings)
+    print(res)
 
 
 def create_index(recreate: bool = False) -> None:
@@ -99,6 +109,7 @@ if __name__ == "__main__":
     fire.Fire(
         {
             "create_index": create_index,
+            "put_index_template": put_index_template,
             "setup_ingest_pipeline": setup_ingest_pipeline,
             "index": index,
             "index_from_catalog": index_from_catalog,

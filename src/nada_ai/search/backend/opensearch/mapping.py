@@ -15,7 +15,8 @@ def metadata_field(logical: str) -> str:
 def index_body(embedding_dimension: int) -> dict[str, Any]:
     """OpenSearch index settings + mappings for k-NN + facet filters.
 
-    Tuned for **OpenSearch 3.6+** (LTS): explicit Lucene HNSW + ``cosinesimil`` (stable vs Faiss default changes in 2.18+).
+    Tuned for **OpenSearch 3.6+** (LTS): FAISS HNSW + ``cosinesimil`` (semantic embeddings). With FAISS +
+    ``cosinesimil``, OpenSearch may L2-normalize vectors at index time so stored values can differ from ingest.
     See vector search settings for optional ``index.knn.*`` / quantization tuning on 3.6.
     """
     return {
@@ -56,7 +57,11 @@ def index_body(embedding_dimension: int) -> dict[str, Any]:
                     "method": {
                         "name": "hnsw",
                         "space_type": "cosinesimil",
-                        "engine": "lucene",
+                        "engine": "faiss",
+                        "parameters": {
+                            "m": 16,
+                            "ef_construction": 100,
+                        },
                     },
                 },
             }

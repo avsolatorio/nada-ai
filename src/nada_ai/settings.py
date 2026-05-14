@@ -33,6 +33,14 @@ class Settings(BaseSettings):
 
     index_name: str = Field(default="nada-metadata")
 
+    #: If True, ``PUT _index_template`` before index create / bulk ingest so auto-created indices inherit ``knn_vector`` mapping.
+    opensearch_put_composable_index_template: bool = Field(default=True)
+    #: Composable template ``priority`` (higher wins when multiple templates match).
+    opensearch_index_template_priority: int = Field(default=500, ge=0, le=2000)
+
+    #: If set, persist cluster ``action.auto_create_index`` (requires cluster-manager permissions). Examples: ``false`` to disable all auto-create; ``+nada-metadata*,-*`` for allowlist. Leave unset to not touch cluster settings.
+    opensearch_cluster_auto_create_index: str | None = Field(default=None)
+
     #: Active vector / keyword search engine.
     search_backend: SearchBackendKind = Field(default="opensearch")
 
@@ -87,6 +95,15 @@ class Settings(BaseSettings):
     qdrant_sparse_model_id: str = Field(default="Qdrant/bm25")
     #: When ``collapse_field`` is set on hybrid Qdrant search, multiply lexical/dense prefetch by this for post-RRF grouping.
     qdrant_hybrid_collapse_prefetch_multiplier: float = Field(default=4.0, ge=1.0, le=50.0)
+
+    @field_validator("opensearch_cluster_auto_create_index", mode="before")
+    @classmethod
+    def empty_auto_create_to_none(cls, v: Any) -> str | None:
+        if v is None or v == "":
+            return None
+        if isinstance(v, str):
+            return v
+        return str(v)
 
     @field_validator("query_prompt_name", "query_prompt", mode="before")
     @classmethod

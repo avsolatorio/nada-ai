@@ -13,6 +13,10 @@ from typing import Any
 from nada_ai.ingest.pipeline import run_bulk_index
 from nada_ai.search.backend.opensearch.client import build_client
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
+from nada_ai.search.backend.opensearch.index_template import (
+    put_cluster_auto_create_index,
+    put_composable_index_template,
+)
 from nada_ai.search.backend.opensearch.ml.setup import ensure_text_embedding_ingest_pipeline
 from nada_ai.settings import Settings
 
@@ -24,6 +28,34 @@ def _close_quiet(client: Any) -> None:
         client.transport.close()
     except Exception:
         pass
+
+
+def put_index_template_op(settings: Settings) -> dict[str, Any]:
+    """Install composable index template (and optional cluster auto-create setting) for OpenSearch only."""
+    if settings.search_backend == "qdrant":
+        return {
+            "skipped": True,
+            "detail": "Index templates apply to OpenSearch only (search_backend=qdrant).",
+        }
+    if settings.embedding_backend == "opensearch_ml":
+        dim = int(settings.opensearch_ml_embedding_dimension or 0)
+    else:
+        dim = EmbeddingService(settings).embedding_dimension()
+
+    client = build_client(settings)
+    try:
+        out: dict[str, Any] = {"dim": dim}
+        if settings.opensearch_put_composable_index_template:
+            out["template"] = put_composable_index_template(client, settings, dim)
+        else:
+            out["template"] = {"skipped": True, "reason": "opensearch_put_composable_index_template is false"}
+        if settings.opensearch_cluster_auto_create_index:
+            out["cluster_auto_create_index"] = put_cluster_auto_create_index(
+                client, settings.opensearch_cluster_auto_create_index
+            )
+        return out
+    finally:
+        _close_quiet(client)
 
 
 def create_index_op(settings: Settings, recreate: bool = False) -> dict[str, Any]:

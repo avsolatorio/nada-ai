@@ -27,6 +27,10 @@ services:
       SENTENCE_TRANSFORMERS_HOME: /models/sentence_transformers
       AI4DATA_DISCOVERY_DATA_PATH: /workspace/data/nada-discovery
       NADA_EMBEDDING_DEVICE: cpu
+      # Optional OpenSearch ops: composable index template (knn_vector on auto-created indices) and cluster allowlist.
+      # NADA_OPENSEARCH_PUT_COMPOSABLE_INDEX_TEMPLATE: "true"
+      # NADA_OPENSEARCH_INDEX_TEMPLATE_PRIORITY: "500"
+      # NADA_OPENSEARCH_CLUSTER_AUTO_CREATE_INDEX: "false"
       # Optional: override Data Compass URL for ai4data discovery (see ai4data MetadataCatalogConfig).
       # AI4DATA_METADATA_CATALOG_URL: https://your-host.example/index.php
       # Optional if thumbnails live elsewhere: AI4DATA_METADATA_CATALOG_THUMBNAIL_URL

@@ -20,6 +20,7 @@ from nada_ai.app import admin as admin_module
 from nada_ai.app.jobs import JobRegistry
 from nada_ai.app.main import app, state
 from nada_ai.search.factory import create_search_backend
+from nada_ai.settings import Settings
 
 
 def _fresh_state() -> None:
@@ -60,6 +61,44 @@ def test_admin_auth_passes_with_correct_key(monkeypatch):
         _fresh_state()
         r = client.post("/admin/index", json={"recreate": False}, headers={"X-NADA-Admin-Key": "secret"})
     assert r.status_code == 202
+
+
+def test_put_index_template_returns_json(monkeypatch):
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setattr(
+        admin_module,
+        "put_index_template_op",
+        lambda settings: {"dim": 384, "template": {"template": "nada-ai-nada-metadata-template"}},
+    )
+
+    with TestClient(app) as client:
+        _fresh_state()
+        r = client.post("/admin/index/template")
+    assert r.status_code == 200
+    assert r.json()["dim"] == 384
+    assert r.json()["template"]["template"] == "nada-ai-nada-metadata-template"
+
+
+def test_put_index_template_requires_admin_key_when_configured(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_API_KEY", "secret")
+    with TestClient(app) as client:
+        _fresh_state()
+        r = client.post("/admin/index/template")
+    assert r.status_code == 401
+
+
+def test_put_index_template_501_when_qdrant(monkeypatch):
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    with TestClient(app) as client:
+        _fresh_state()
+        prev_settings, prev_client = state.settings, state.client
+        state.settings = Settings(search_backend="qdrant")
+        state.client = None
+        try:
+            r = client.post("/admin/index/template")
+        finally:
+            state.settings, state.client = prev_settings, prev_client
+    assert r.status_code == 501
 
 
 def test_create_index_returns_409_when_already_running(monkeypatch):
