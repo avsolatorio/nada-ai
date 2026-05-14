@@ -26,6 +26,8 @@ services:
     environment:
       NADA_SEARCH_BACKEND: qdrant
       NADA_EMBEDDING_BACKEND: local
+      # Ranked keyword/hybrid lexical leg (requires collection recreate + full reindex):
+      # NADA_QDRANT_SPARSE_LEXICAL: "true"
       NADA_QDRANT_URL: http://qdrant-nada:6333
       # NADA_EMBEDDING_MODEL_ID: microsoft/harrier-oss-v1-270m
       NADA_QUERY_PROMPT_NAME: web_search_query

@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     #: Qdrant only: when counting neighbors above ``qdrant_vector_score_threshold``, stop after this many points (cost cap).
     qdrant_vector_count_scan_cap: int = Field(default=100_000, ge=1, le=10_000_000)
 
+    #: Qdrant: enable FastEmbed BM25 sparse vectors for ranked keyword/hybrid lexical leg (requires reindex / recreate collection).
+    qdrant_sparse_lexical: bool = Field(default=False)
+    #: Named sparse vector in Qdrant; must match collection ``sparse_vectors_config`` and ingest upserts.
+    qdrant_sparse_vector_name: str = Field(default="bm25")
+    #: ``SparseTextEmbedding`` model id (e.g. ``Qdrant/bm25``); install ``uv sync --extra qdrant`` for ``fastembed``.
+    qdrant_sparse_model_id: str = Field(default="Qdrant/bm25")
+    #: When ``collapse_field`` is set on hybrid Qdrant search, multiply lexical/dense prefetch by this for post-RRF grouping.
+    qdrant_hybrid_collapse_prefetch_multiplier: float = Field(default=4.0, ge=1.0, le=50.0)
+
     @field_validator("query_prompt_name", "query_prompt", mode="before")
     @classmethod
     def empty_prompt_strings_to_none(cls, v: Any) -> str | None:

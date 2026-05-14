@@ -209,3 +209,20 @@ def test_hybrid_mode_opensearch_ml_neural_plus_keyword():
     assert len(should) == 2
     assert "multi_match" in should[0]
     assert should[1]["neural"]["model_id"] == "deployed-model-id"
+
+
+def test_hybrid_local_mode_collapse_inner_hits_on_body():
+    s = Settings()
+    vec = [0.1] * 8
+    body = build_search_query(
+        s,
+        query_text="test",
+        mode="hybrid",
+        query_vector=vec,
+        filters=None,
+        knn_k=10,
+        collapse_field="idno",
+        collapse_inner_hits={"name": "variants", "size": 4},
+    )
+    assert body["collapse"]["field"] == "metadata.idno"
+    assert body["collapse"]["inner_hits"] == {"name": "variants", "size": 4}

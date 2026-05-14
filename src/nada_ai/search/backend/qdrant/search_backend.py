@@ -57,13 +57,30 @@ def _scored_point_to_hit(sp: qm.ScoredPoint, *, include_embedding: bool) -> dict
     return {"_id": sid, "_score": sp.score, "_source": payload}
 
 
-def _rrf_merge(id_lists: list[list[Any]], *, k: int = 60, limit: int) -> list[Any]:
+def _rrf_merge_with_scores(
+    id_lists: list[list[Any]], *, k: int = 60, limit: int
+) -> tuple[list[Any], dict[Any, float]]:
     scores: dict[Any, float] = {}
     for ids in id_lists:
         for rank, pid in enumerate(ids, start=1):
             scores[pid] = scores.get(pid, 0.0) + 1.0 / (k + rank)
-    ordered = sorted(scores.keys(), key=lambda p: -scores[p])
-    return ordered[:limit]
+    ordered = sorted(scores.keys(), key=lambda p: -scores[p])[:limit]
+    return ordered, scores
+
+
+def _rrf_merge(id_lists: list[list[Any]], *, k: int = 60, limit: int) -> list[Any]:
+    ordered, _ = _rrf_merge_with_scores(id_lists, k=k, limit=limit)
+    return ordered
+
+
+def _collapse_key_from_payload(payload: dict[str, Any] | None, collapse_field: str) -> Any:
+    if not payload:
+        return None
+    path = stored_filter_field_name(collapse_field)
+    if path.startswith("metadata."):
+        sub = path.split(".", 1)[1]
+        return (payload.get("metadata") or {}).get(sub)
+    return payload.get(path)
 
 
 class QdrantSearchBackend:
@@ -80,6 +97,28 @@ class QdrantSearchBackend:
 
     def _collection(self) -> str:
         return self._settings.qdrant_collection
+
+    def _sparse_lexical_enabled(self) -> bool:
+        return self._settings.qdrant_sparse_lexical
+
+    def _sparse_using(self) -> str:
+        return self._settings.qdrant_sparse_vector_name
+
+    async def _sparse_lexical_ids(self, query_text: str, base_fl: qm.Filter | None, limit: int) -> list[Any]:
+        from nada_ai.search.backend.qdrant.sparse_lexical import embed_query_sparse
+
+        sv = embed_query_sparse(query_text, model_id=self._settings.qdrant_sparse_model_id)
+        resp = await self._client.query_points(
+            collection_name=self._collection(),
+            query=qm.NearestQuery(nearest=sv),
+            query_filter=base_fl,
+            using=self._sparse_using(),
+            limit=limit,
+            offset=0,
+            with_payload=False,
+            with_vectors=False,
+        )
+        return [p.id for p in (resp.points or [])]
 
     async def health(self) -> dict[str, Any]:
         collections = await self._client.get_collections()
@@ -225,6 +264,142 @@ class QdrantSearchBackend:
             ids.extend(rec.id for rec in batch)
         return ids[:limit]
 
+    async def _keyword_sparse_groups_search(
+        self,
+        params: SearchParams,
+        facet_fields: list[str] | None,
+        base_fl: qm.Filter | None,
+        kw_flt: qm.Filter,
+        debug: dict[str, Any],
+    ) -> SearchOutcome:
+        from nada_ai.search.backend.qdrant.sparse_lexical import embed_query_sparse
+
+        inner = params.collapse_inner_hits or {"name": "variants", "size": 10}
+        inner_size = max(1, int(inner.get("size", 10)))
+        gsize = inner_size
+        group_limit = params.from_ + params.size
+        sv = embed_query_sparse(params.query, model_id=self._settings.qdrant_sparse_model_id)
+        q = qm.NearestQuery(nearest=sv)
+        count_resp, groups_resp = await asyncio.gather(
+            self._client.count(collection_name=self._collection(), count_filter=kw_flt),
+            self._client.query_points_groups(
+                collection_name=self._collection(),
+                group_by=stored_filter_field_name(params.collapse_field or "idno"),
+                query=q,
+                query_filter=base_fl,
+                using=self._sparse_using(),
+                limit=group_limit,
+                group_size=gsize,
+                with_payload=True,
+                with_vectors=params.include_embedding,
+            ),
+        )
+        hits_out: list[dict[str, Any]] = []
+        for g in groups_resp.groups or []:
+            pts = list(g.hits or [])
+            if not pts:
+                continue
+            top = pts[0]
+            hit = _scored_point_to_hit(top, include_embedding=params.include_embedding)
+            name = inner.get("name", "variants")
+            inner_pts = pts[:inner_size]
+            if inner_pts:
+                hit["inner_hits"] = {
+                    str(name): {
+                        "hits": {
+                            "hits": [
+                                _scored_point_to_hit(p, include_embedding=params.include_embedding) for p in inner_pts
+                            ]
+                        }
+                    }
+                }
+            hits_out.append(hit)
+        hits_out = hits_out[params.from_ : params.from_ + params.size]
+        facet_fl = self._match_text_filter(params.query, base_fl)
+        facets = await self._facet_for_search(facet_fields, "keyword", params.query, None, base_fl, facet_fl)
+        debug.update(
+            {
+                "kind": "keyword_sparse_groups",
+                "group_by": params.collapse_field,
+                "total_basis": "match_text_and_filters",
+            }
+        )
+        return SearchOutcome(total=int(count_resp.count), hits=hits_out, facets=facets, debug_request=debug)
+
+    async def _keyword_matchtext_groups_search(
+        self,
+        params: SearchParams,
+        facet_fields: list[str] | None,
+        base_fl: qm.Filter | None,
+        kw_flt: qm.Filter,
+        debug: dict[str, Any],
+    ) -> SearchOutcome:
+        """Field collapse for keyword mode without sparse vectors (scroll + in-app grouping; best-effort)."""
+        inner = params.collapse_inner_hits or {"name": "variants", "size": 10}
+        inner_size = max(1, int(inner.get("size", 10)))
+        name = inner.get("name", "variants")
+        collapse_field = params.collapse_field or "idno"
+        page_groups = params.from_ + params.size
+        prefetch = min(5000, max(page_groups * max(inner_size, 3), 200))
+
+        count_resp, recs = await asyncio.gather(
+            self._client.count(collection_name=self._collection(), count_filter=kw_flt),
+            self._keyword_scroll_hits(
+                query_text=params.query,
+                base_filter=base_fl,
+                need=prefetch,
+                include_embedding=params.include_embedding,
+                scroll_filter=kw_flt,
+            ),
+        )
+        total = int(count_resp.count)
+
+        group_order: list[Any] = []
+        members: dict[Any, list[qm.Record]] = {}
+        for rec in recs:
+            pl = dict(rec.payload or {})
+            key = _collapse_key_from_payload(pl, collapse_field)
+            if key is None:
+                key = ("__missing__", str(rec.id))
+            g = members.get(key)
+            if g is None:
+                group_order.append(key)
+                members[key] = [rec]
+            elif len(g) < inner_size:
+                g.append(rec)
+
+        slice_keys = group_order[params.from_ : params.from_ + params.size]
+        hits_out: list[dict[str, Any]] = []
+        for key in slice_keys:
+            grp = members.get(key) or []
+            if not grp:
+                continue
+            rep = grp[0]
+            hit = _record_to_hit(rep, score=1.0, include_embedding=params.include_embedding)
+            inner_recs = grp[:inner_size]
+            hit["inner_hits"] = {
+                str(name): {
+                    "hits": {
+                        "hits": [
+                            _record_to_hit(r, score=1.0, include_embedding=params.include_embedding) for r in inner_recs
+                        ]
+                    }
+                }
+            }
+            hits_out.append(hit)
+
+        facet_fl = self._match_text_filter(params.query, base_fl)
+        facets = await self._facet_for_search(facet_fields, "keyword", params.query, None, base_fl, facet_fl)
+        debug.update(
+            {
+                "kind": "keyword_match_text_groups",
+                "group_by": collapse_field,
+                "prefetch": prefetch,
+                "total_basis": "match_text_and_filters",
+            }
+        )
+        return SearchOutcome(total=total, hits=hits_out, facets=facets, debug_request=debug)
+
     async def search(self, params: SearchParams) -> SearchOutcome:
         facet_fields = _sanitize_facet_fields(params.facet_fields) if params.include_facets else None
         coll = self._collection()
@@ -255,6 +430,34 @@ class QdrantSearchBackend:
         if params.mode == "keyword":
             need = params.from_ + params.size
             kw_flt = self._match_text_filter(params.query, base_fl)
+            if params.collapse_field and not self._sparse_lexical_enabled():
+                return await self._keyword_matchtext_groups_search(params, facet_fields, base_fl, kw_flt, debug)
+            if self._sparse_lexical_enabled():
+                if params.collapse_field:
+                    return await self._keyword_sparse_groups_search(params, facet_fields, base_fl, kw_flt, debug)
+                from nada_ai.search.backend.qdrant.sparse_lexical import embed_query_sparse
+
+                sv = embed_query_sparse(params.query, model_id=self._settings.qdrant_sparse_model_id)
+                count_resp, sp_resp = await asyncio.gather(
+                    self._client.count(collection_name=coll, count_filter=kw_flt),
+                    self._client.query_points(
+                        collection_name=coll,
+                        query=qm.NearestQuery(nearest=sv),
+                        query_filter=base_fl,
+                        using=self._sparse_using(),
+                        limit=params.size,
+                        offset=params.from_,
+                        with_payload=True,
+                        with_vectors=params.include_embedding,
+                    ),
+                )
+                total = int(count_resp.count)
+                hits = [_scored_point_to_hit(p, include_embedding=params.include_embedding) for p in (sp_resp.points or [])]
+                facet_fl = self._match_text_filter(params.query, base_fl)
+                facets = await self._facet_for_search(facet_fields, "keyword", params.query, None, base_fl, facet_fl)
+                debug.update({"kind": "keyword_sparse", "total_basis": "match_text_count_sparse_rank"})
+                return SearchOutcome(total=total, hits=hits, facets=facets, debug_request=debug)
+
             count_resp, recs = await asyncio.gather(
                 self._client.count(collection_name=coll, count_filter=kw_flt),
                 self._keyword_scroll_hits(
@@ -400,6 +603,99 @@ class QdrantSearchBackend:
         )
         return SearchOutcome(total=total, hits=hits_out, facets=facets, debug_request=debug)
 
+    async def _hybrid_collapsed_hits(
+        self,
+        params: SearchParams,
+        facet_fields: list[str] | None,
+        base_fl: qm.Filter | None,
+        debug: dict[str, Any],
+        coll: str,
+        merged_ordered: list[Any],
+        rrf_scores: dict[Any, float],
+        total: int,
+        total_basis: str,
+        capped_sim: bool,
+        thr: float | None,
+        prefetch_k: int,
+    ) -> SearchOutcome:
+        inner = params.collapse_inner_hits or {"name": "variants", "size": 10}
+        inner_size = max(1, int(inner.get("size", 10)))
+        name = inner.get("name", "variants")
+        collapse_field = params.collapse_field or "idno"
+
+        if not merged_ordered:
+            facets = await self._facet_for_search(facet_fields, "hybrid", params.query, params.query_vector, base_fl, base_fl)
+            debug.update(
+                {
+                    "kind": "hybrid_rrf_collapse",
+                    "prefetch_k": prefetch_k,
+                    "merged": 0,
+                    "total_basis": total_basis,
+                    "vector_score_threshold": thr,
+                    "similarity_count_cap_hit": capped_sim,
+                }
+            )
+            return SearchOutcome(total=total, hits=[], facets=facets, debug_request=debug)
+
+        recs = await self._client.retrieve(
+            collection_name=coll,
+            ids=merged_ordered,
+            with_payload=True,
+            with_vectors=params.include_embedding,
+        )
+        by_id = {r.id: r for r in recs}
+        group_order: list[Any] = []
+        members: dict[Any, list[Any]] = {}
+
+        for pid in merged_ordered:
+            rec = by_id.get(pid)
+            if rec is None:
+                continue
+            raw_key = _collapse_key_from_payload(dict(rec.payload or {}), collapse_field)
+            key = raw_key if raw_key is not None else ("__missing__", str(pid))
+            lst = members.get(key)
+            if lst is None:
+                group_order.append(key)
+                members[key] = [pid]
+            elif len(lst) < inner_size:
+                lst.append(pid)
+
+        page_keys = group_order[params.from_ : params.from_ + params.size]
+        hits_out: list[dict[str, Any]] = []
+        for key in page_keys:
+            pids = members.get(key) or []
+            if not pids:
+                continue
+            rep_pid = pids[0]
+            rep = by_id.get(rep_pid)
+            if rep is None:
+                continue
+            hit = _record_to_hit(rep, score=rrf_scores.get(rep_pid), include_embedding=params.include_embedding)
+            inner_recs = [by_id[p] for p in pids[:inner_size] if p in by_id]
+            hit["inner_hits"] = {
+                str(name): {
+                    "hits": {
+                        "hits": [
+                            _record_to_hit(r, score=rrf_scores.get(r.id), include_embedding=params.include_embedding)
+                            for r in inner_recs
+                        ]
+                    }
+                }
+            }
+            hits_out.append(hit)
+
+        facets = await self._facet_for_search(facet_fields, "hybrid", params.query, params.query_vector, base_fl, base_fl)
+        debug.update(
+            {
+                "kind": "hybrid_rrf_collapse",
+                "prefetch_k": prefetch_k,
+                "total_basis": total_basis,
+                "vector_score_threshold": thr,
+                "similarity_count_cap_hit": capped_sim,
+            }
+        )
+        return SearchOutcome(total=total, hits=hits_out, facets=facets, debug_request=debug)
+
     async def _hybrid_search(
         self,
         params: SearchParams,
@@ -409,8 +705,19 @@ class QdrantSearchBackend:
     ) -> SearchOutcome:
         coll = self._collection()
         prefetch_k = max(params.knn_k, params.size + params.from_, 50)
+        if params.collapse_field:
+            prefetch_k = int(prefetch_k * self._settings.qdrant_hybrid_collapse_prefetch_multiplier)
         kw_flt = self._match_text_filter(params.query, base_fl)
         thr = params.vector_score_threshold
+        if self._sparse_lexical_enabled():
+            text_task = self._sparse_lexical_ids(params.query, base_fl, prefetch_k)
+        else:
+            text_task = self._keyword_scroll_ids(
+                query_text=params.query,
+                base_filter=base_fl,
+                limit=prefetch_k,
+                scroll_filter=kw_flt,
+            )
         (total, total_basis, capped_sim), vec_resp, text_ids = await asyncio.gather(
             self._vector_total_for_response(coll, params.query_vector, base_fl, thr),
             self._client.query_points(
@@ -423,14 +730,26 @@ class QdrantSearchBackend:
                 with_vectors=False,
                 score_threshold=thr,
             ),
-            self._keyword_scroll_ids(
-                query_text=params.query,
-                base_filter=base_fl,
-                limit=prefetch_k,
-                scroll_filter=kw_flt,
-            ),
+            text_task,
         )
         vec_ids = [p.id for p in (vec_resp.points or [])]
+        if params.collapse_field:
+            merged_ordered, rrf_scores = _rrf_merge_with_scores([vec_ids, text_ids], limit=prefetch_k)
+            return await self._hybrid_collapsed_hits(
+                params,
+                facet_fields,
+                base_fl,
+                debug,
+                coll,
+                merged_ordered,
+                rrf_scores,
+                total,
+                total_basis,
+                capped_sim,
+                thr,
+                prefetch_k,
+            )
+
         merged_ids = _rrf_merge([vec_ids, text_ids], limit=prefetch_k)
         window = merged_ids[params.from_ : params.from_ + params.size]
         if not window:
@@ -454,12 +773,15 @@ class QdrantSearchBackend:
             with_vectors=params.include_embedding,
         )
         by_id = {r.id: r for r in recs}
+        _, rrf_scores = _rrf_merge_with_scores([vec_ids, text_ids], limit=prefetch_k)
         hits_out: list[dict[str, Any]] = []
         for pid in window:
             rec = by_id.get(pid)
             if rec is None:
                 continue
-            hits_out.append(_record_to_hit(rec, score=1.0, include_embedding=params.include_embedding))
+            hits_out.append(
+                _record_to_hit(rec, score=rrf_scores.get(pid), include_embedding=params.include_embedding)
+            )
         facets = await self._facet_for_search(facet_fields, "hybrid", params.query, params.query_vector, base_fl, base_fl)
         debug.update(
             {

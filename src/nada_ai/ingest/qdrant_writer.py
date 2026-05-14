@@ -13,6 +13,7 @@ from nada_ai.ingest.pipeline import iter_langdoc_records
 from nada_ai.ingest.ports import IngestWriterPort
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
 from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, TEXT_FIELD
+from nada_ai.search.backend.qdrant.sparse_lexical import embed_documents_sparse
 from nada_ai.search.canonical import stored_filter_field_name
 from nada_ai.settings import Settings
 
@@ -66,6 +67,16 @@ def _ensure_payload_indexes(client: QdrantClient, collection: str) -> None:
         )
 
 
+def _assert_sparse_config_if_needed(client: QdrantClient, collection: str, sparse_name: str) -> None:
+    info = client.get_collection(collection_name=collection)
+    sparse_cfg = info.config.params.sparse_vectors or {}
+    if sparse_name not in sparse_cfg:
+        raise ValueError(
+            f"Collection {collection!r} has no sparse vector {sparse_name!r}. "
+            "Recreate the collection (ingest with recreate_target=True) after enabling NADA_QDRANT_SPARSE_LEXICAL."
+        )
+
+
 class QdrantIngestWriter(IngestWriterPort):
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -75,14 +86,21 @@ class QdrantIngestWriter(IngestWriterPort):
             raise ValueError("Qdrant ingest requires embedding_backend=local (stored dense vectors).")
         coll = self._settings.qdrant_collection
         client = _client(self._settings)
+        sparse_on = self._settings.qdrant_sparse_lexical
+        sparse_name = self._settings.qdrant_sparse_vector_name
         try:
             if recreate and client.collection_exists(collection_name=coll):
                 client.delete_collection(collection_name=coll)
             if not client.collection_exists(collection_name=coll):
-                client.create_collection(
-                    collection_name=coll,
-                    vectors_config=qm.VectorParams(size=embedding_dim, distance=qm.Distance.COSINE),
-                )
+                create_kwargs: dict[str, Any] = {
+                    "collection_name": coll,
+                    "vectors_config": qm.VectorParams(size=embedding_dim, distance=qm.Distance.COSINE),
+                }
+                if sparse_on:
+                    create_kwargs["sparse_vectors_config"] = {sparse_name: qm.SparseVectorParams()}
+                client.create_collection(**create_kwargs)
+            elif sparse_on:
+                _assert_sparse_config_if_needed(client, coll, sparse_name)
             _ensure_payload_indexes(client, coll)
         finally:
             client.close()
@@ -104,10 +122,41 @@ class QdrantIngestWriter(IngestWriterPort):
 
         coll = self._settings.qdrant_collection
         client = _client(self._settings)
-        batch: list[PointStruct] = []
+        batch_buf: list[tuple[str, list[float], dict[str, Any]]] = []
         success = 0
         errors: list[Any] = []
         batch_size = 128
+        sparse_on = self._settings.qdrant_sparse_lexical
+        sparse_name = self._settings.qdrant_sparse_vector_name
+        model_id = self._settings.qdrant_sparse_model_id
+
+        def flush_buf() -> None:
+            nonlocal success
+            if not batch_buf:
+                return
+            try:
+                if sparse_on:
+                    texts = [str(s.get("page_content") or "") for _, _, s in batch_buf]
+                    sparse_vecs = embed_documents_sparse(texts, model_id=model_id)
+                    points = [
+                        PointStruct(
+                            id=str(did),
+                            vector={"": v, sparse_name: sv},
+                            payload=_payload_for_point(src),
+                        )
+                        for (did, v, src), sv in zip(batch_buf, sparse_vecs, strict=True)
+                    ]
+                else:
+                    points = [
+                        PointStruct(id=str(did), vector=v, payload=_payload_for_point(src)) for did, v, src in batch_buf
+                    ]
+                client.upsert(collection_name=coll, points=points, wait=True)
+                success += len(points)
+            except Exception as e:
+                errors.append({"error": str(e), "batch_size": len(batch_buf)})
+            finally:
+                batch_buf.clear()
+
         try:
             for doc_id, vec, source in iter_langdoc_records(
                 self._settings,
@@ -121,17 +170,13 @@ class QdrantIngestWriter(IngestWriterPort):
                     errors.append({"id": doc_id, "error": "missing vector (opensearch_ml is not supported on Qdrant)"})
                     continue
                 try:
-                    batch.append(PointStruct(id=str(doc_id), vector=vec, payload=_payload_for_point(source)))
+                    batch_buf.append((doc_id, vec, source))
                 except Exception as e:
                     errors.append({"id": doc_id, "error": str(e)})
                     continue
-                if len(batch) >= batch_size:
-                    client.upsert(collection_name=coll, points=batch, wait=True)
-                    success += len(batch)
-                    batch.clear()
-            if batch:
-                client.upsert(collection_name=coll, points=batch, wait=True)
-                success += len(batch)
+                if len(batch_buf) >= batch_size:
+                    flush_buf()
+            flush_buf()
         except Exception as e:
             errors.append({"error": str(e)})
         finally:
