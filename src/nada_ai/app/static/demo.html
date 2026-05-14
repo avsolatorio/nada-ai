@@ -351,6 +351,11 @@
         color: #dce6f0;
         white-space: pre-wrap;
         word-break: break-word;
+        max-height: 18rem;
+        overflow-y: auto;
+        overflow-x: auto;
+        padding-right: 0.25rem;
+        scrollbar-gutter: stable;
       }
       .hit-card__foot {
         display: flex;
@@ -377,10 +382,66 @@
         align-items: baseline;
         flex-wrap: wrap;
       }
-      .hit-card .inner-hits-block {
+      .hit-card details.inner-hits-block {
         margin-top: 0.75rem;
         padding-top: 0.75rem;
         border-top: 1px dashed var(--border);
+      }
+      .hit-card details.inner-hits-block > summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--muted);
+        user-select: none;
+      }
+      .hit-card details.inner-hits-block > summary::-webkit-details-marker {
+        display: none;
+      }
+      .hit-card details.inner-hits-block > summary::after {
+        content: " ▸";
+        font-size: 0.65rem;
+        opacity: 0.75;
+      }
+      .hit-card details.inner-hits-block[open] > summary::after {
+        content: " ▾";
+      }
+      .hit-card details.inner-hits-block .raw {
+        margin-top: 0.5rem;
+      }
+      .hit-card__metadata {
+        margin-top: 0.75rem;
+        padding: 0.65rem 0.75rem;
+        border-radius: 8px;
+        border: 1px solid rgba(45, 58, 77, 0.65);
+        background: rgba(0, 0, 0, 0.22);
+      }
+      .hit-card__metadata h3 {
+        margin: 0 0 0.5rem;
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+      }
+      .hit-card__metadata dl {
+        margin: 0;
+        display: grid;
+        gap: 0.35rem 1rem;
+        grid-template-columns: auto 1fr;
+        font-size: 0.78rem;
+      }
+      .hit-card__metadata dt {
+        margin: 0;
+        font-weight: 600;
+        color: #6b7c92;
+      }
+      .hit-card__metadata dd {
+        margin: 0;
+        font-family: ui-monospace, monospace;
+        font-size: 0.72rem;
+        color: var(--text);
+        word-break: break-word;
       }
     </style>
   </head>
@@ -398,10 +459,10 @@
 
       <form id="search-form" action="#" method="post">
         <div>
-          <label for="q">Query</label>
-          <textarea id="q" required placeholder="e.g. GDP inflation labor">
-consumer price index</textarea
+          <label for="q"
+            >Query <span class="hint">Enter search · Shift+Enter newline</span></label
           >
+          <textarea id="q" required placeholder="e.g. GDP inflation labor">consumer price index</textarea>
         </div>
 
         <details class="search-controls">
@@ -538,13 +599,13 @@ consumer price index</textarea
 
         <details class="filter-block">
           <summary>
-            Field collapse <span class="hint">(dedupe by idno, etc.)</span>
+            Field collapse <span class="hint">(default: idno — clear to disable)</span>
           </summary>
           <div class="inner">
             <div class="row cols-2">
               <div>
                 <label for="collapse_field">collapse_field</label>
-                <input type="text" id="collapse_field" placeholder="idno" />
+                <input type="text" id="collapse_field" value="idno" placeholder="idno" />
               </div>
               <div>
                 <label for="inner_name">inner_hits name</label>
@@ -671,7 +732,23 @@ consumer price index</textarea
         }
       }
 
-      document.addEventListener("DOMContentLoaded", loadEmbedConfig);
+      document.addEventListener("DOMContentLoaded", () => {
+        loadEmbedConfig();
+        const qEl = $("q");
+        const formEl = $("search-form");
+        if (qEl && formEl) {
+          qEl.addEventListener("keydown", (e) => {
+            if (e.key !== "Enter") return;
+            if (e.shiftKey) return;
+            e.preventDefault();
+            if (typeof formEl.requestSubmit === "function") {
+              formEl.requestSubmit();
+            } else {
+              formEl.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+            }
+          });
+        }
+      });
 
       const statusEl = $("status");
       const resultsEl = $("results");
@@ -769,6 +846,40 @@ consumer price index</textarea
         return "badge--type";
       }
 
+      function formatMetaValue(v) {
+        if (v === null || v === undefined) return "—";
+        if (Array.isArray(v)) {
+          const parts = v.map((x) => (x != null && typeof x === "object" ? JSON.stringify(x) : String(x)));
+          return escapeHtml(parts.join(", "));
+        }
+        if (typeof v === "object") return escapeHtml(JSON.stringify(v));
+        return escapeHtml(String(v));
+      }
+
+      /** Renders metadata key/values for the card; omits doc_meta (can be large / noisy). */
+      function renderMetadataBlock(m) {
+        if (!m || typeof m !== "object") return "";
+        const keys = Object.keys(m)
+          .filter((k) => k !== "doc_meta")
+          .sort();
+        if (!keys.length) return "";
+        const rows = keys
+          .map(
+            (k) =>
+              "<dt>" +
+              escapeHtml(k) +
+              "</dt><dd>" +
+              formatMetaValue(m[k]) +
+              "</dd>"
+          )
+          .join("");
+        return (
+          '<div class="hit-card__metadata"><h3>Metadata</h3><dl>' +
+          rows +
+          "</dl></div>"
+        );
+      }
+
       function renderHit(h, i) {
         const src = h._source || {};
         const m = src.metadata && typeof src.metadata === "object" ? src.metadata : {};
@@ -792,15 +903,19 @@ consumer price index</textarea
               : "";
         const typeLabel = formatTypeLabel(dtype || "unknown");
         const typeCls = typeBadgeClass(dtype);
-        const text = (src.page_content || "").slice(0, 1200);
+        const text = src.page_content != null ? String(src.page_content) : "";
         const scoreStr =
           h._score != null ? Number(h._score).toFixed(4) : "—";
         let innerHtml = "";
         if (h.inner_hits && typeof h.inner_hits === "object") {
+          const innerKeys = Object.keys(h.inner_hits);
+          const keysLabel = innerKeys.length ? " (" + innerKeys.map(escapeHtml).join(", ") + ")" : "";
           innerHtml =
-            '<div class="inner-hits-block"><strong style="font-size:0.75rem;color:var(--muted)">inner_hits</strong><pre class="raw">' +
+            '<details class="inner-hits-block"><summary class="inner-hits__summary">inner_hits' +
+            keysLabel +
+            '</summary><pre class="raw">' +
             escapeHtml(JSON.stringify(h.inner_hits, null, 2)) +
-            "</pre></div>";
+            "</pre></details>";
         }
         return (
           '<article class="hit-card">' +
@@ -823,8 +938,8 @@ consumer price index</textarea
           '<div class="hit-card__body">' +
           '<div class="hit-card__snippet">' +
           escapeHtml(text) +
-          (text.length >= 1200 ? "…" : "") +
           "</div>" +
+          renderMetadataBlock(m) +
           '<div class="hit-card__foot">' +
           "<div><span class=\"meta-k\">idno</span><span class=\"meta-v\">" +
           escapeHtml(idno) +
