@@ -611,6 +611,17 @@
         background: #0a0e14;
         border-radius: 6px;
         overflow: hidden;
+        cursor: zoom-in;
+      }
+      .doc-carousel__img-wrap.doc-carousel__img-wrap--failed {
+        cursor: default;
+      }
+      .doc-carousel__expand-hint {
+        display: block;
+        margin: 0 0 0.35rem;
+        font-size: 0.68rem;
+        color: var(--muted);
+        text-align: center;
       }
       .doc-carousel__img {
         max-width: 100%;
@@ -618,6 +629,70 @@
         width: auto;
         height: auto;
         display: block;
+      }
+      .doc-carousel-lightbox {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        background: rgba(8, 12, 18, 0.94);
+        backdrop-filter: blur(6px);
+      }
+      .doc-carousel-lightbox[hidden] {
+        display: none !important;
+      }
+      .doc-carousel-lightbox__toolbar {
+        flex: 0 0 auto;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem 0.75rem;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.35);
+      }
+      .doc-carousel-lightbox__toolbar .doc-carousel__label {
+        flex: 1 1 auto;
+        min-width: 10rem;
+        color: var(--text);
+        font-size: 0.875rem;
+      }
+      .doc-carousel-lightbox__stage {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+      }
+      .doc-carousel-lightbox__img {
+        max-width: min(100%, 72rem);
+        max-height: none;
+        width: auto;
+        height: auto;
+        transform-origin: center center;
+        transition: transform 0.12s ease;
+        box-shadow: 0 8px 40px rgba(0, 0, 0, 0.55);
+        border-radius: 4px;
+      }
+      .doc-carousel-lightbox__excerpt {
+        flex: 0 0 auto;
+        max-height: 12vh;
+        overflow-y: auto;
+        margin: 0;
+        padding: 0.65rem 1rem 1rem;
+        font-size: 0.8125rem;
+        line-height: 1.45;
+        color: #c8d4e0;
+        border-top: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.25);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      body.doc-carousel-lightbox-open {
+        overflow: hidden;
       }
       .doc-carousel__img--failed,
       .doc-carousel__img.doc-carousel__img--failed {
@@ -940,6 +1015,31 @@
         <pre class="os-body" id="facets-preview"></pre>
       </section>
 
+    </div>
+
+    <div
+      id="doc-carousel-lightbox"
+      class="doc-carousel-lightbox"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-label="PDF page preview"
+    >
+      <div class="doc-carousel-lightbox__toolbar">
+        <span class="doc-carousel__label" id="doc-carousel-lightbox-label"></span>
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__prev">Prev</button>
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__next">Next</button>
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__zoom-out" title="Zoom out">−</button>
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__zoom-in" title="Zoom in">+</button>
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__zoom-reset" title="Reset zoom">
+          100%
+        </button>
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__close">Close</button>
+      </div>
+      <div class="doc-carousel-lightbox__stage">
+        <img class="doc-carousel-lightbox__img" alt="" />
+      </div>
+      <p class="doc-carousel-lightbox__excerpt" id="doc-carousel-lightbox-excerpt"></p>
     </div>
 
     <script>
@@ -1516,6 +1616,170 @@
         if (wrap) wrap.classList.add("doc-carousel__img-wrap--failed");
       }
 
+      const docCarouselLightboxState = {
+        carousel: null,
+        setCarouselIndex: null,
+        index: 0,
+        zoom: 1,
+        keyHandler: null,
+        wheelHandler: null,
+      };
+
+      const DOC_CAROUSEL_LIGHTBOX_DPI = 200;
+
+      function docCarouselLightboxEl() {
+        return $("doc-carousel-lightbox");
+      }
+
+      function applyDocCarouselLightboxZoom() {
+        const img = document.querySelector(".doc-carousel-lightbox__img");
+        if (img) img.style.transform = "scale(" + docCarouselLightboxState.zoom + ")";
+        const resetBtn = document.querySelector(".doc-carousel-lightbox__zoom-reset");
+        if (resetBtn) {
+          resetBtn.textContent = Math.round(docCarouselLightboxState.zoom * 100) + "%";
+        }
+      }
+
+      function updateDocCarouselLightboxView() {
+        const lb = docCarouselLightboxEl();
+        const carousel = docCarouselLightboxState.carousel;
+        if (!lb || !carousel) return;
+        const track = carousel.querySelector(".doc-carousel__track");
+        if (!track) return;
+        const list = [...track.querySelectorAll(".doc-carousel__slide")];
+        const i = docCarouselLightboxState.index;
+        const slide = list[i];
+        if (!slide) return;
+
+        const idno = carousel.dataset.idno || "";
+        const page = slide.dataset.page;
+        const labelEl = $("doc-carousel-lightbox-label");
+        const img = lb.querySelector(".doc-carousel-lightbox__img");
+        const excerptEl = $("doc-carousel-lightbox-excerpt");
+        const pdfPage = page != null ? Number(page) + 1 : i + 1;
+        const scoreEl = slide.querySelector(".badge--score");
+        const scoreTxt = scoreEl ? scoreEl.textContent.trim() : "";
+
+        if (labelEl) {
+          labelEl.textContent =
+            i +
+            1 +
+            " of " +
+            list.length +
+            " by score · PDF page " +
+            pdfPage +
+            (scoreTxt ? " · score " + scoreTxt : "");
+        }
+        if (img && idno && page != null) {
+          img.alt = "PDF page " + pdfPage;
+          img.classList.remove("doc-carousel__img--failed");
+          img.src =
+            "/demo/documents/" +
+            encodeURIComponent(idno) +
+            "/pages/" +
+            encodeURIComponent(page) +
+            ".png?dpi=" +
+            DOC_CAROUSEL_LIGHTBOX_DPI;
+          img.onerror = function () {
+            img.classList.add("doc-carousel__img--failed");
+          };
+        }
+        if (excerptEl) {
+          const ex = slide.querySelector(".doc-carousel__excerpt");
+          excerptEl.textContent = ex ? ex.textContent : "";
+        }
+
+        const prevLb = lb.querySelector(".doc-carousel-lightbox__prev");
+        const nextLb = lb.querySelector(".doc-carousel-lightbox__next");
+        if (prevLb) prevLb.disabled = i <= 0;
+        if (nextLb) nextLb.disabled = i >= list.length - 1;
+
+        docCarouselLightboxState.zoom = 1;
+        applyDocCarouselLightboxZoom();
+        if (typeof docCarouselLightboxState.setCarouselIndex === "function") {
+          docCarouselLightboxState.setCarouselIndex(i);
+        }
+      }
+
+      function docCarouselLightboxStep(delta) {
+        const carousel = docCarouselLightboxState.carousel;
+        if (!carousel) return;
+        const list = carousel.querySelectorAll(".doc-carousel__slide");
+        if (!list.length) return;
+        const next = Math.max(0, Math.min(docCarouselLightboxState.index + delta, list.length - 1));
+        if (next === docCarouselLightboxState.index) return;
+        docCarouselLightboxState.index = next;
+        updateDocCarouselLightboxView();
+      }
+
+      function closeDocCarouselLightbox() {
+        const lb = docCarouselLightboxEl();
+        if (!lb) return;
+        lb.hidden = true;
+        document.body.classList.remove("doc-carousel-lightbox-open");
+        if (docCarouselLightboxState.keyHandler) {
+          document.removeEventListener("keydown", docCarouselLightboxState.keyHandler);
+          docCarouselLightboxState.keyHandler = null;
+        }
+        docCarouselLightboxState.carousel = null;
+        docCarouselLightboxState.setCarouselIndex = null;
+      }
+
+      function openDocCarouselLightbox(carousel, index, setCarouselIndex) {
+        const lb = docCarouselLightboxEl();
+        if (!lb || !carousel) return;
+        const list = carousel.querySelectorAll(".doc-carousel__slide");
+        if (!list.length) return;
+
+        docCarouselLightboxState.carousel = carousel;
+        docCarouselLightboxState.setCarouselIndex = setCarouselIndex;
+        docCarouselLightboxState.index = Math.max(0, Math.min(index, list.length - 1));
+
+        lb.hidden = false;
+        document.body.classList.add("doc-carousel-lightbox-open");
+        updateDocCarouselLightboxView();
+
+        if (!lb.dataset.lightboxReady) {
+          lb.dataset.lightboxReady = "1";
+          lb.querySelector(".doc-carousel-lightbox__close")?.addEventListener("click", closeDocCarouselLightbox);
+          lb.querySelector(".doc-carousel-lightbox__prev")?.addEventListener("click", () => docCarouselLightboxStep(-1));
+          lb.querySelector(".doc-carousel-lightbox__next")?.addEventListener("click", () => docCarouselLightboxStep(1));
+          lb.querySelector(".doc-carousel-lightbox__zoom-in")?.addEventListener("click", () => {
+            docCarouselLightboxState.zoom = Math.min(3, docCarouselLightboxState.zoom + 0.25);
+            applyDocCarouselLightboxZoom();
+          });
+          lb.querySelector(".doc-carousel-lightbox__zoom-out")?.addEventListener("click", () => {
+            docCarouselLightboxState.zoom = Math.max(0.5, docCarouselLightboxState.zoom - 0.25);
+            applyDocCarouselLightboxZoom();
+          });
+          lb.querySelector(".doc-carousel-lightbox__zoom-reset")?.addEventListener("click", () => {
+            docCarouselLightboxState.zoom = 1;
+            applyDocCarouselLightboxZoom();
+          });
+          const stage = lb.querySelector(".doc-carousel-lightbox__stage");
+          if (stage) {
+            docCarouselLightboxState.wheelHandler = (e) => {
+              e.preventDefault();
+              const delta = e.deltaY < 0 ? 0.15 : -0.15;
+              docCarouselLightboxState.zoom = Math.max(0.5, Math.min(3, docCarouselLightboxState.zoom + delta));
+              applyDocCarouselLightboxZoom();
+            };
+            stage.addEventListener("wheel", docCarouselLightboxState.wheelHandler, { passive: false });
+          }
+        }
+
+        if (!docCarouselLightboxState.keyHandler) {
+          docCarouselLightboxState.keyHandler = (e) => {
+            if (lb.hidden) return;
+            if (e.key === "Escape") closeDocCarouselLightbox();
+            else if (e.key === "ArrowLeft") docCarouselLightboxStep(-1);
+            else if (e.key === "ArrowRight") docCarouselLightboxStep(1);
+          };
+        }
+        document.addEventListener("keydown", docCarouselLightboxState.keyHandler);
+        lb.querySelector(".doc-carousel-lightbox__close")?.focus();
+      }
+
       function renderDocumentCarousel(idno, passages, activePage) {
         if (!passages.length || idno === "—") return "";
         let startIdx = 0;
@@ -1541,7 +1805,8 @@
               '" data-active="' +
               active +
               '">' +
-              '<div class="doc-carousel__img-wrap">' +
+              '<p class="doc-carousel__expand-hint">Click preview to expand</p>' +
+              '<div class="doc-carousel__img-wrap" role="button" tabindex="0" title="Expand preview">' +
               '<img class="doc-carousel__img" src="' +
               escapeHtml(imgUrl) +
               '" alt="' +
@@ -1662,6 +1927,22 @@
             setIndex(Number(carousel.dataset.activeIndex || 0) + 1);
           });
           setIndex(Number(carousel.dataset.activeIndex || 0));
+
+          carousel.querySelectorAll(".doc-carousel__img-wrap").forEach((wrap) => {
+            wrap.addEventListener("click", () => {
+              if (wrap.classList.contains("doc-carousel__img-wrap--failed")) return;
+              const slide = wrap.closest(".doc-carousel__slide");
+              const idx = slide
+                ? Number(slide.dataset.slideIndex || carousel.dataset.activeIndex || 0)
+                : Number(carousel.dataset.activeIndex || 0);
+              openDocCarouselLightbox(carousel, idx, setIndex);
+            });
+            wrap.addEventListener("keydown", (e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              wrap.click();
+            });
+          });
         });
       }
 

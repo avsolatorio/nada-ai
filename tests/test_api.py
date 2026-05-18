@@ -34,4 +34,5 @@ def test_demo_route_returns_html():
     assert "results-region" in r.text
     assert "TAB_DEFS" in r.text
     assert "doc-carousel" in r.text
+    assert "doc-carousel-lightbox" in r.text
     assert "splitDocumentVariants" in r.text
