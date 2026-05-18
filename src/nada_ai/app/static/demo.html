@@ -535,6 +535,141 @@
         color: var(--text);
         word-break: break-word;
       }
+      .hit-card__snippet--dim {
+        opacity: 0.55;
+        max-height: 6rem;
+      }
+      .doc-carousel {
+        margin-top: 0.85rem;
+        padding-top: 0.85rem;
+        border-top: 1px dashed var(--border);
+      }
+      .doc-carousel__title {
+        margin: 0 0 0.5rem;
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+      }
+      .doc-carousel__nav {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        margin-bottom: 0.65rem;
+        flex-wrap: wrap;
+      }
+      .doc-carousel__btn {
+        padding: 0.35rem 0.75rem;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.25);
+        color: var(--text);
+        font-size: 0.75rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .doc-carousel__btn:hover:not(:disabled) {
+        border-color: rgba(251, 191, 36, 0.45);
+        color: #fcd34d;
+      }
+      .doc-carousel__btn:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+      .doc-carousel__label {
+        font-size: 0.8125rem;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .doc-carousel__viewport {
+        overflow: hidden;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.28);
+      }
+      .doc-carousel__track {
+        display: flex;
+        transition: transform 0.2s ease;
+      }
+      .doc-carousel__slide {
+        flex: 0 0 100%;
+        min-width: 100%;
+        padding: 0.65rem;
+        box-sizing: border-box;
+      }
+      .doc-carousel__slide[data-active="true"] {
+        outline: 2px solid rgba(251, 191, 36, 0.45);
+        outline-offset: -2px;
+      }
+      .doc-carousel__img-wrap {
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        min-height: 4rem;
+        margin-bottom: 0.5rem;
+        background: #0a0e14;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .doc-carousel__img {
+        max-width: 100%;
+        max-height: 28rem;
+        width: auto;
+        height: auto;
+        display: block;
+      }
+      .doc-carousel__img--failed,
+      .doc-carousel__img.doc-carousel__img--failed {
+        display: none;
+      }
+      .doc-carousel__img-fallback {
+        display: none;
+        padding: 1rem;
+        font-size: 0.75rem;
+        color: var(--muted);
+        text-align: center;
+      }
+      .doc-carousel__img-wrap:has(.doc-carousel__img--failed) .doc-carousel__img-fallback,
+      .doc-carousel__img-wrap.doc-carousel__img-wrap--failed .doc-carousel__img-fallback {
+        display: block;
+      }
+      .doc-carousel__excerpt {
+        font-size: 0.8rem;
+        line-height: 1.45;
+        color: #c8d4e0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 8rem;
+        overflow-y: auto;
+      }
+      .doc-carousel__slide-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem 0.65rem;
+        margin-top: 0.45rem;
+        font-size: 0.7rem;
+      }
+      .doc-variants-other {
+        margin-top: 0.65rem;
+        font-size: 0.78rem;
+      }
+      .doc-variants-other h4 {
+        margin: 0 0 0.35rem;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+      .doc-variants-other ul {
+        margin: 0;
+        padding-left: 1.1rem;
+        color: var(--muted);
+      }
+      .doc-variants-other li {
+        margin-bottom: 0.35rem;
+      }
     </style>
   </head>
   <body>
@@ -755,7 +890,7 @@
                 id="inner_size"
                 min="1"
                 max="100"
-                value="10"
+                value="15"
                 style="max-width: 8rem"
               />
             </div>
@@ -1122,6 +1257,7 @@
         hitsEl.innerHTML = hits.length
           ? hits.map(renderHit).join("")
           : '<p class="empty-hits">No hits for this query.</p>';
+        initCarousels(hitsEl);
         setTabBadge(tabId, hits.length, total);
         tabCache[tabId] = {
           data,
@@ -1270,21 +1406,295 @@
         return escapeHtml(String(v));
       }
 
-      /** Renders metadata key/values for the card; omits doc_meta (can be large / noisy). */
-      function renderMetadataBlock(m) {
+      function hitSource(hit) {
+        return (hit && hit._source) || {};
+      }
+
+      function hitMetadata(hit) {
+        const src = hitSource(hit);
+        return src.metadata && typeof src.metadata === "object" ? src.metadata : {};
+      }
+
+      function getInnerHitsName() {
+        const el = $("inner_name");
+        return (el && el.value.trim()) || "variants";
+      }
+
+      function collectInnerHitVariants(h) {
+        const ih = h.inner_hits;
+        if (!ih || typeof ih !== "object") return [];
+        const name = getInnerHitsName();
+        const bucket = ih[name] || (Object.keys(ih).length ? ih[Object.keys(ih)[0]] : null);
+        if (!bucket || !bucket.hits || !Array.isArray(bucket.hits.hits)) return [];
+        return bucket.hits.hits;
+      }
+
+      function variantFromHit(hit) {
+        const src = hitSource(hit);
+        const m = hitMetadata(hit);
+        const dm = m.doc_meta && typeof m.doc_meta === "object" ? m.doc_meta : null;
+        let page = null;
+        if (dm && dm.page != null && !Number.isNaN(Number(dm.page))) {
+          page = Number(dm.page);
+        }
+        return {
+          hit,
+          score: hit._score,
+          qfield: m.qfield != null ? String(m.qfield) : "",
+          page_content: src.page_content != null ? String(src.page_content) : "",
+          doc_meta: dm,
+          page,
+          total_pages:
+            dm && dm.total_pages != null && !Number.isNaN(Number(dm.total_pages))
+              ? Number(dm.total_pages)
+              : null,
+        };
+      }
+
+      function isPassageVariant(v) {
+        return v.qfield === "passages" && v.page != null;
+      }
+
+      function compareByScoreDesc(a, b) {
+        const sa = a.score != null ? Number(a.score) : -Infinity;
+        const sb = b.score != null ? Number(b.score) : -Infinity;
+        if (sb !== sa) return sb - sa;
+        if (a.page != null && b.page != null) return a.page - b.page;
+        return 0;
+      }
+
+      function splitDocumentVariants(outerHit) {
+        const byPage = new Map();
+        const others = [];
+        const seenOther = new Set();
+
+        function addPassage(v) {
+          if (!isPassageVariant(v)) return;
+          const prev = byPage.get(v.page);
+          if (!prev || (v.score != null && (prev.score == null || v.score > prev.score))) {
+            byPage.set(v.page, v);
+          }
+        }
+
+        function addOther(v) {
+          if (isPassageVariant(v)) return;
+          const key = v.qfield + "|" + v.page_content.slice(0, 80);
+          if (seenOther.has(key)) return;
+          seenOther.add(key);
+          others.push(v);
+        }
+
+        const outer = variantFromHit(outerHit);
+        addPassage(outer);
+        addOther(outer);
+        collectInnerHitVariants(outerHit).forEach((ih) => {
+          const v = variantFromHit(ih);
+          addPassage(v);
+          addOther(v);
+        });
+
+        const passages = [...byPage.values()].sort(compareByScoreDesc);
+        others.sort(compareByScoreDesc);
+        return { passages, others };
+      }
+
+      function pageLabel(v) {
+        const human = v.page + 1;
+        if (v.total_pages != null) return "Page " + human + " of " + v.total_pages;
+        return "Page " + human;
+      }
+
+      function excerptText(text, maxLen) {
+        const t = (text || "").trim();
+        if (t.length <= maxLen) return t;
+        return t.slice(0, maxLen) + "…";
+      }
+
+      function onCarouselImgError(img) {
+        img.classList.add("doc-carousel__img--failed");
+        const wrap = img.closest(".doc-carousel__img-wrap");
+        if (wrap) wrap.classList.add("doc-carousel__img-wrap--failed");
+      }
+
+      function renderDocumentCarousel(idno, passages, activePage) {
+        if (!passages.length || idno === "—") return "";
+        let startIdx = 0;
+        if (activePage != null) {
+          const idx = passages.findIndex((p) => p.page === activePage);
+          if (idx >= 0) startIdx = idx;
+        }
+        const slides = passages
+          .map((v, idx) => {
+            const active = idx === startIdx ? "true" : "false";
+            const scoreStr = v.score != null ? Number(v.score).toFixed(4) : "—";
+            const imgUrl =
+              "/demo/documents/" +
+              encodeURIComponent(idno) +
+              "/pages/" +
+              encodeURIComponent(String(v.page)) +
+              ".png?dpi=120";
+            return (
+              '<article class="doc-carousel__slide" data-slide-index="' +
+              idx +
+              '" data-page="' +
+              v.page +
+              '" data-active="' +
+              active +
+              '">' +
+              '<div class="doc-carousel__img-wrap">' +
+              '<img class="doc-carousel__img" src="' +
+              escapeHtml(imgUrl) +
+              '" alt="' +
+              escapeHtml(pageLabel(v)) +
+              '" loading="lazy" onerror="onCarouselImgError(this)" />' +
+              '<p class="doc-carousel__img-fallback">Preview unavailable (PDF not cached or render failed).</p>' +
+              "</div>" +
+              '<p class="doc-carousel__excerpt">' +
+              escapeHtml(excerptText(v.page_content, 600)) +
+              "</p>" +
+              '<div class="doc-carousel__slide-meta">' +
+              '<span class="badge badge--type-document">' +
+              escapeHtml(pageLabel(v)) +
+              "</span>" +
+              '<span class="badge badge--score" title="Relevance score">' +
+              escapeHtml(scoreStr) +
+              "</span>" +
+              "</div>" +
+              "</article>"
+            );
+          })
+          .join("");
+        return (
+          '<section class="doc-carousel" data-idno="' +
+          escapeHtml(idno) +
+          '" data-active-index="' +
+          startIdx +
+          '">' +
+          '<h3 class="doc-carousel__title">PDF pages (by relevance)</h3>' +
+          '<div class="doc-carousel__nav">' +
+          '<button type="button" class="doc-carousel__btn doc-carousel__btn--prev" aria-label="Previous page">Prev</button>' +
+          '<span class="doc-carousel__label"></span>' +
+          '<button type="button" class="doc-carousel__btn doc-carousel__btn--next" aria-label="Next page">Next</button>' +
+          "</div>" +
+          '<div class="doc-carousel__viewport">' +
+          '<div class="doc-carousel__track">' +
+          slides +
+          "</div>" +
+          "</div>" +
+          "</section>"
+        );
+      }
+
+      function renderOtherVariantsList(others) {
+        if (!others.length) return "";
+        const items = others
+          .map((v) => {
+            const scoreStr = v.score != null ? " · score " + Number(v.score).toFixed(4) : "";
+            return (
+              "<li><strong>" +
+              escapeHtml(v.qfield || "variant") +
+              "</strong>" +
+              scoreStr +
+              ": " +
+              escapeHtml(excerptText(v.page_content, 200)) +
+              "</li>"
+            );
+          })
+          .join("");
+        return (
+          '<div class="doc-variants-other"><h4>Other variants</h4><ul>' + items + "</ul></div>"
+        );
+      }
+
+      function renderInnerHitsFallback(h) {
+        if (!h.inner_hits || typeof h.inner_hits !== "object") return "";
+        const innerKeys = Object.keys(h.inner_hits);
+        const keysLabel = innerKeys.length ? " (" + innerKeys.map(escapeHtml).join(", ") + ")" : "";
+        return (
+          '<details class="inner-hits-block"><summary class="inner-hits__summary">inner_hits' +
+          keysLabel +
+          '</summary><pre class="raw">' +
+          escapeHtml(JSON.stringify(h.inner_hits, null, 2)) +
+          "</pre></details>"
+        );
+      }
+
+      function initCarousels(root) {
+        const scope = root || document;
+        scope.querySelectorAll(".doc-carousel").forEach((carousel) => {
+          if (carousel.dataset.carouselReady === "1") return;
+          carousel.dataset.carouselReady = "1";
+          const track = carousel.querySelector(".doc-carousel__track");
+          const label = carousel.querySelector(".doc-carousel__label");
+          const prevBtn = carousel.querySelector(".doc-carousel__btn--prev");
+          const nextBtn = carousel.querySelector(".doc-carousel__btn--next");
+          if (!track || !label || !prevBtn || !nextBtn) return;
+
+          const slides = () => [...track.querySelectorAll(".doc-carousel__slide")];
+
+          function setIndex(idx) {
+            const list = slides();
+            if (!list.length) return;
+            const i = Math.max(0, Math.min(idx, list.length - 1));
+            carousel.dataset.activeIndex = String(i);
+            track.style.transform = "translateX(-" + i * 100 + "%)";
+            list.forEach((sl, j) => {
+              sl.dataset.active = j === i ? "true" : "false";
+            });
+            const v = list[i];
+            const pdfPage =
+              v.dataset.page != null ? Number(v.dataset.page) + 1 : null;
+            label.textContent =
+              i +
+              1 +
+              " of " +
+              list.length +
+              " by score" +
+              (pdfPage != null ? " · PDF page " + pdfPage : "");
+            prevBtn.disabled = i <= 0;
+            nextBtn.disabled = i >= list.length - 1;
+          }
+
+          prevBtn.addEventListener("click", () => {
+            setIndex(Number(carousel.dataset.activeIndex || 0) - 1);
+          });
+          nextBtn.addEventListener("click", () => {
+            setIndex(Number(carousel.dataset.activeIndex || 0) + 1);
+          });
+          setIndex(Number(carousel.dataset.activeIndex || 0));
+        });
+      }
+
+      /** Renders metadata key/values for the card; summarizes doc_meta page fields for documents. */
+      function renderMetadataBlock(m, dtype) {
         if (!m || typeof m !== "object") return "";
+        const extraRows = [];
+        if (dtype === "document" && m.doc_meta && typeof m.doc_meta === "object") {
+          const dm = m.doc_meta;
+          if (dm.page != null && !Number.isNaN(Number(dm.page))) {
+            const human = Number(dm.page) + 1;
+            extraRows.push(
+              "<dt>pdf_page</dt><dd>" +
+                escapeHtml(String(human)) +
+                (dm.total_pages != null ? " / " + escapeHtml(String(dm.total_pages)) : "") +
+                "</dd>"
+            );
+          }
+        }
         const keys = Object.keys(m)
           .filter((k) => k !== "doc_meta")
           .sort();
-        if (!keys.length) return "";
-        const rows = keys
-          .map(
-            (k) =>
-              "<dt>" +
-              escapeHtml(k) +
-              "</dt><dd>" +
-              formatMetaValue(m[k]) +
-              "</dd>"
+        if (!keys.length && !extraRows.length) return "";
+        const rows = extraRows
+          .concat(
+            keys.map(
+              (k) =>
+                "<dt>" +
+                escapeHtml(k) +
+                "</dt><dd>" +
+                formatMetaValue(m[k]) +
+                "</dd>"
+            )
           )
           .join("");
         return (
@@ -1295,8 +1705,8 @@
       }
 
       function renderHit(h, i) {
-        const src = h._source || {};
-        const m = src.metadata && typeof src.metadata === "object" ? src.metadata : {};
+        const src = hitSource(h);
+        const m = hitMetadata(h);
         const idno =
           m.idno != null
             ? String(m.idno)
@@ -1320,16 +1730,23 @@
         const text = src.page_content != null ? String(src.page_content) : "";
         const scoreStr =
           h._score != null ? Number(h._score).toFixed(4) : "—";
+        const isDocument = dtype.toLowerCase() === "document";
         let innerHtml = "";
-        if (h.inner_hits && typeof h.inner_hits === "object") {
-          const innerKeys = Object.keys(h.inner_hits);
-          const keysLabel = innerKeys.length ? " (" + innerKeys.map(escapeHtml).join(", ") + ")" : "";
-          innerHtml =
-            '<details class="inner-hits-block"><summary class="inner-hits__summary">inner_hits' +
-            keysLabel +
-            '</summary><pre class="raw">' +
-            escapeHtml(JSON.stringify(h.inner_hits, null, 2)) +
-            "</pre></details>";
+        let snippetCls = "hit-card__snippet";
+        if (isDocument && h.inner_hits) {
+          const { passages, others } = splitDocumentVariants(h);
+          const outerVariant = variantFromHit(h);
+          const activePage = isPassageVariant(outerVariant) ? outerVariant.page : null;
+          if (passages.length) {
+            innerHtml =
+              renderDocumentCarousel(idno, passages, activePage) +
+              renderOtherVariantsList(others);
+            snippetCls += " hit-card__snippet--dim";
+          } else {
+            innerHtml = renderOtherVariantsList(others) + renderInnerHitsFallback(h);
+          }
+        } else if (h.inner_hits && typeof h.inner_hits === "object") {
+          innerHtml = renderInnerHitsFallback(h);
         }
         return (
           '<article class="hit-card">' +
@@ -1350,10 +1767,12 @@
           "</span>" +
           "</header>" +
           '<div class="hit-card__body">' +
-          '<div class="hit-card__snippet">' +
+          '<div class="' +
+          snippetCls +
+          '">' +
           escapeHtml(text) +
           "</div>" +
-          renderMetadataBlock(m) +
+          renderMetadataBlock(m, dtype) +
           '<div class="hit-card__foot">' +
           "<div><span class=\"meta-k\">idno</span><span class=\"meta-v\">" +
           escapeHtml(idno) +

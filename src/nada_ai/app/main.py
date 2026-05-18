@@ -5,12 +5,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse, Response
 from opensearchpy.exceptions import NotFoundError, RequestError
 
 from nada_ai import __version__
 from nada_ai.app.admin import admin_router, jobs_router
+from nada_ai.app.demo_preview import render_pdf_page_png, resolve_document_pdf_path
 from nada_ai.app.jobs import JobRegistry
 from nada_ai.app.schemas import (
     ExplainSearchRequest,
@@ -71,6 +72,38 @@ async def demo_search_ui() -> HTMLResponse:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="demo.html not found")
     return HTMLResponse(path.read_text(encoding="utf-8"))
+
+
+@app.get(
+    "/demo/documents/{idno}/pages/{page}.png",
+    include_in_schema=False,
+    responses={200: {"content": {"image/png": {}}}},
+)
+async def demo_document_page_preview(
+    idno: str,
+    page: int,
+    dpi: int = Query(default=120, ge=36, le=300, description="Render resolution (72 dpi = 1x)."),
+) -> Response:
+    """Render one cached PDF page as PNG for the search demo carousel."""
+    if page < 0:
+        raise HTTPException(status_code=400, detail="page must be non-negative")
+    pdf_path = resolve_document_pdf_path(idno)
+    if not pdf_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="PDF not cached for this idno; ingest the document type first.",
+        )
+    try:
+        png = await asyncio.to_thread(render_pdf_page_png, pdf_path, page, dpi=dpi)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed to render PDF page: {e}") from e
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @app.get("/health")
