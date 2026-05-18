@@ -170,7 +170,12 @@ async def search(body: SearchRequest, s: AppState = Depends(get_state)) -> Searc
         if s.embedding is None:
             raise HTTPException(status_code=503, detail="EmbeddingService not initialized")
         try:
-            vec = await asyncio.to_thread(s.embedding.encode_query, body.query)
+            vec = await asyncio.to_thread(
+                s.embedding.encode_query,
+                body.query,
+                query_prompt=body.query_prompt,
+                query_prompt_name=body.query_prompt_name,
+            )
             query_vector = vec.tolist()
         except Exception as e:
             raise HTTPException(

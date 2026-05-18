@@ -60,14 +60,28 @@ class EmbeddingService:
             show_progress_bar=show_progress_bar,
         )
 
-    def encode_query(self, text: str, show_progress_bar: bool = False) -> np.ndarray:
+    def encode_query(
+        self,
+        text: str,
+        show_progress_bar: bool = False,
+        *,
+        query_prompt: str | None = None,
+        query_prompt_name: str | None = None,
+    ) -> np.ndarray:
+        """Encode a search query; optional overrides apply instead of server settings when set."""
         common = {
             "batch_size": 1,
             "normalize_embeddings": True,
             "show_progress_bar": show_progress_bar,
         }
-        if self._settings.query_prompt:
-            return self._model.encode([text], prompt=self._settings.query_prompt, **common)[0]
-        if self._settings.query_prompt_name:
-            return self._model.encode([text], prompt_name=self._settings.query_prompt_name, **common)[0]
+        if query_prompt is not None:
+            lit, name = query_prompt, None
+        elif query_prompt_name is not None:
+            lit, name = None, query_prompt_name
+        else:
+            lit, name = self._settings.query_prompt, self._settings.query_prompt_name
+        if lit:
+            return self._model.encode([text], prompt=lit, **common)[0]
+        if name:
+            return self._model.encode([text], prompt_name=name, **common)[0]
         return self._model.encode([text], **common)[0]

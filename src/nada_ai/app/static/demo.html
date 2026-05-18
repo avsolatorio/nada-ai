@@ -600,6 +600,45 @@
           </div>
         </div>
 
+        <details class="filter-block" id="query-encoding-block">
+          <summary>
+            Query encoding
+            <span class="hint">(vector / hybrid · local embeddings)</span>
+          </summary>
+          <div class="inner">
+            <div>
+              <label for="query-encoding-mode">Encoding</label>
+              <select id="query-encoding-mode">
+                <option value="server" selected>Server default</option>
+                <option value="prompt_name">prompt_name</option>
+                <option value="literal">Literal prompt</option>
+              </select>
+            </div>
+            <div id="query-encoding-prompt-name-wrap" hidden style="margin-top: 0.75rem">
+              <label for="query-prompt-name"
+                >query_prompt_name
+                <span class="hint">SentenceTransformer prompt name</span></label
+              >
+              <input
+                type="text"
+                id="query-prompt-name"
+                placeholder="e.g. web_search_query"
+              />
+            </div>
+            <div id="query-encoding-literal-wrap" hidden style="margin-top: 0.75rem">
+              <label for="query-prompt-literal"
+                >query_prompt
+                <span class="hint">Literal prefix passed as prompt=</span></label
+              >
+              <textarea
+                id="query-prompt-literal"
+                rows="3"
+                placeholder="e.g. Instruct: Given a web search query, retrieve relevant passages&#10;Query: "
+              ></textarea>
+            </div>
+          </div>
+        </details>
+
         <details class="filter-block" open>
           <summary>
             Search filters
@@ -810,7 +849,52 @@
         return "<strong>Query vectors</strong>: " + escapeHtml(JSON.stringify(qe));
       }
 
+      function syncQueryEncodingFields() {
+        const modeEl = $("query-encoding-mode");
+        const block = $("query-encoding-block");
+        if (!modeEl) return;
+        const mode = modeEl.value;
+        const nameWrap = $("query-encoding-prompt-name-wrap");
+        const litWrap = $("query-encoding-literal-wrap");
+        if (nameWrap) nameWrap.hidden = mode !== "prompt_name";
+        if (litWrap) litWrap.hidden = mode !== "literal";
+        if (block) block.hidden = false;
+      }
+
+      function applyServerEncodingDefaults(qe) {
+        const modeEl = $("query-encoding-mode");
+        const nameEl = $("query-prompt-name");
+        const litEl = $("query-prompt-literal");
+        if (!modeEl) return;
+        if (qe && qe.active === "literal_prompt" && qe.prompt != null) {
+          modeEl.value = "literal";
+          if (litEl) litEl.value = String(qe.prompt);
+        } else if (qe && qe.active === "prompt_name" && qe.prompt_name) {
+          modeEl.value = "prompt_name";
+          if (nameEl) nameEl.value = String(qe.prompt_name);
+        } else {
+          modeEl.value = "server";
+        }
+        syncQueryEncodingFields();
+      }
+
+      function applyQueryEncodingToPayload(body) {
+        const modeEl = $("query-encoding-mode");
+        if (!modeEl) return;
+        const mode = modeEl.value;
+        if (mode === "prompt_name") {
+          const n = $("query-prompt-name").value.trim();
+          if (n) body.query_prompt_name = n;
+          return;
+        }
+        if (mode === "literal") {
+          const p = $("query-prompt-literal").value;
+          if (p.trim()) body.query_prompt = p;
+        }
+      }
+
       async function loadEmbedConfig() {
+        const block = $("query-encoding-block");
         if (!embedConfigEl) return;
         try {
           const res = await fetch("/health/embeddings", {
@@ -822,8 +906,10 @@
               "<strong>Query vectors</strong>: not used with this API (<code>embedding_backend</code> is not <code>local</code>).";
             embedConfigEl.hidden = false;
             embedConfigEl.classList.remove("hint");
+            if (block) block.hidden = true;
             return;
           }
+          applyServerEncodingDefaults(data.query_encoding);
           const qeHtml = formatQueryEncodingHtml(data.query_encoding);
           if (qeHtml) {
             embedConfigEl.innerHTML = qeHtml;
@@ -900,6 +986,11 @@
       document.addEventListener("DOMContentLoaded", () => {
         initTabs();
         loadEmbedConfig();
+        const encModeEl = $("query-encoding-mode");
+        if (encModeEl) {
+          encModeEl.addEventListener("change", syncQueryEncodingFields);
+          syncQueryEncodingFields();
+        }
         const qEl = $("q");
         const formEl = $("search-form");
         if (qEl && formEl) {
@@ -988,6 +1079,7 @@
             size: parseInt($("inner_size").value, 10) || 10,
           };
         }
+        applyQueryEncodingToPayload(body);
         return body;
       }
 

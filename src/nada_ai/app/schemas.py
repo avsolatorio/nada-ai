@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 SearchMode = Literal["keyword", "vector", "hybrid"]
 
@@ -70,8 +70,31 @@ class SearchRequest(BaseModel):
             "``NADA_QDRANT_VECTOR_SCORE_THRESHOLD`` or no threshold."
         ),
     )
+    query_prompt_name: str | None = Field(
+        default=None,
+        description=(
+            "Override server ``query_prompt_name`` for this request (local embeddings, vector/hybrid). "
+            "Ignored when ``query_prompt`` is set."
+        ),
+    )
+    query_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Literal ``prompt=`` prefix for asymmetric query encoding (local embeddings, vector/hybrid). "
+            "Overrides ``query_prompt_name`` and server defaults when set."
+        ),
+    )
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("query_prompt_name", "query_prompt", mode="before")
+    @classmethod
+    def empty_query_prompt_strings_to_none(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
     @model_validator(mode="after")
     def collapse_inner_hits_needs_field(self) -> SearchRequest:
