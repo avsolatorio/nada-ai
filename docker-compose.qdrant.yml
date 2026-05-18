@@ -44,7 +44,7 @@ services:
       # If downloads are hosted on a different subdomain than the catalog (e.g. training.ihsn.org),
       # allow-list the extra hosts that may receive the key:
       # AI4DATA_METADATA_CATALOG_X_API_KEY_HOSTS: training.ihsn.org,files.ihsn.org
-      NADA_QUERY_PROMPT: "Instruct: Retrieve semantically similar text that helps answer the user's query or find related information\nQuery: "
+      NADA_QUERY_PROMPT: "Instruct: Retrieve texts that help answer the user's query or find related information\nQuery: "
       # NADA_ADMIN_API_KEY: ${NADA_ADMIN_API_KEY}
     volumes:
       - ${HOME}/.cache/huggingface:/models/huggingface
