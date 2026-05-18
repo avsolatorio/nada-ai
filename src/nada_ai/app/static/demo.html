@@ -26,7 +26,7 @@
         min-height: 100vh;
       }
       .wrap {
-        max-width: 56rem;
+        max-width: 64rem;
         margin: 0 auto;
         padding: 1.5rem 1.25rem 3rem;
       }
@@ -176,12 +176,104 @@
       #status.err {
         color: var(--error);
       }
-      #results {
+      #results-region {
         margin-top: 1.5rem;
       }
-      #results h2 {
+      #results-region h2.results-heading {
         font-size: 1rem;
         margin: 0 0 0.75rem;
+      }
+      .tab-bar {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 0.35rem;
+        overflow-x: auto;
+        padding-bottom: 0.35rem;
+        margin-bottom: 0;
+        border-bottom: 1px solid var(--border);
+        scrollbar-gutter: stable;
+      }
+      .tab-btn {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.5rem 0.85rem;
+        border: 1px solid transparent;
+        border-radius: 8px 8px 0 0;
+        border-bottom: none;
+        margin-bottom: -1px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 0.8125rem;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .tab-btn:hover {
+        color: var(--text);
+        background: rgba(91, 159, 212, 0.08);
+      }
+      .tab-btn[aria-selected="true"] {
+        color: var(--text);
+        background: var(--surface);
+        border-color: var(--border);
+        border-bottom-color: var(--surface);
+        box-shadow: inset 0 2px 0 var(--accent);
+      }
+      .tab-btn--indicator[aria-selected="true"] {
+        box-shadow: inset 0 2px 0 #7ee0cf;
+      }
+      .tab-btn--microdata[aria-selected="true"] {
+        box-shadow: inset 0 2px 0 #c4b5fd;
+      }
+      .tab-btn--document[aria-selected="true"] {
+        box-shadow: inset 0 2px 0 #fcd34d;
+      }
+      .tab-btn--geospatial[aria-selected="true"] {
+        box-shadow: inset 0 2px 0 #6ee7b7;
+      }
+      .tab-badge {
+        display: inline-flex;
+        min-width: 1.25rem;
+        justify-content: center;
+        padding: 0.1rem 0.4rem;
+        border-radius: 999px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        background: rgba(0, 0, 0, 0.28);
+        color: var(--accent);
+      }
+      .tab-btn[aria-selected="true"] .tab-badge {
+        background: rgba(91, 159, 212, 0.22);
+      }
+      .tab-panels {
+        border: 1px solid var(--border);
+        border-top: none;
+        border-radius: 0 0 10px 10px;
+        background: rgba(0, 0, 0, 0.08);
+        padding: 1rem;
+      }
+      .tab-panel[hidden] {
+        display: none;
+      }
+      .tab-panel__meta {
+        font-size: 0.8125rem;
+        color: var(--muted);
+        margin: 0 0 0.75rem;
+      }
+      .tab-panel__meta.err {
+        color: var(--error);
+      }
+      .tab-panel__total {
+        font-weight: 500;
+      }
+      .tab-panel__loading {
+        color: var(--muted);
+        font-size: 0.875rem;
+        padding: 1rem;
+        text-align: center;
       }
       .empty-hits {
         color: var(--muted);
@@ -519,7 +611,12 @@
           <div class="inner">
             <div class="row cols-2">
               <div>
-                <label for="f-type">type</label>
+                <label for="f-type"
+                  >type
+                  <span class="hint"
+                    >All tab only — use result tabs for per-type search</span
+                  ></label
+                >
                 <input
                   type="text"
                   id="f-type"
@@ -641,13 +738,23 @@
 
         <div class="search-actions">
           <button type="submit" id="btn">Search</button>
+          <p class="hint" style="margin: 0.5rem 0 0; max-width: 36rem">
+            One search runs five parallel requests (All + each data type). Hybrid/vector
+            modes encode the query once per tab.
+          </p>
         </div>
       </form>
 
       <p id="status"></p>
 
+      <section id="results-region" hidden>
+        <h2 class="results-heading">Results</h2>
+        <div class="tab-bar" id="tab-bar" role="tablist" aria-label="Results by data type"></div>
+        <div class="tab-panels" id="tab-panels"></div>
+      </section>
+
       <section id="query-preview-section" hidden>
-        <h2>Debug request</h2>
+        <h2>Debug request <span class="hint" id="debug-tab-label"></span></h2>
         <p class="hint" style="margin: 0 0 0.5rem">
           Backend debug payload when enabled (OpenSearch query body or Qdrant debug dict).
         </p>
@@ -655,14 +762,10 @@
       </section>
 
       <section id="facets-section" hidden>
-        <h2>Facet counts</h2>
+        <h2>Facet counts <span class="hint" id="facets-tab-label"></span></h2>
         <pre class="os-body" id="facets-preview"></pre>
       </section>
 
-      <section id="results" hidden>
-        <h2>Results <span id="total"></span></h2>
-        <div id="hits" class="hits-grid"></div>
-      </section>
     </div>
 
     <script>
@@ -732,7 +835,70 @@
         }
       }
 
+      const TAB_DEFS = [
+        { id: "all", label: "All", filterType: null },
+        { id: "indicator", label: "Indicator", filterType: "indicator" },
+        { id: "microdata", label: "Microdata", filterType: "microdata" },
+        { id: "document", label: "Document", filterType: "document" },
+        { id: "geospatial", label: "Geospatial", filterType: "geospatial" },
+      ];
+
+      const statusEl = $("status");
+      const resultsRegion = $("results-region");
+      const tabBarEl = $("tab-bar");
+      const tabPanelsEl = $("tab-panels");
+      const previewSection = $("query-preview-section");
+      const previewPre = $("opensearch-preview");
+      const facetsSection = $("facets-section");
+      const facetsPre = $("facets-preview");
+      const debugTabLabel = $("debug-tab-label");
+      const facetsTabLabel = $("facets-tab-label");
+
+      let activeTabId = "all";
+      let searchAbortController = null;
+      const tabCache = Object.create(null);
+
+      function initTabs() {
+        if (!tabBarEl || !tabPanelsEl) return;
+        TAB_DEFS.forEach((tab, i) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "tab-btn" + (tab.id !== "all" ? " tab-btn--" + tab.id : "");
+          btn.id = "tab-btn-" + tab.id;
+          btn.setAttribute("role", "tab");
+          btn.setAttribute("aria-selected", tab.id === activeTabId ? "true" : "false");
+          btn.setAttribute("aria-controls", "tab-panel-" + tab.id);
+          btn.setAttribute("data-tab-id", tab.id);
+          btn.tabIndex = tab.id === activeTabId ? 0 : -1;
+          btn.innerHTML =
+            escapeHtml(tab.label) +
+            ' <span class="tab-badge" id="tab-badge-' +
+            tab.id +
+            '" hidden>—</span>';
+          btn.addEventListener("click", () => setActiveTab(tab.id));
+          tabBarEl.appendChild(btn);
+
+          const panel = document.createElement("div");
+          panel.className = "tab-panel";
+          panel.id = "tab-panel-" + tab.id;
+          panel.setAttribute("role", "tabpanel");
+          panel.setAttribute("aria-labelledby", "tab-btn-" + tab.id);
+          panel.hidden = tab.id !== activeTabId;
+          panel.innerHTML =
+            '<p class="tab-panel__meta" id="tab-meta-' +
+            tab.id +
+            '"></p>' +
+            '<div class="hits-grid" id="tab-hits-' +
+            tab.id +
+            '"><p class="tab-panel__loading">Run a search to see results.</p></div>';
+          tabPanelsEl.appendChild(panel);
+
+          tabCache[tab.id] = { data: null, error: null, label: tab.label };
+        });
+      }
+
       document.addEventListener("DOMContentLoaded", () => {
+        initTabs();
         loadEmbedConfig();
         const qEl = $("q");
         const formEl = $("search-form");
@@ -749,15 +915,6 @@
           });
         }
       });
-
-      const statusEl = $("status");
-      const resultsEl = $("results");
-      const hitsEl = $("hits");
-      const totalEl = $("total");
-      const previewSection = $("query-preview-section");
-      const previewPre = $("opensearch-preview");
-      const facetsSection = $("facets-section");
-      const facetsPre = $("facets-preview");
 
       function splitCsv(id) {
         const v = $(id).value.trim();
@@ -806,7 +963,7 @@
         return Object.keys(filters).length ? filters : undefined;
       }
 
-      function buildPayload() {
+      function buildPayload(tabFilterType) {
         const body = {
           query: $("q").value.trim(),
           mode: $("mode").value,
@@ -817,8 +974,11 @@
           include_facets: $("include_facets").checked,
           include_opensearch_body: $("show_os_body").checked,
         };
-        const filters = collectFilters();
-        if (filters) body.filters = filters;
+        let filters = collectFilters();
+        if (tabFilterType) {
+          filters = { ...(filters || {}), type: tabFilterType };
+        }
+        if (filters && Object.keys(filters).length) body.filters = filters;
 
         const cf = $("collapse_field").value.trim();
         if (cf) {
@@ -829,6 +989,168 @@
           };
         }
         return body;
+      }
+
+      function tabDefById(tabId) {
+        return TAB_DEFS.find((t) => t.id === tabId) || TAB_DEFS[0];
+      }
+
+      function setTabBadge(tabId, pageHits, total) {
+        const badge = $("tab-badge-" + tabId);
+        if (!badge) return;
+        if (pageHits == null) {
+          badge.hidden = true;
+          badge.textContent = "—";
+          return;
+        }
+        badge.hidden = false;
+        const page = String(pageHits);
+        if (total != null && total !== "—" && String(total) !== String(pageHits)) {
+          badge.textContent = page + " / " + total;
+        } else {
+          badge.textContent = page;
+        }
+      }
+
+      function renderTabResults(tabId, data) {
+        const hitsEl = $("tab-hits-" + tabId);
+        const metaEl = $("tab-meta-" + tabId);
+        if (!hitsEl) return;
+        const hits = (data && data.hits) || [];
+        const total = data && data.total != null ? data.total : "—";
+        if (metaEl) {
+          metaEl.classList.remove("err");
+          metaEl.innerHTML =
+            '<span class="tab-panel__total">Total hits: ' +
+            escapeHtml(String(total)) +
+            "</span> · " +
+            hits.length +
+            " on this page";
+        }
+        hitsEl.innerHTML = hits.length
+          ? hits.map(renderHit).join("")
+          : '<p class="empty-hits">No hits for this query.</p>';
+        setTabBadge(tabId, hits.length, total);
+        tabCache[tabId] = {
+          data,
+          error: null,
+          label: tabDefById(tabId).label,
+        };
+      }
+
+      function renderTabError(tabId, message) {
+        const hitsEl = $("tab-hits-" + tabId);
+        const metaEl = $("tab-meta-" + tabId);
+        if (metaEl) {
+          metaEl.classList.add("err");
+          metaEl.textContent = message;
+        }
+        if (hitsEl) {
+          hitsEl.innerHTML =
+            '<p class="empty-hits">' + escapeHtml(message) + "</p>";
+        }
+        setTabBadge(tabId, null);
+        tabCache[tabId] = {
+          data: null,
+          error: message,
+          label: tabDefById(tabId).label,
+        };
+      }
+
+      function setTabLoading(tabId, message) {
+        const hitsEl = $("tab-hits-" + tabId);
+        const metaEl = $("tab-meta-" + tabId);
+        if (metaEl) {
+          metaEl.classList.remove("err");
+          metaEl.textContent = message || "Searching…";
+        }
+        if (hitsEl) {
+          hitsEl.innerHTML =
+            '<p class="tab-panel__loading">' +
+            escapeHtml(message || "Searching…") +
+            "</p>";
+        }
+      }
+
+      function updateDebugFromCache(tabId) {
+        const cached = tabCache[tabId];
+        const label = cached ? " (" + cached.label + " tab)" : "";
+        if (debugTabLabel) debugTabLabel.textContent = label;
+        if (facetsTabLabel) facetsTabLabel.textContent = label;
+
+        if (!cached || cached.error) {
+          previewSection.hidden = true;
+          if (facetsSection) facetsSection.hidden = true;
+          return;
+        }
+        const data = cached.data;
+        const dbg =
+          data &&
+          (data.debug_request != null ? data.debug_request : data.opensearch_body);
+        if (dbg != null) {
+          previewPre.textContent = JSON.stringify(dbg, null, 2);
+          previewSection.hidden = false;
+        } else {
+          previewSection.hidden = true;
+        }
+        if (facetsSection && facetsPre) {
+          if (data && data.facets != null && Object.keys(data.facets).length) {
+            facetsPre.textContent = JSON.stringify(data.facets, null, 2);
+            facetsSection.hidden = false;
+          } else {
+            facetsSection.hidden = true;
+          }
+        }
+      }
+
+      function setActiveTab(tabId) {
+        activeTabId = tabId;
+        TAB_DEFS.forEach((tab) => {
+          const btn = $("tab-btn-" + tab.id);
+          const panel = $("tab-panel-" + tab.id);
+          const selected = tab.id === tabId;
+          if (btn) {
+            btn.setAttribute("aria-selected", selected ? "true" : "false");
+            btn.tabIndex = selected ? 0 : -1;
+          }
+          if (panel) panel.hidden = !selected;
+        });
+        updateDebugFromCache(tabId);
+      }
+
+      async function searchTab(tabDef, signal) {
+        const payload = buildPayload(tabDef.filterType);
+        try {
+          const res = await fetch("/search", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify(payload),
+            signal,
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const detail =
+              data.detail != null
+                ? typeof data.detail === "string"
+                  ? data.detail
+                  : JSON.stringify(data.detail)
+                : res.statusText;
+            return { tabId: tabDef.id, ok: false, error: detail || "Request failed" };
+          }
+          return { tabId: tabDef.id, ok: true, data };
+        } catch (err) {
+          if (err.name === "AbortError") {
+            return { tabId: tabDef.id, ok: false, aborted: true };
+          }
+          return {
+            tabId: tabDef.id,
+            ok: false,
+            error: String(err.message || err),
+          };
+        }
       }
 
       function formatTypeLabel(t) {
@@ -956,60 +1278,81 @@
 
       $("search-form").addEventListener("submit", async (e) => {
         e.preventDefault();
-        statusEl.textContent = "Searching…";
+        if (searchAbortController) searchAbortController.abort();
+        searchAbortController = new AbortController();
+        const { signal } = searchAbortController;
+
+        statusEl.textContent =
+          "Searching (" + TAB_DEFS.length + " parallel requests)…";
         statusEl.classList.remove("err");
-        resultsEl.hidden = true;
+        resultsRegion.hidden = false;
         previewSection.hidden = true;
         if (facetsSection) facetsSection.hidden = true;
+        TAB_DEFS.forEach((tab) => setTabLoading(tab.id, "Searching…"));
         $("btn").disabled = true;
-        try {
-          const res = await fetch("/search", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-            },
-            body: JSON.stringify(buildPayload()),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            const detail =
-              data.detail != null
-                ? typeof data.detail === "string"
-                  ? data.detail
-                  : JSON.stringify(data.detail)
-                : res.statusText;
-            throw new Error(detail || "Request failed");
-          }
-          const dbg = data.debug_request != null ? data.debug_request : data.opensearch_body;
-          if (dbg != null) {
-            previewPre.textContent = JSON.stringify(dbg, null, 2);
-            previewSection.hidden = false;
-          } else {
-            previewSection.hidden = true;
-          }
-          if (facetsSection && facetsPre) {
-            if (data.facets != null && Object.keys(data.facets).length) {
-              facetsPre.textContent = JSON.stringify(data.facets, null, 2);
-              facetsSection.hidden = false;
-            } else {
-              facetsSection.hidden = true;
-            }
-          }
-          const total = data.total != null ? data.total : "—";
-          totalEl.textContent = "(total hits: " + total + ")";
-          const hits = data.hits || [];
-          hitsEl.innerHTML = hits.length
-            ? hits.map(renderHit).join("")
-            : '<p class="empty-hits">No hits for this query.</p>';
-          resultsEl.hidden = false;
-          statusEl.textContent = "OK · " + hits.length + " hit(s) in this page";
-        } catch (err) {
-          statusEl.textContent = String(err.message || err);
-          statusEl.classList.add("err");
-        } finally {
+
+        const outcomes = await Promise.allSettled(
+          TAB_DEFS.map((tab) => searchTab(tab, signal))
+        );
+
+        if (signal.aborted) {
           $("btn").disabled = false;
+          return;
         }
+
+        let okCount = 0;
+        let failCount = 0;
+        let allPageHits = 0;
+
+        outcomes.forEach((outcome, i) => {
+          const tabDef = TAB_DEFS[i];
+          if (outcome.status === "rejected") {
+            failCount += 1;
+            renderTabError(tabDef.id, String(outcome.reason || "Failed"));
+            return;
+          }
+          const result = outcome.value;
+          if (result.aborted) return;
+          if (result.ok) {
+            okCount += 1;
+            renderTabResults(result.tabId, result.data);
+            if (result.tabId === "all") {
+              allPageHits = (result.data.hits || []).length;
+            }
+          } else {
+            failCount += 1;
+            renderTabError(result.tabId, result.error || "Request failed");
+          }
+        });
+
+        setActiveTab(activeTabId);
+        const totalTabs = TAB_DEFS.length;
+        if (failCount === 0) {
+          statusEl.textContent =
+            "OK · " +
+            okCount +
+            "/" +
+            totalTabs +
+            " tabs · " +
+            allPageHits +
+            " hit(s) on All (this page)";
+        } else if (okCount === 0) {
+          statusEl.textContent =
+            "All " + totalTabs + " tab requests failed";
+          statusEl.classList.add("err");
+        } else {
+          statusEl.textContent =
+            "Partial · " +
+            okCount +
+            "/" +
+            totalTabs +
+            " tabs OK · " +
+            failCount +
+            " failed";
+          statusEl.classList.add("err");
+        }
+        $("btn").disabled = false;
+        searchAbortController = null;
       });
     </script>
   </body>

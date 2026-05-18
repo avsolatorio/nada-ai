@@ -30,3 +30,6 @@ def test_demo_route_returns_html():
     assert r.status_code == 200
     assert "text/html" in r.headers.get("content-type", "")
     assert len(r.text) > 100
+    assert 'role="tablist"' in r.text
+    assert "results-region" in r.text
+    assert "TAB_DEFS" in r.text
