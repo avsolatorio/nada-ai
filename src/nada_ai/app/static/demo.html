@@ -1694,7 +1694,6 @@
         if (prevLb) prevLb.disabled = i <= 0;
         if (nextLb) nextLb.disabled = i >= list.length - 1;
 
-        docCarouselLightboxState.zoom = 1;
         applyDocCarouselLightboxZoom();
         if (typeof docCarouselLightboxState.setCarouselIndex === "function") {
           docCarouselLightboxState.setCarouselIndex(i);
@@ -1723,6 +1722,7 @@
         }
         docCarouselLightboxState.carousel = null;
         docCarouselLightboxState.setCarouselIndex = null;
+        docCarouselLightboxState.zoom = 1;
       }
 
       function openDocCarouselLightbox(carousel, index, setCarouselIndex) {
@@ -1734,6 +1734,7 @@
         docCarouselLightboxState.carousel = carousel;
         docCarouselLightboxState.setCarouselIndex = setCarouselIndex;
         docCarouselLightboxState.index = Math.max(0, Math.min(index, list.length - 1));
+        docCarouselLightboxState.zoom = 1;
 
         lb.hidden = false;
         document.body.classList.add("doc-carousel-lightbox-open");
