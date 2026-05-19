@@ -1031,8 +1031,8 @@
         <button type="button" class="doc-carousel__btn doc-carousel-lightbox__next">Next</button>
         <button type="button" class="doc-carousel__btn doc-carousel-lightbox__zoom-out" title="Zoom out">−</button>
         <button type="button" class="doc-carousel__btn doc-carousel-lightbox__zoom-in" title="Zoom in">+</button>
-        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__zoom-reset" title="Reset zoom">
-          100%
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__zoom-reset" title="Fit page height to window">
+          Fit
         </button>
         <button type="button" class="doc-carousel__btn doc-carousel-lightbox__close">Close</button>
       </div>
@@ -1621,6 +1621,7 @@
         setCarouselIndex: null,
         index: 0,
         zoom: 1,
+        userAdjustedZoom: false,
         keyHandler: null,
         wheelHandler: null,
       };
@@ -1631,12 +1632,40 @@
         return $("doc-carousel-lightbox");
       }
 
+      function clampLightboxZoom(z) {
+        return Math.max(0.5, Math.min(3, z));
+      }
+
       function applyDocCarouselLightboxZoom() {
         const img = document.querySelector(".doc-carousel-lightbox__img");
         if (img) img.style.transform = "scale(" + docCarouselLightboxState.zoom + ")";
         const resetBtn = document.querySelector(".doc-carousel-lightbox__zoom-reset");
         if (resetBtn) {
-          resetBtn.textContent = Math.round(docCarouselLightboxState.zoom * 100) + "%";
+          resetBtn.textContent = docCarouselLightboxState.userAdjustedZoom
+            ? Math.round(docCarouselLightboxState.zoom * 100) + "%"
+            : "Fit";
+        }
+      }
+
+      function fitDocCarouselLightboxToStage() {
+        const lb = docCarouselLightboxEl();
+        if (!lb) return;
+        const stage = lb.querySelector(".doc-carousel-lightbox__stage");
+        const img = lb.querySelector(".doc-carousel-lightbox__img");
+        if (!stage || !img || !img.naturalHeight) return;
+        const style = getComputedStyle(stage);
+        const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+        const available = stage.clientHeight - padY;
+        if (available <= 0) return;
+        docCarouselLightboxState.zoom = clampLightboxZoom(available / img.naturalHeight);
+        applyDocCarouselLightboxZoom();
+      }
+
+      function onDocCarouselLightboxImgLoad(img) {
+        if (!docCarouselLightboxState.userAdjustedZoom) {
+          fitDocCarouselLightboxToStage();
+        } else {
+          applyDocCarouselLightboxZoom();
         }
       }
 
@@ -1673,6 +1702,12 @@
         if (img && idno && page != null) {
           img.alt = "PDF page " + pdfPage;
           img.classList.remove("doc-carousel__img--failed");
+          img.onload = function () {
+            onDocCarouselLightboxImgLoad(img);
+          };
+          img.onerror = function () {
+            img.classList.add("doc-carousel__img--failed");
+          };
           img.src =
             "/demo/documents/" +
             encodeURIComponent(idno) +
@@ -1680,9 +1715,6 @@
             encodeURIComponent(page) +
             ".png?dpi=" +
             DOC_CAROUSEL_LIGHTBOX_DPI;
-          img.onerror = function () {
-            img.classList.add("doc-carousel__img--failed");
-          };
         }
         if (excerptEl) {
           const ex = slide.querySelector(".doc-carousel__excerpt");
@@ -1694,7 +1726,6 @@
         if (prevLb) prevLb.disabled = i <= 0;
         if (nextLb) nextLb.disabled = i >= list.length - 1;
 
-        applyDocCarouselLightboxZoom();
         if (typeof docCarouselLightboxState.setCarouselIndex === "function") {
           docCarouselLightboxState.setCarouselIndex(i);
         }
@@ -1723,6 +1754,7 @@
         docCarouselLightboxState.carousel = null;
         docCarouselLightboxState.setCarouselIndex = null;
         docCarouselLightboxState.zoom = 1;
+        docCarouselLightboxState.userAdjustedZoom = false;
       }
 
       function openDocCarouselLightbox(carousel, index, setCarouselIndex) {
@@ -1734,7 +1766,7 @@
         docCarouselLightboxState.carousel = carousel;
         docCarouselLightboxState.setCarouselIndex = setCarouselIndex;
         docCarouselLightboxState.index = Math.max(0, Math.min(index, list.length - 1));
-        docCarouselLightboxState.zoom = 1;
+        docCarouselLightboxState.userAdjustedZoom = false;
 
         lb.hidden = false;
         document.body.classList.add("doc-carousel-lightbox-open");
@@ -1746,23 +1778,26 @@
           lb.querySelector(".doc-carousel-lightbox__prev")?.addEventListener("click", () => docCarouselLightboxStep(-1));
           lb.querySelector(".doc-carousel-lightbox__next")?.addEventListener("click", () => docCarouselLightboxStep(1));
           lb.querySelector(".doc-carousel-lightbox__zoom-in")?.addEventListener("click", () => {
-            docCarouselLightboxState.zoom = Math.min(3, docCarouselLightboxState.zoom + 0.25);
+            docCarouselLightboxState.userAdjustedZoom = true;
+            docCarouselLightboxState.zoom = clampLightboxZoom(docCarouselLightboxState.zoom + 0.25);
             applyDocCarouselLightboxZoom();
           });
           lb.querySelector(".doc-carousel-lightbox__zoom-out")?.addEventListener("click", () => {
-            docCarouselLightboxState.zoom = Math.max(0.5, docCarouselLightboxState.zoom - 0.25);
+            docCarouselLightboxState.userAdjustedZoom = true;
+            docCarouselLightboxState.zoom = clampLightboxZoom(docCarouselLightboxState.zoom - 0.25);
             applyDocCarouselLightboxZoom();
           });
           lb.querySelector(".doc-carousel-lightbox__zoom-reset")?.addEventListener("click", () => {
-            docCarouselLightboxState.zoom = 1;
-            applyDocCarouselLightboxZoom();
+            docCarouselLightboxState.userAdjustedZoom = false;
+            fitDocCarouselLightboxToStage();
           });
           const stage = lb.querySelector(".doc-carousel-lightbox__stage");
           if (stage) {
             docCarouselLightboxState.wheelHandler = (e) => {
               e.preventDefault();
+              docCarouselLightboxState.userAdjustedZoom = true;
               const delta = e.deltaY < 0 ? 0.15 : -0.15;
-              docCarouselLightboxState.zoom = Math.max(0.5, Math.min(3, docCarouselLightboxState.zoom + delta));
+              docCarouselLightboxState.zoom = clampLightboxZoom(docCarouselLightboxState.zoom + delta);
               applyDocCarouselLightboxZoom();
             };
             stage.addEventListener("wheel", docCarouselLightboxState.wheelHandler, { passive: false });
