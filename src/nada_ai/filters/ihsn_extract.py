@@ -164,30 +164,50 @@ def iter_study_records(
     include_metadata: bool = False,
     page_size: int = 100,
     max_records: int | None = None,
+    show_progress_bar: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """Paginate all studies and yield ``{idno, filters}`` records."""
     offset = 0
     seen = 0
-    while True:
-        url = _studies_list_url(
-            settings,
-            offset=offset,
-            limit=page_size,
-            include_admin_metadata=include_admin_metadata,
-            include_metadata=include_metadata,
-        )
-        data = _fetch_json(url, settings)
-        batch = parse_extract_response(data)
-        if not batch:
-            break
-        for rec in batch:
-            yield rec
-            seen += 1
-            if max_records is not None and seen >= max_records:
-                return
-        if not data.get("has_more"):
-            break
-        offset += page_size
+    pbar: Any = None
+    try:
+        while True:
+            url = _studies_list_url(
+                settings,
+                offset=offset,
+                limit=page_size,
+                include_admin_metadata=include_admin_metadata,
+                include_metadata=include_metadata,
+            )
+            data = _fetch_json(url, settings)
+            batch = parse_extract_response(data)
+            if not batch:
+                break
+
+            if show_progress_bar and pbar is None:
+                from tqdm.auto import tqdm
+
+                total: int | None = None
+                if max_records is not None:
+                    total = max_records
+                elif isinstance(data.get("total"), int):
+                    total = int(data["total"])
+                pbar = tqdm(total=total, unit="study", desc="Fetch IHSN filters")
+
+            for rec in batch:
+                yield rec
+                seen += 1
+                if pbar is not None:
+                    pbar.update(1)
+                if max_records is not None and seen >= max_records:
+                    return
+
+            if not data.get("has_more"):
+                break
+            offset += page_size
+    finally:
+        if pbar is not None:
+            pbar.close()
 
 
 def fetch_all_study_records(
@@ -197,6 +217,7 @@ def fetch_all_study_records(
     include_metadata: bool = False,
     page_size: int = 100,
     max_records: int | None = None,
+    show_progress_bar: bool = False,
 ) -> list[dict[str, Any]]:
     return list(
         iter_study_records(
@@ -205,5 +226,6 @@ def fetch_all_study_records(
             include_metadata=include_metadata,
             page_size=page_size,
             max_records=max_records,
+            show_progress_bar=show_progress_bar,
         )
     )

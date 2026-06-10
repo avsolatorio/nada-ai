@@ -1,4 +1,4 @@
-"""Ensure Qdrant payload indexes and OpenSearch mappings for dynamic filter_fields."""
+"""Ensure Qdrant payload indexes and OpenSearch mappings for dynamic filters."""
 
 from __future__ import annotations
 
@@ -8,24 +8,47 @@ from typing import Any
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 
-from nada_ai.search.dynamic_filters import FILTER_FIELDS_PATH
+from nada_ai.search.dynamic_filters import dynamic_facet_qdrant_key, load_dynamic_facet_keys
+from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-FILTER_FIELDS_KEY_INDEX = f"{FILTER_FIELDS_PATH}[].key"
-FILTER_FIELDS_VALUE_INDEX = f"{FILTER_FIELDS_PATH}[].value"
 
-REQUIRED_QDRANT_FILTER_FIELD_INDEXES = (
-    FILTER_FIELDS_KEY_INDEX,
-    FILTER_FIELDS_VALUE_INDEX,
-)
+def _create_keyword_index(
+    client: QdrantClient,
+    collection: str,
+    field_name: str,
+    *,
+    strict: bool = False,
+) -> str:
+    keyword = qm.KeywordIndexParams(type=qm.KeywordIndexType.KEYWORD)
+    try:
+        client.create_payload_index(
+            collection_name=collection,
+            field_name=field_name,
+            field_schema=keyword,
+            wait=True,
+        )
+        return "created"
+    except Exception as e:
+        msg = str(e).lower()
+        if "already exists" in msg or "already indexed" in msg:
+            return "exists"
+        logger.warning("Failed to create Qdrant payload index %s: %s", field_name, e)
+        if strict:
+            raise RuntimeError(f"Failed to create Qdrant payload index {field_name}: {e}") from e
+        return f"error: {e}"
 
 
-def qdrant_dynamic_facet_indexes_ready(client: QdrantClient, collection: str) -> bool:
-    """Return True when both filter_fields facet indexes exist on the collection."""
+def qdrant_filter_facets_index_paths(settings: Settings | None = None) -> tuple[str, ...]:
+    return tuple(dynamic_facet_qdrant_key(key) for key in sorted(load_dynamic_facet_keys(settings)))
+
+
+def qdrant_dynamic_facet_indexes_ready(client: QdrantClient, collection: str, settings: Settings | None = None) -> bool:
+    """Return True when ``metadata.filter_facets.<key>`` indexes exist for all facetable keys."""
     info = client.get_collection(collection_name=collection)
     schema = info.payload_schema or {}
-    return all(name in schema for name in REQUIRED_QDRANT_FILTER_FIELD_INDEXES)
+    return all(path in schema for path in qdrant_filter_facets_index_paths(settings))
 
 
 def ensure_qdrant_filter_field_indexes(
@@ -33,34 +56,17 @@ def ensure_qdrant_filter_field_indexes(
     collection: str,
     *,
     strict: bool = False,
+    settings: Settings | None = None,
 ) -> dict[str, str]:
-    """Create keyword payload indexes for ``metadata.filter_fields[].{key,value}``."""
-    keyword = qm.KeywordIndexParams(type=qm.KeywordIndexType.KEYWORD)
+    """Create keyword payload indexes on ``metadata.filter_facets.<key>`` for filter + facet use."""
     results: dict[str, str] = {}
+    for path in qdrant_filter_facets_index_paths(settings):
+        results[path] = _create_keyword_index(client, collection, path, strict=strict)
 
-    for name in REQUIRED_QDRANT_FILTER_FIELD_INDEXES:
-        try:
-            client.create_payload_index(
-                collection_name=collection,
-                field_name=name,
-                field_schema=keyword,
-                wait=True,
-            )
-            results[name] = "created"
-        except Exception as e:
-            msg = str(e).lower()
-            if "already exists" in msg or "already indexed" in msg:
-                results[name] = "exists"
-            else:
-                results[name] = f"error: {e}"
-                logger.warning("Failed to create Qdrant payload index %s: %s", name, e)
-                if strict:
-                    raise RuntimeError(f"Failed to create Qdrant payload index {name}: {e}") from e
-
-    if not qdrant_dynamic_facet_indexes_ready(client, collection):
+    if not qdrant_dynamic_facet_indexes_ready(client, collection, settings):
         detail = (
-            f"Missing Qdrant payload indexes for dynamic facets on {collection!r}. "
-            f"Expected {list(REQUIRED_QDRANT_FILTER_FIELD_INDEXES)}. Got {results}."
+            f"Missing Qdrant payload indexes for filter_facets on {collection!r}. "
+            f"Got {results}."
         )
         if strict:
             raise RuntimeError(detail)

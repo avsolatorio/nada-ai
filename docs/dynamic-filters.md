@@ -98,7 +98,7 @@ Pass dynamic keys alongside fixed filters in `SearchRequest.filters`:
 }
 ```
 
-Fixed keys (`type`, `idno`, `geographies`, …) query legacy metadata paths. Any other key queries `metadata.filter_fields` via nested conditions.
+Fixed keys (`type`, `idno`, `geographies`, …) query legacy metadata paths. On **Qdrant**, any other key queries **`metadata.filter_facets.<key>`** (flat, indexed). On **OpenSearch**, dynamic keys still use nested **`metadata.filter_fields`**.
 
 ## Facets
 
@@ -110,18 +110,30 @@ When `include_facets=true`, the response includes static facets plus registered 
 
 ### Qdrant
 
-Payload indexes are created for:
+Sync writes both shapes on each point:
 
-- `metadata.filter_fields[].key`
-- `metadata.filter_fields[].value`
+- `metadata.filter_fields` — array of `{key, value[]}` (OpenSearch parity, backfill source)
+- `metadata.filter_facets` — flat map `{key: [value, ...]}` (Qdrant filter + facet paths)
 
-Run `ensure-indexes` after upgrading an existing collection:
+Payload indexes are created on **`metadata.filter_facets.<key>`** for each facetable key (filter + facet):
 
 ```bash
 NADA_SEARCH_BACKEND=qdrant uv run python -m nada_ai.filters.cli ensure-indexes
 ```
 
-The search API also auto-creates these indexes on first dynamic facet request, but running the command explicitly is recommended after deploy.
+Migrate existing points that only have `filter_fields`:
+
+```bash
+NADA_SEARCH_BACKEND=qdrant uv run python -m nada_ai.filters.cli backfill-facets
+```
+
+Or re-sync from IHSN (writes both fields):
+
+```bash
+NADA_SEARCH_BACKEND=qdrant uv run python -m nada_ai.filters.cli sync-from-ihsn --all --page-size=100
+```
+
+The search API auto-creates missing indexes on first dynamic facet request; running `ensure-indexes` explicitly after deploy is recommended.
 
 ### OpenSearch
 

@@ -8,10 +8,15 @@ from typing import Any
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qm
 
-from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, TEXT_FIELD
+from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, METADATA_OBJECT_KEY, TEXT_FIELD
 from nada_ai.search.backend.qdrant.filters import _filter_must_conditions, filters_to_qdrant_filter
 from nada_ai.search.canonical import stored_filter_field_name
-from nada_ai.search.dynamic_filters import FILTER_FIELDS_PATH, resolve_facet_fields
+from nada_ai.search.dynamic_filters import (
+    FILTER_FACETS_KEY,
+    aggregate_dynamic_facet_rows_multi,
+    dynamic_facet_qdrant_key,
+    resolve_facet_fields,
+)
 from nada_ai.search.explain_filters import compute_filter_match
 from nada_ai.search.ports import RecommendParams, SearchOutcome, SearchParams
 from nada_ai.search.vector_fusion import fuse_chunk_embeddings
@@ -148,8 +153,8 @@ class QdrantSearchBackend:
             client = qdrant_client(self._settings)
             try:
                 coll = self._settings.qdrant_collection
-                if not qdrant_dynamic_facet_indexes_ready(client, coll):
-                    ensure_qdrant_filter_field_indexes(client, coll, strict=True)
+                if not qdrant_dynamic_facet_indexes_ready(client, coll, self._settings):
+                    ensure_qdrant_filter_field_indexes(client, coll, strict=True, settings=self._settings)
             finally:
                 client.close()
 
@@ -181,31 +186,61 @@ class QdrantSearchBackend:
             return field, rows
 
         async def one_dynamic(field: str) -> tuple[str, list[dict[str, Any]]]:
-            key_cond = qm.FieldCondition(
-                key=f"{FILTER_FIELDS_PATH}[].key",
-                match=qm.MatchValue(value=field),
-            )
-            must: list[qm.Condition] = []
-            if facet_filter and facet_filter.must:
-                must.extend(facet_filter.must)
-            must.append(key_cond)
-            ff = qm.Filter(must=must)
             resp = await self._client.facet(
                 collection_name=self._collection(),
-                key=f"{FILTER_FIELDS_PATH}[].value",
-                facet_filter=ff,
+                key=dynamic_facet_qdrant_key(field),
+                facet_filter=facet_filter,
                 limit=200,
             )
             rows = [{"value": h.value, "count": int(h.count)} for h in (resp.hits or [])]
             rows.sort(key=lambda r: (-r["count"], str(r["value"])))
             return field, rows
 
+        async def dynamic_facets_native(fields: list[str]) -> dict[str, list[dict[str, Any]]]:
+            pairs = await asyncio.gather(*(one_dynamic(f) for f in fields))
+            return dict(pairs)
+
+        async def dynamic_facets_scroll(fields: list[str]) -> dict[str, list[dict[str, Any]]]:
+            payloads: list[dict[str, Any]] = []
+            offset: Any = None
+            while True:
+                batch, offset = await self._client.scroll(
+                    collection_name=self._collection(),
+                    scroll_filter=facet_filter,
+                    limit=512,
+                    offset=offset,
+                    with_payload=[f"{METADATA_OBJECT_KEY}.{FILTER_FACETS_KEY}"],
+                    with_vectors=False,
+                )
+                if not batch:
+                    break
+                for point in batch:
+                    if point.payload:
+                        payloads.append(point.payload)
+                if offset is None:
+                    break
+            return aggregate_dynamic_facet_rows_multi(payloads, fields, limit=200)
+
+        async def all_dynamic(fields: list[str]) -> dict[str, list[dict[str, Any]]]:
+            try:
+                return await dynamic_facets_native(fields)
+            except Exception:
+                return await dynamic_facets_scroll(fields)
+
         tasks = [one_static(f) for f in static_fields]
-        tasks.extend(one_dynamic(f) for f in (dynamic_fields or []))
+        if dynamic_fields:
+            tasks.append(all_dynamic(dynamic_fields))
         if not tasks:
             return {}
-        pairs = await asyncio.gather(*tasks)
-        return dict(pairs)
+        results = await asyncio.gather(*tasks)
+        out: dict[str, list[dict[str, Any]]] = {}
+        for item in results:
+            if isinstance(item, dict):
+                out.update(item)
+            else:
+                field, rows = item
+                out[field] = rows
+        return out
 
     def _match_text_filter(self, query_text: str, base_filter: qm.Filter | None) -> qm.Filter:
         text_cond = qm.FieldCondition(key=TEXT_FIELD, match=qm.MatchText(text=query_text))

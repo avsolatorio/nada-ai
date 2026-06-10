@@ -21,6 +21,26 @@ def test_sync_qdrant_not_found(mock_client_fn):
     client.close.assert_called_once()
 
 
+@patch("nada_ai.filters.sync.qdrant_client")
+def test_sync_qdrant_merges_into_metadata(mock_client_fn):
+    client = MagicMock()
+    mock_client_fn.return_value = client
+    client.count.return_value = MagicMock(count=2)
+
+    settings = Settings(search_backend="qdrant")
+    res = sync_filters_for_idno(settings, "DOC-1", {"countries": [181]})
+
+    assert res == {"idno": "DOC-1", "updated_points": 2, "found": True}
+    client.set_payload.assert_called_once()
+    kwargs = client.set_payload.call_args.kwargs
+    assert kwargs["key"] == "metadata"
+    assert kwargs["payload"] == {
+        "filter_fields": [{"key": "countries", "value": ["181"]}],
+        "filter_facets": {"countries": ["181"]},
+    }
+    assert "metadata" not in kwargs["payload"]
+
+
 @patch("nada_ai.filters.sync.build_client")
 def test_sync_opensearch_updates(mock_build_client):
     client = MagicMock()

@@ -6,6 +6,7 @@ Examples::
     uv run python -m nada_ai.filters.cli sync-batch --file=records.json
     uv run python -m nada_ai.filters.cli get --idno=DOC-123
     uv run python -m nada_ai.filters.cli ensure-indexes
+    uv run python -m nada_ai.filters.cli backfill-facets
     uv run python -m nada_ai.filters.cli sync-from-ihsn --idno=RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1
     uv run python -m nada_ai.filters.cli sync-from-ihsn --all --page-size=100
     uv run python -m nada_ai.filters.cli fetch-from-ihsn --all --out=records.json
@@ -17,13 +18,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+from nada_ai.filters.ihsn_extract import fetch_all_study_records, fetch_study_records
 from nada_ai.filters.service import (
+    backfill_filter_facets_op,
     ensure_filter_indexes_op_service,
     get_filters_op,
     sync_filter_for_idno_op,
     sync_filters_op,
 )
-from nada_ai.filters.ihsn_extract import fetch_all_study_records, fetch_study_records
 from nada_ai.filters.sync import parse_filters_input
 from nada_ai.settings import Settings
 
@@ -43,13 +45,13 @@ def sync(idno: str, filters: str | None = None, filters_file: str | None = None)
     print(res)
 
 
-def sync_batch(file: str) -> None:
+def sync_batch(file: str, show_progress_bar: bool = True) -> None:
     """Batch sync from JSON file: ``[{idno, filters}, ...]``."""
     records = _load_json(file)
     if not isinstance(records, list):
         raise ValueError("Batch file must be a JSON array of {idno, filters} records")
     settings = Settings()
-    res = sync_filters_op(settings, records)
+    res = sync_filters_op(settings, records, show_progress_bar=show_progress_bar)
     print(json.dumps(res, indent=2))
 
 
@@ -61,9 +63,16 @@ def get(idno: str) -> None:
 
 
 def ensure_indexes() -> None:
-    """Ensure Qdrant payload indexes / OpenSearch nested mapping for filter_fields."""
+    """Ensure Qdrant ``filter_facets`` payload indexes / OpenSearch nested mapping."""
     settings = Settings()
     res = ensure_filter_indexes_op_service(settings)
+    print(json.dumps(res, indent=2))
+
+
+def backfill_facets(show_progress_bar: bool = True) -> None:
+    """Derive ``metadata.filter_facets`` from existing ``filter_fields`` on all Qdrant points."""
+    settings = Settings()
+    res = backfill_filter_facets_op(settings, show_progress_bar=show_progress_bar)
     print(json.dumps(res, indent=2))
 
 
@@ -75,6 +84,7 @@ def fetch_from_ihsn(
     include_metadata: bool = False,
     page_size: int = 100,
     limit: int | None = None,
+    show_progress_bar: bool = True,
 ) -> None:
     """Fetch ``{idno, filters}`` records from IHSN metadata-extract API (no index sync)."""
     if bool(idno) == bool(all):
@@ -94,6 +104,7 @@ def fetch_from_ihsn(
             include_metadata=include_metadata,
             page_size=page_size,
             max_records=limit,
+            show_progress_bar=show_progress_bar,
         )
     payload = {"count": len(records), "records": records}
     text = json.dumps(payload, indent=2)
@@ -112,6 +123,7 @@ def sync_from_ihsn(
     include_metadata: bool = False,
     page_size: int = 100,
     limit: int | None = None,
+    show_progress_bar: bool = True,
 ) -> None:
     """Fetch filters from IHSN API and sync to ``metadata.filter_fields`` by idno."""
     if bool(idno) == bool(all):
@@ -131,13 +143,14 @@ def sync_from_ihsn(
             include_metadata=include_metadata,
             page_size=page_size,
             max_records=limit,
+            show_progress_bar=show_progress_bar,
         )
 
     if dry_run:
         print(json.dumps({"dry_run": True, "count": len(records), "records": records}, indent=2))
         return
 
-    res = sync_filters_op(settings, records)
+    res = sync_filters_op(settings, records, show_progress_bar=show_progress_bar)
     print(json.dumps(res, indent=2))
 
 
@@ -152,6 +165,8 @@ if __name__ == "__main__":
             "get": get,
             "ensure-indexes": ensure_indexes,
             "ensure_indexes": ensure_indexes,
+            "backfill-facets": backfill_facets,
+            "backfill_facets": backfill_facets,
             "fetch-from-ihsn": fetch_from_ihsn,
             "fetch_from_ihsn": fetch_from_ihsn,
             "sync-from-ihsn": sync_from_ihsn,

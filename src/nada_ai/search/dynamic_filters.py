@@ -12,6 +12,7 @@ from nada_ai.search.backend.opensearch.mapping import metadata_field
 from nada_ai.settings import Settings
 
 FILTER_FIELDS_KEY = "filter_fields"
+FILTER_FACETS_KEY = "filter_facets"
 FILTER_FIELDS_PATH = metadata_field(FILTER_FIELDS_KEY)
 
 FIXED_FILTER_KEYS = frozenset(
@@ -86,6 +87,16 @@ def _coerce_value_strings(value: Any) -> list[str]:
     return out
 
 
+def normalized_to_facets_map(normalized: list[dict[str, list[str]]]) -> dict[str, list[str]]:
+    """Flat map for Qdrant payload indexes / native facet API (``metadata.filter_facets.<key>``)."""
+    return {str(entry["key"]): list(entry["value"]) for entry in normalized}
+
+
+def dynamic_facet_qdrant_key(field: str) -> str:
+    """Indexed payload path for faceting one dynamic filter key in Qdrant."""
+    return metadata_field(f"{FILTER_FACETS_KEY}.{field}")
+
+
 def normalize_external_filters(raw: dict[str, Any]) -> list[dict[str, list[str]]]:
     """Convert external filter dict to stored ``[{key, value: [str, ...]}, ...]``."""
     filters = unwrap_external_filters(raw)
@@ -122,6 +133,7 @@ def _query_values(value: Any) -> list[str]:
 
 
 def dynamic_filters_to_qdrant_conditions(dynamic: dict[str, Any]) -> list[qm.Condition]:
+    """Build Qdrant conditions on ``metadata.filter_facets.<key>`` (flat, indexed paths)."""
     if not dynamic:
         return []
     clauses: list[qm.Condition] = []
@@ -133,16 +145,9 @@ def dynamic_filters_to_qdrant_conditions(dynamic: dict[str, Any]) -> list[qm.Con
             qm.MatchAny(any=values) if len(values) > 1 else qm.MatchValue(value=values[0])
         )
         clauses.append(
-            qm.NestedCondition(
-                nested=qm.Nested(
-                    key=FILTER_FIELDS_PATH,
-                    filter=qm.Filter(
-                        must=[
-                            qm.FieldCondition(key="key", match=qm.MatchValue(value=str(key))),
-                            qm.FieldCondition(key="value", match=value_cond),
-                        ]
-                    ),
-                )
+            qm.FieldCondition(
+                key=dynamic_facet_qdrant_key(str(key)),
+                match=value_cond,
             )
         )
     return clauses
@@ -174,13 +179,12 @@ def dynamic_filters_to_opensearch_clauses(dynamic: dict[str, Any]) -> list[dict[
     return clauses
 
 
-def _filter_fields_map(sample: dict[str, Any]) -> dict[str, set[str]]:
-    """Build key -> stored values from ``metadata.filter_fields`` on a hit sample."""
-    meta = sample.get("metadata") if "metadata" in sample else sample
-    if not isinstance(meta, dict):
-        return {}
+def _filter_fields_array_map(meta: dict[str, Any]) -> dict[str, set[str]]:
+    """Build key -> values from legacy ``metadata.filter_fields`` array."""
     rows = meta.get(FILTER_FIELDS_KEY) or []
     out: dict[str, set[str]] = {}
+    if not isinstance(rows, list):
+        return out
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -193,11 +197,35 @@ def _filter_fields_map(sample: dict[str, Any]) -> dict[str, set[str]]:
     return out
 
 
+def stored_dynamic_filters_map(sample: dict[str, Any]) -> dict[str, set[str]]:
+    """Build key -> stored values from ``metadata.filter_facets`` (preferred) or ``filter_fields``."""
+    meta = sample.get("metadata") if "metadata" in sample else sample
+    if not isinstance(meta, dict):
+        return {}
+    facets = meta.get(FILTER_FACETS_KEY)
+    if isinstance(facets, dict) and facets:
+        out: dict[str, set[str]] = {}
+        for key, value in facets.items():
+            stored = _coerce_value_strings(value)
+            if stored:
+                out[str(key)] = set(stored)
+        if out:
+            return out
+    return _filter_fields_array_map(meta)
+
+
+def facets_map_from_filter_fields_rows(rows: list[dict[str, Any]] | None) -> dict[str, list[str]]:
+    """Derive ``filter_facets`` map from stored ``filter_fields`` rows."""
+    if not rows:
+        return {}
+    return normalized_to_facets_map(rows)
+
+
 def match_dynamic_filters(sample: dict[str, Any], dynamic: dict[str, Any]) -> dict[str, Any]:
     """Evaluate dynamic filters against ``sample`` (metadata dict or full _source)."""
     if not dynamic:
         return {"all_matched": True, "per_field": {}}
-    stored = _filter_fields_map(sample)
+    stored = stored_dynamic_filters_map(sample)
     per: dict[str, Any] = {}
     ok = True
     for key, value in dynamic.items():
@@ -257,3 +285,39 @@ def unwrap_dynamic_facet_buckets(field: str, agg: dict[str, Any]) -> list[dict[s
     values = filtered.get("values") or {}
     buckets = values.get("buckets") or []
     return [{"value": b.get("key"), "count": int(b.get("doc_count", 0))} for b in buckets]
+
+
+def aggregate_dynamic_facet_rows(
+    payloads: list[dict[str, Any]],
+    field: str,
+    *,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Count facet values for one dynamic key from point payloads (legacy scroll fallback)."""
+    return aggregate_dynamic_facet_rows_multi(payloads, [field], limit=limit).get(field, [])
+
+
+def aggregate_dynamic_facet_rows_multi(
+    payloads: list[dict[str, Any]],
+    fields: list[str],
+    *,
+    limit: int = 200,
+) -> dict[str, list[dict[str, Any]]]:
+    """Count facet values for multiple dynamic keys in one pass over payloads."""
+    from collections import Counter
+
+    if not fields:
+        return {}
+    field_set = frozenset(fields)
+    counts: dict[str, Counter[str]] = {field: Counter() for field in fields}
+    for payload in payloads:
+        stored = stored_dynamic_filters_map(payload)
+        for key in field_set:
+            for value in sorted(stored.get(key, set())):
+                counts[key][value] += 1
+    out: dict[str, list[dict[str, Any]]] = {}
+    for field in fields:
+        rows = [{"value": value, "count": int(count)} for value, count in counts[field].most_common(limit)]
+        rows.sort(key=lambda r: (-r["count"], str(r["value"])))
+        out[field] = rows
+    return out
