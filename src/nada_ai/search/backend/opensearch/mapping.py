@@ -49,6 +49,13 @@ def index_body(embedding_dimension: int) -> dict[str, Any]:
                         "date_created": {"type": "date", "ignore_malformed": True},
                         "authors": {"type": "keyword"},
                         "doc_meta": {"type": "object", "enabled": True},
+                        "filter_fields": {
+                            "type": "nested",
+                            "properties": {
+                                "key": {"type": "keyword"},
+                                "value": {"type": "keyword"},
+                            },
+                        },
                     },
                 },
                 EMBEDDING_FIELD: {

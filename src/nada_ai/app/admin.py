@@ -26,11 +26,14 @@ from nada_ai.app.admin_schemas import (
     DeleteDocsResponse,
     EncodeRequest,
     EncodeResponse,
+    GetFiltersResponse,
     IndexByIdsRequest,
     IndexFromCatalogRequest,
     IndexStatsResponse,
     JobListResponse,
     JobResponse,
+    SyncFiltersRequest,
+    SyncFiltersResponse,
 )
 from nada_ai.app.jobs import Job, JobStatus
 from nada_ai.app.state import AppState, ensure_embedding_initialized, get_state
@@ -40,6 +43,11 @@ from nada_ai.ingest.service import (
     index_ids_op,
     put_index_template_op,
     setup_ingest_pipeline_op,
+)
+from nada_ai.filters.service import (
+    ensure_filter_indexes_op_service,
+    get_filters_op,
+    sync_filters_op,
 )
 from nada_ai.search.backend.opensearch.mapping import metadata_field
 from nada_ai.search.backend.opensearch.ml.setup import ingest_pipeline_definition
@@ -417,6 +425,47 @@ async def admin_qdrant_collection(s: AppState = Depends(get_state)) -> dict[str,
         raise HTTPException(status_code=503, detail=str(e)) from e
     payload = info.model_dump() if hasattr(info, "model_dump") else {"repr": repr(info)}
     return {"collection": coll, "info": payload}
+
+
+@admin_router.post(
+    "/admin/filters/sync",
+    dependencies=[Depends(admin_auth)],
+    response_model=SyncFiltersResponse,
+)
+async def admin_filters_sync(body: SyncFiltersRequest, s: AppState = Depends(get_state)) -> JSONResponse:
+    records = [{"idno": r.idno.strip(), "filters": r.filters} for r in body.records if r.idno.strip()]
+    if not records:
+        raise HTTPException(status_code=400, detail="records must contain at least one non-empty idno")
+
+    async def factory() -> dict[str, Any]:
+        return await asyncio.to_thread(sync_filters_op, s.settings, records)
+
+    key = f"filters_sync:{_idnos_key([r['idno'] for r in records])}"
+    return await _submit_or_409(
+        s,
+        kind="filters_sync",
+        key=key,
+        factory=factory,
+        params={"count": len(records)},
+    )
+
+
+@admin_router.post(
+    "/admin/filters/ensure-indexes",
+    dependencies=[Depends(admin_auth)],
+)
+async def admin_filters_ensure_indexes(s: AppState = Depends(get_state)) -> dict[str, Any]:
+    return await asyncio.to_thread(ensure_filter_indexes_op_service, s.settings)
+
+
+@admin_router.get(
+    "/admin/filters/{idno}",
+    dependencies=[Depends(admin_auth)],
+    response_model=GetFiltersResponse,
+)
+async def admin_filters_get(idno: str, s: AppState = Depends(get_state)) -> GetFiltersResponse:
+    out = await asyncio.to_thread(get_filters_op, s.settings, idno)
+    return GetFiltersResponse(**out)
 
 
 @jobs_router.get("/jobs", response_model=JobListResponse)

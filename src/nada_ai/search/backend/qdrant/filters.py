@@ -7,6 +7,7 @@ from typing import Any
 from qdrant_client.http import models as qm
 
 from nada_ai.search.canonical import stored_filter_field_name
+from nada_ai.search.dynamic_filters import dynamic_filters_to_qdrant_conditions, split_filters
 
 
 def filters_to_qdrant_filter(filters: dict[str, Any] | None) -> qm.Filter | None:
@@ -20,7 +21,9 @@ def filters_to_qdrant_filter(filters: dict[str, Any] | None) -> qm.Filter | None
 def _filter_must_conditions(filters: dict[str, Any] | None) -> list[qm.Condition]:
     if not filters:
         return []
+    fixed, dynamic = split_filters(filters)
     clauses: list[qm.Condition] = []
+    filters = fixed
     if t := filters.get("type"):
         clauses.append(qm.FieldCondition(key=stored_filter_field_name("type"), match=qm.MatchValue(value=t)))
     if idno := filters.get("idno"):
@@ -61,4 +64,5 @@ def _filter_must_conditions(filters: dict[str, Any] | None) -> list[qm.Condition
         clauses.append(
             qm.FieldCondition(key=stored_filter_field_name("year_start"), range=qm.Range(**rng))
         )
+    clauses.extend(dynamic_filters_to_qdrant_conditions(dynamic))
     return clauses

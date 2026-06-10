@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, TEXT_FIELD, metadata_field
+from nada_ai.search.dynamic_filters import dynamic_facet_aggs, dynamic_filters_to_opensearch_clauses, split_filters
 from nada_ai.settings import Settings
 
 SearchMode = Literal["keyword", "vector", "hybrid"]
@@ -63,7 +64,9 @@ def _knn_field_body(
 def build_filters(filters: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not filters:
         return []
+    fixed, dynamic = split_filters(filters)
     clauses: list[dict[str, Any]] = []
+    filters = fixed
     if t := filters.get("type"):
         clauses.append({"term": {metadata_field("type"): t}})
     if idno := filters.get("idno"):
@@ -90,6 +93,7 @@ def build_filters(filters: dict[str, Any] | None) -> list[dict[str, Any]]:
         if filters.get("year_end") is not None:
             yr["lte"] = int(filters["year_end"])
         clauses.append({"range": {metadata_field("year_start"): yr}})
+    clauses.extend(dynamic_filters_to_opensearch_clauses(dynamic))
     return clauses
 
 
@@ -262,14 +266,15 @@ def build_idno_fast_query(
     collapse_field: str | None = None,
     collapse_inner_hits: dict[str, Any] | None = None,
     include_embedding: bool = True,
-    facet_fields: list[str] | None = None,
+    static_facet_fields: list[str] | None = None,
+    dynamic_facet_fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """Match-all under bool filter: all chunks for ``idno`` (metadata-first shortcut)."""
     merged = dict(filters or {})
     merged["idno"] = idno
     clauses = build_filters(merged)
     inner = {"bool": {"filter": clauses}}
-    aggs = _facet_aggs(facet_fields)
+    aggs = _facet_aggs(static_facet_fields, dynamic_facet_fields)
     return _search_body(
         inner,
         size,
@@ -281,20 +286,25 @@ def build_idno_fast_query(
     )
 
 
-def _facet_aggs(facet_fields: list[str] | None) -> dict[str, Any] | None:
-    if not facet_fields:
-        return None
+def _facet_aggs(static_fields: list[str] | None, dynamic_fields: list[str] | None = None) -> dict[str, Any] | None:
     aggs: dict[str, Any] = {}
-    for name in facet_fields:
-        if name not in FACET_FIELD_WHITELIST:
-            continue
-        aggs[name] = {"terms": {"field": metadata_field(name), "size": 200}}
+    if static_fields:
+        for name in static_fields:
+            if name not in FACET_FIELD_WHITELIST:
+                continue
+            aggs[name] = {"terms": {"field": metadata_field(name), "size": 200}}
+    if dynamic_fields:
+        aggs.update(dynamic_facet_aggs(dynamic_fields))
     return aggs or None
 
 
-def merge_facets_into_body(body: dict[str, Any], facet_fields: list[str] | None) -> None:
-    """Mutates ``body`` to add ``terms`` aggregations for facet counts (conjunctive with query)."""
-    extra = _facet_aggs(facet_fields)
+def merge_facets_into_body(
+    body: dict[str, Any],
+    static_fields: list[str] | None,
+    dynamic_fields: list[str] | None = None,
+) -> None:
+    """Mutates ``body`` to add facet aggregations (static terms + dynamic nested)."""
+    extra = _facet_aggs(static_fields, dynamic_fields)
     if not extra:
         return
     existing = body.get("aggs") or {}

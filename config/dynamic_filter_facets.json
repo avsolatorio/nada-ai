@@ -1,0 +1,13 @@
+{
+  "facetable": [
+    "doctype",
+    "published",
+    "dataset_type",
+    "repositoryid",
+    "repositories",
+    "countries",
+    "regions",
+    "tags",
+    "years"
+  ]
+}

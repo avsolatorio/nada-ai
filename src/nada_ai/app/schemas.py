@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SearchMode = Literal["keyword", "vector", "hybrid"]
 
 
 class SearchFilters(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     type: str | None = None
     idno: str | None = None
     idnos: list[str] | None = None

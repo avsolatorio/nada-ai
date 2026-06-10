@@ -9,6 +9,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 from qdrant_client.models import PointStruct
 
+from nada_ai.filters.indexes import ensure_qdrant_filter_field_indexes
 from nada_ai.ingest.pipeline import iter_langdoc_records
 from nada_ai.ingest.ports import IngestWriterPort
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
@@ -65,6 +66,7 @@ def _ensure_payload_indexes(client: QdrantClient, collection: str) -> None:
             stored_filter_field_name(f),
             qm.IntegerIndexParams(type=qm.IntegerIndexType.INTEGER, lookup=True, range=True),
         )
+    ensure_qdrant_filter_field_indexes(client, collection)
 
 
 def _assert_sparse_config_if_needed(client: QdrantClient, collection: str, sparse_name: str) -> None:

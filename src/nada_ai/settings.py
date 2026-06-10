@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     #: When ``collapse_field`` is set on hybrid Qdrant search, multiply lexical/dense prefetch by this for post-RRF grouping.
     qdrant_hybrid_collapse_prefetch_multiplier: float = Field(default=4.0, ge=1.0, le=50.0)
 
+    #: Optional path to JSON registry of facetable dynamic filter keys (see ``config/dynamic_filter_facets.json``).
+    dynamic_filter_facets_path: str | None = Field(default=None)
+
     @field_validator("opensearch_cluster_auto_create_index", mode="before")
     @classmethod
     def empty_auto_create_to_none(cls, v: Any) -> str | None:

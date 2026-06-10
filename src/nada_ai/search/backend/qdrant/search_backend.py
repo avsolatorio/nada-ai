@@ -9,19 +9,24 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qm
 
 from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, TEXT_FIELD
-from nada_ai.search.backend.opensearch.queries import FACET_FIELD_WHITELIST
 from nada_ai.search.backend.qdrant.filters import _filter_must_conditions, filters_to_qdrant_filter
 from nada_ai.search.canonical import stored_filter_field_name
+from nada_ai.search.dynamic_filters import FILTER_FIELDS_PATH, resolve_facet_fields
 from nada_ai.search.explain_filters import compute_filter_match
 from nada_ai.search.ports import RecommendParams, SearchOutcome, SearchParams
 from nada_ai.search.vector_fusion import fuse_chunk_embeddings
 from nada_ai.settings import Settings
 
 
-def _sanitize_facet_fields(requested: list[str] | None) -> list[str]:
-    if not requested:
-        return sorted(FACET_FIELD_WHITELIST)
-    return [f for f in requested if f in FACET_FIELD_WHITELIST]
+FacetSelection = tuple[list[str], list[str]]
+
+
+def _resolve_facet_selection(settings: Settings, requested: list[str] | None) -> FacetSelection:
+    return resolve_facet_fields(requested, settings)
+
+
+def _has_facets(facets: FacetSelection | None) -> bool:
+    return facets is not None and bool(facets[0] or facets[1])
 
 
 def _merge_must_filters(base: qm.Filter | None, extra_must: list[qm.Condition]) -> qm.Filter | None:
@@ -134,10 +139,11 @@ class QdrantSearchBackend:
     async def _facet_counts(
         self,
         *,
-        facet_fields: list[str],
+        static_fields: list[str],
+        dynamic_fields: list[str] | None = None,
         facet_filter: qm.Filter | None,
     ) -> dict[str, list[dict[str, Any]]]:
-        async def one(field: str) -> tuple[str, list[dict[str, Any]]]:
+        async def one_static(field: str) -> tuple[str, list[dict[str, Any]]]:
             resp = await self._client.facet(
                 collection_name=self._collection(),
                 key=stored_filter_field_name(field),
@@ -151,7 +157,31 @@ class QdrantSearchBackend:
                 rows.sort(key=lambda r: (-r["count"], str(r["value"])))
             return field, rows
 
-        pairs = await asyncio.gather(*[one(f) for f in facet_fields])
+        async def one_dynamic(field: str) -> tuple[str, list[dict[str, Any]]]:
+            key_cond = qm.FieldCondition(
+                key=f"{FILTER_FIELDS_PATH}[].key",
+                match=qm.MatchValue(value=field),
+            )
+            must: list[qm.Condition] = []
+            if facet_filter and facet_filter.must:
+                must.extend(facet_filter.must)
+            must.append(key_cond)
+            ff = qm.Filter(must=must)
+            resp = await self._client.facet(
+                collection_name=self._collection(),
+                key=f"{FILTER_FIELDS_PATH}[].value",
+                facet_filter=ff,
+                limit=200,
+            )
+            rows = [{"value": h.value, "count": int(h.count)} for h in (resp.hits or [])]
+            rows.sort(key=lambda r: (-r["count"], str(r["value"])))
+            return field, rows
+
+        tasks = [one_static(f) for f in static_fields]
+        tasks.extend(one_dynamic(f) for f in (dynamic_fields or []))
+        if not tasks:
+            return {}
+        pairs = await asyncio.gather(*tasks)
         return dict(pairs)
 
     def _match_text_filter(self, query_text: str, base_filter: qm.Filter | None) -> qm.Filter:
@@ -267,7 +297,7 @@ class QdrantSearchBackend:
     async def _keyword_sparse_groups_search(
         self,
         params: SearchParams,
-        facet_fields: list[str] | None,
+        facet_fields: FacetSelection | None,
         base_fl: qm.Filter | None,
         kw_flt: qm.Filter,
         debug: dict[str, Any],
@@ -329,7 +359,7 @@ class QdrantSearchBackend:
     async def _keyword_matchtext_groups_search(
         self,
         params: SearchParams,
-        facet_fields: list[str] | None,
+        facet_fields: FacetSelection | None,
         base_fl: qm.Filter | None,
         kw_flt: qm.Filter,
         debug: dict[str, Any],
@@ -401,7 +431,7 @@ class QdrantSearchBackend:
         return SearchOutcome(total=total, hits=hits_out, facets=facets, debug_request=debug)
 
     async def search(self, params: SearchParams) -> SearchOutcome:
-        facet_fields = _sanitize_facet_fields(params.facet_fields) if params.include_facets else None
+        facets = _resolve_facet_selection(self._settings, params.facet_fields) if params.include_facets else None
         coll = self._collection()
         base_fl = filters_to_qdrant_filter(params.filters)
         debug: dict[str, Any] = {"backend": "qdrant", "collection": coll, "mode": params.mode}
@@ -423,7 +453,7 @@ class QdrantSearchBackend:
             )
             page = batch[params.from_ : params.from_ + params.size]
             hits = [_record_to_hit(r, score=1.0, include_embedding=params.include_embedding) for r in page]
-            facets = await self._facet_for_search(facet_fields, params.mode, params.query, params.query_vector, base_fl, fl)
+            facets = await self._facet_for_search(facets, params.mode, params.query, params.query_vector, base_fl, fl)
             debug.update({"kind": "idno_fast"})
             return SearchOutcome(total=total, hits=hits, facets=facets, debug_request=debug)
 
@@ -431,10 +461,10 @@ class QdrantSearchBackend:
             need = params.from_ + params.size
             kw_flt = self._match_text_filter(params.query, base_fl)
             if params.collapse_field and not self._sparse_lexical_enabled():
-                return await self._keyword_matchtext_groups_search(params, facet_fields, base_fl, kw_flt, debug)
+                return await self._keyword_matchtext_groups_search(params, facets, base_fl, kw_flt, debug)
             if self._sparse_lexical_enabled():
                 if params.collapse_field:
-                    return await self._keyword_sparse_groups_search(params, facet_fields, base_fl, kw_flt, debug)
+                    return await self._keyword_sparse_groups_search(params, facets, base_fl, kw_flt, debug)
                 from nada_ai.search.backend.qdrant.sparse_lexical import embed_query_sparse
 
                 sv = embed_query_sparse(params.query, model_id=self._settings.qdrant_sparse_model_id)
@@ -454,7 +484,7 @@ class QdrantSearchBackend:
                 total = int(count_resp.count)
                 hits = [_scored_point_to_hit(p, include_embedding=params.include_embedding) for p in (sp_resp.points or [])]
                 facet_fl = self._match_text_filter(params.query, base_fl)
-                facets = await self._facet_for_search(facet_fields, "keyword", params.query, None, base_fl, facet_fl)
+                facets = await self._facet_for_search(facets, "keyword", params.query, None, base_fl, facet_fl)
                 debug.update({"kind": "keyword_sparse", "total_basis": "match_text_count_sparse_rank"})
                 return SearchOutcome(total=total, hits=hits, facets=facets, debug_request=debug)
 
@@ -472,7 +502,7 @@ class QdrantSearchBackend:
             page = recs[params.from_ : params.from_ + params.size]
             hits = [_record_to_hit(r, score=1.0, include_embedding=params.include_embedding) for r in page]
             facet_fl = self._facet_filter_for_mode("keyword", params.query, base_fl)
-            facets = await self._facet_for_search(facet_fields, "keyword", params.query, None, base_fl, facet_fl)
+            facets = await self._facet_for_search(facets, "keyword", params.query, None, base_fl, facet_fl)
             debug.update({"kind": "keyword_match_text", "need": need, "total_basis": "match_text_and_filters"})
             return SearchOutcome(total=total, hits=hits, facets=facets, debug_request=debug)
 
@@ -482,13 +512,13 @@ class QdrantSearchBackend:
         if params.mode == "vector":
             return await self._vector_search(
                 params,
-                facet_fields,
+                facets,
                 base_fl,
                 debug,
                 collapse=bool(params.collapse_field),
             )
 
-        return await self._hybrid_search(params, facet_fields, base_fl, debug)
+        return await self._hybrid_search(params, facets, base_fl, debug)
 
     def _facet_filter_for_mode(self, mode: str, query_text: str, base_fl: qm.Filter | None) -> qm.Filter | None:
         if mode == "keyword":
@@ -497,22 +527,27 @@ class QdrantSearchBackend:
 
     async def _facet_for_search(
         self,
-        facet_fields: list[str] | None,
+        facets: FacetSelection | None,
         mode: str,
         query_text: str,
         query_vector: list[float] | None,
         base_fl: qm.Filter | None,
         facet_context_fl: qm.Filter | None,
     ) -> dict[str, list[dict[str, Any]]] | None:
-        if not facet_fields:
+        if not _has_facets(facets):
             return None
+        assert facets is not None
         fl = facet_context_fl if facet_context_fl is not None else self._facet_filter_for_mode(mode, query_text, base_fl)
-        return await self._facet_counts(facet_fields=facet_fields, facet_filter=fl)
+        return await self._facet_counts(
+            static_fields=facets[0],
+            dynamic_fields=facets[1],
+            facet_filter=fl,
+        )
 
     async def _vector_search(
         self,
         params: SearchParams,
-        facet_fields: list[str] | None,
+        facet_fields: FacetSelection | None,
         base_fl: qm.Filter | None,
         debug: dict[str, Any],
         *,
@@ -606,7 +641,7 @@ class QdrantSearchBackend:
     async def _hybrid_collapsed_hits(
         self,
         params: SearchParams,
-        facet_fields: list[str] | None,
+        facet_fields: FacetSelection | None,
         base_fl: qm.Filter | None,
         debug: dict[str, Any],
         coll: str,
@@ -699,7 +734,7 @@ class QdrantSearchBackend:
     async def _hybrid_search(
         self,
         params: SearchParams,
-        facet_fields: list[str] | None,
+        facet_fields: FacetSelection | None,
         base_fl: qm.Filter | None,
         debug: dict[str, Any],
     ) -> SearchOutcome:
@@ -824,7 +859,7 @@ class QdrantSearchBackend:
         rec_fl = qm.Filter(must=must or None, must_not=must_not)
 
         q = qm.NearestQuery(nearest=qv)
-        facet_fields = _sanitize_facet_fields(params.facet_fields) if params.include_facets else None
+        facets = _resolve_facet_selection(self._settings, params.facet_fields) if params.include_facets else None
         thr = params.vector_score_threshold
         coll = self._collection()
         if thr is None:
@@ -853,7 +888,15 @@ class QdrantSearchBackend:
                 ),
             )
         hits_out = [_scored_point_to_hit(p, include_embedding=False) for p in (resp.points or [])]
-        facets = await self._facet_counts(facet_fields=facet_fields, facet_filter=rec_fl) if facet_fields else None
+        facets_out = (
+            await self._facet_counts(
+                static_fields=facets[0],
+                dynamic_fields=facets[1],
+                facet_filter=rec_fl,
+            )
+            if _has_facets(facets)
+            else None
+        )
         debug: dict[str, Any] = {
             "backend": "qdrant",
             "kind": "recommend_by_idno",
@@ -863,7 +906,7 @@ class QdrantSearchBackend:
         if thr is not None:
             debug["total_basis"] = tb
             debug["similarity_count_cap_hit"] = capped_sim
-        return SearchOutcome(total=total, hits=hits_out, facets=facets, debug_request=debug)
+        return SearchOutcome(total=total, hits=hits_out, facets=facets_out, debug_request=debug)
 
     async def explain_by_idno(self, idno: str, filters: dict[str, Any] | None) -> dict[str, Any]:
         merged = dict(filters or {})
@@ -899,8 +942,13 @@ class QdrantSearchBackend:
             "year_end",
         )
         sample = {k: meta[k] for k in keys if k in meta}
+        sample_with_meta = {**sample, "metadata": meta}
         filter_only = {k: v for k, v in merged.items() if k != "idno"} or None
-        fm = compute_filter_match(dict(sample), filter_only) if filter_only else {"all_matched": True, "per_field": {}}
+        fm = (
+            compute_filter_match(sample_with_meta, filter_only)
+            if filter_only
+            else {"all_matched": True, "per_field": {}}
+        )
         return {
             "idno": idno.strip(),
             "found": True,

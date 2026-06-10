@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from nada_ai.search.dynamic_filters import match_dynamic_filters, split_filters
+
 
 def _as_set(v: Any) -> set[Any]:
     if v is None:
@@ -28,6 +30,9 @@ def compute_filter_match(sample: dict[str, Any], filters: dict[str, Any] | None)
     """
     if not filters:
         return {"all_matched": True, "per_field": {}, "notes": "no filters"}
+
+    fixed, dynamic = split_filters(filters)
+    filters = fixed
 
     per: dict[str, Any] = {}
     ok = True
@@ -102,5 +107,10 @@ def compute_filter_match(sample: dict[str, Any], filters: dict[str, Any] | None)
                 m = False
         per["year_range"] = {"year_start_filter": ys, "year_end_filter": ye, "doc_year_start": doc_y, "matched": m}
         ok &= m
+
+    if dynamic:
+        dyn = match_dynamic_filters(sample, dynamic)
+        per.update({f"dynamic.{k}": v for k, v in dyn["per_field"].items()})
+        ok &= dyn["all_matched"]
 
     return {"all_matched": ok, "per_field": per}

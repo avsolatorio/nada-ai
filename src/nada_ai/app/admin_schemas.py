@@ -73,3 +73,26 @@ class DeleteDocsResponse(BaseModel):
     deleted: int
     matched: int | None
     raw: dict[str, Any] | None = None
+
+
+class FilterRecord(BaseModel):
+    idno: str = Field(..., min_length=1)
+    filters: dict[str, Any] = Field(default_factory=dict)
+
+
+class SyncFiltersRequest(BaseModel):
+    records: list[FilterRecord] = Field(..., min_length=1)
+
+
+class SyncFiltersResponse(BaseModel):
+    backend: str
+    synced: int
+    results: list[dict[str, Any]]
+
+
+class GetFiltersResponse(BaseModel):
+    backend: str
+    idno: str
+    found: bool
+    point_count: int
+    filter_fields: list[dict[str, Any]] | None = None

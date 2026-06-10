@@ -15,7 +15,7 @@ def test_coerce_search_facets():
 
 def test_merge_facets_into_body():
     body: dict = {"query": {"match_all": {}}}
-    merge_facets_into_body(body, ["type", "source"])
+    merge_facets_into_body(body, ["type", "source"], None)
     assert "aggs" in body
     assert "type" in body["aggs"]
     assert "terms" in body["aggs"]["type"]
