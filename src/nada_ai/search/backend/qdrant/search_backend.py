@@ -91,6 +91,7 @@ def _collapse_key_from_payload(payload: dict[str, Any] | None, collapse_field: s
 class QdrantSearchBackend:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._dynamic_facet_indexes_ensured = False
         self._client = AsyncQdrantClient(
             url=settings.qdrant_url,
             api_key=settings.qdrant_api_key,
@@ -136,6 +137,25 @@ class QdrantSearchBackend:
             "collection_exists": ok,
         }
 
+    async def _ensure_dynamic_facet_indexes(self) -> None:
+        if self._dynamic_facet_indexes_ensured:
+            return
+
+        def _ensure() -> None:
+            from nada_ai.filters.indexes import ensure_qdrant_filter_field_indexes, qdrant_dynamic_facet_indexes_ready
+            from nada_ai.ingest.qdrant_writer import _client as qdrant_client
+
+            client = qdrant_client(self._settings)
+            try:
+                coll = self._settings.qdrant_collection
+                if not qdrant_dynamic_facet_indexes_ready(client, coll):
+                    ensure_qdrant_filter_field_indexes(client, coll, strict=True)
+            finally:
+                client.close()
+
+        await asyncio.to_thread(_ensure)
+        self._dynamic_facet_indexes_ensured = True
+
     async def _facet_counts(
         self,
         *,
@@ -143,6 +163,9 @@ class QdrantSearchBackend:
         dynamic_fields: list[str] | None = None,
         facet_filter: qm.Filter | None,
     ) -> dict[str, list[dict[str, Any]]]:
+        if dynamic_fields:
+            await self._ensure_dynamic_facet_indexes()
+
         async def one_static(field: str) -> tuple[str, list[dict[str, Any]]]:
             resp = await self._client.facet(
                 collection_name=self._collection(),

@@ -8,7 +8,11 @@ from typing import Any, TypedDict
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 
-from nada_ai.filters.indexes import ensure_opensearch_filter_fields_mapping, ensure_qdrant_filter_field_indexes
+from nada_ai.filters.indexes import (
+    ensure_opensearch_filter_fields_mapping,
+    ensure_qdrant_filter_field_indexes,
+    qdrant_dynamic_facet_indexes_ready,
+)
 from nada_ai.ingest.qdrant_writer import _client as qdrant_client
 from nada_ai.search.backend.opensearch.client import build_client
 from nada_ai.search.backend.opensearch.mapping import metadata_field
@@ -175,8 +179,14 @@ def ensure_filter_indexes_op(settings: Settings) -> dict[str, Any]:
     if settings.search_backend == "qdrant":
         client = qdrant_client(settings)
         try:
-            indexes = ensure_qdrant_filter_field_indexes(client, settings.qdrant_collection)
-            return {"backend": "qdrant", "collection": settings.qdrant_collection, "indexes": indexes}
+            indexes = ensure_qdrant_filter_field_indexes(client, settings.qdrant_collection, strict=True)
+            ready = qdrant_dynamic_facet_indexes_ready(client, settings.qdrant_collection)
+            return {
+                "backend": "qdrant",
+                "collection": settings.qdrant_collection,
+                "indexes": indexes,
+                "ready": ready,
+            }
         finally:
             client.close()
 

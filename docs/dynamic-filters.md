@@ -115,7 +115,13 @@ Payload indexes are created for:
 - `metadata.filter_fields[].key`
 - `metadata.filter_fields[].value`
 
-Run `ensure-indexes` after upgrading an existing collection.
+Run `ensure-indexes` after upgrading an existing collection:
+
+```bash
+NADA_SEARCH_BACKEND=qdrant uv run python -m nada_ai.filters.cli ensure-indexes
+```
+
+The search API also auto-creates these indexes on first dynamic facet request, but running the command explicitly is recommended after deploy.
 
 ### OpenSearch
 

@@ -15,23 +15,58 @@ logger = logging.getLogger(__name__)
 FILTER_FIELDS_KEY_INDEX = f"{FILTER_FIELDS_PATH}[].key"
 FILTER_FIELDS_VALUE_INDEX = f"{FILTER_FIELDS_PATH}[].value"
 
-
-def _try_create_payload_index(client: QdrantClient, collection: str, name: str, schema: Any) -> None:
-    try:
-        client.create_payload_index(collection_name=collection, field_name=name, field_schema=schema, wait=True)
-    except Exception as e:
-        logger.debug("Payload index %s: %s", name, e)
+REQUIRED_QDRANT_FILTER_FIELD_INDEXES = (
+    FILTER_FIELDS_KEY_INDEX,
+    FILTER_FIELDS_VALUE_INDEX,
+)
 
 
-def ensure_qdrant_filter_field_indexes(client: QdrantClient, collection: str) -> dict[str, str]:
+def qdrant_dynamic_facet_indexes_ready(client: QdrantClient, collection: str) -> bool:
+    """Return True when both filter_fields facet indexes exist on the collection."""
+    info = client.get_collection(collection_name=collection)
+    schema = info.payload_schema or {}
+    return all(name in schema for name in REQUIRED_QDRANT_FILTER_FIELD_INDEXES)
+
+
+def ensure_qdrant_filter_field_indexes(
+    client: QdrantClient,
+    collection: str,
+    *,
+    strict: bool = False,
+) -> dict[str, str]:
     """Create keyword payload indexes for ``metadata.filter_fields[].{key,value}``."""
     keyword = qm.KeywordIndexParams(type=qm.KeywordIndexType.KEYWORD)
-    _try_create_payload_index(client, collection, FILTER_FIELDS_KEY_INDEX, keyword)
-    _try_create_payload_index(client, collection, FILTER_FIELDS_VALUE_INDEX, keyword)
-    return {
-        "key_index": FILTER_FIELDS_KEY_INDEX,
-        "value_index": FILTER_FIELDS_VALUE_INDEX,
-    }
+    results: dict[str, str] = {}
+
+    for name in REQUIRED_QDRANT_FILTER_FIELD_INDEXES:
+        try:
+            client.create_payload_index(
+                collection_name=collection,
+                field_name=name,
+                field_schema=keyword,
+                wait=True,
+            )
+            results[name] = "created"
+        except Exception as e:
+            msg = str(e).lower()
+            if "already exists" in msg or "already indexed" in msg:
+                results[name] = "exists"
+            else:
+                results[name] = f"error: {e}"
+                logger.warning("Failed to create Qdrant payload index %s: %s", name, e)
+                if strict:
+                    raise RuntimeError(f"Failed to create Qdrant payload index {name}: {e}") from e
+
+    if not qdrant_dynamic_facet_indexes_ready(client, collection):
+        detail = (
+            f"Missing Qdrant payload indexes for dynamic facets on {collection!r}. "
+            f"Expected {list(REQUIRED_QDRANT_FILTER_FIELD_INDEXES)}. Got {results}."
+        )
+        if strict:
+            raise RuntimeError(detail)
+        logger.warning(detail)
+
+    return results
 
 
 def ensure_opensearch_filter_fields_mapping(client: Any, index_name: str) -> dict[str, Any]:
