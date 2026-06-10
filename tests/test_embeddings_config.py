@@ -81,3 +81,37 @@ def test_encode_query_literal_prompt_overrides_prompt_name():
 
     assert mock_model.encode.call_args.kwargs.get("prompt") == "Instruct: test\nQuery: "
     assert "prompt_name" not in mock_model.encode.call_args.kwargs
+
+
+def test_encode_query_request_override_prompt_name():
+    _load_model.cache_clear()
+    settings = Settings()
+    settings.query_prompt = "Instruct: server\nQuery: "
+    settings.query_prompt_name = None
+    mock_model = MagicMock()
+    mock_model.encode.return_value = np.array([[1.0, 0.0, 0.0]])
+    mock_model.get_sentence_embedding_dimension.return_value = 3
+
+    with patch("nada_ai.search.backend.opensearch.embeddings._load_model", return_value=mock_model):
+        svc = EmbeddingService(settings)
+        svc.encode_query("hello", query_prompt_name="web_search_query")
+
+    assert mock_model.encode.call_args.kwargs.get("prompt_name") == "web_search_query"
+    assert "prompt" not in mock_model.encode.call_args.kwargs
+
+
+def test_encode_query_request_override_literal_prompt():
+    _load_model.cache_clear()
+    settings = Settings()
+    settings.query_prompt = None
+    settings.query_prompt_name = "web_search_query"
+    mock_model = MagicMock()
+    mock_model.encode.return_value = np.array([[0.0, 1.0, 0.0]])
+    mock_model.get_sentence_embedding_dimension.return_value = 3
+
+    with patch("nada_ai.search.backend.opensearch.embeddings._load_model", return_value=mock_model):
+        svc = EmbeddingService(settings)
+        svc.encode_query("hello", query_prompt="Custom:\n")
+
+    assert mock_model.encode.call_args.kwargs.get("prompt") == "Custom:\n"
+    assert "prompt_name" not in mock_model.encode.call_args.kwargs

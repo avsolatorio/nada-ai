@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NADA OpenSearch — search demo</title>
+    <title>NADA AI — search demo</title>
     <style>
       :root {
         --bg: #0f1419;
@@ -26,7 +26,7 @@
         min-height: 100vh;
       }
       .wrap {
-        max-width: 56rem;
+        max-width: 64rem;
         margin: 0 auto;
         padding: 1.5rem 1.25rem 3rem;
       }
@@ -176,12 +176,104 @@
       #status.err {
         color: var(--error);
       }
-      #results {
+      #results-region {
         margin-top: 1.5rem;
       }
-      #results h2 {
+      #results-region h2.results-heading {
         font-size: 1rem;
         margin: 0 0 0.75rem;
+      }
+      .tab-bar {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 0.35rem;
+        overflow-x: auto;
+        padding-bottom: 0.35rem;
+        margin-bottom: 0;
+        border-bottom: 1px solid var(--border);
+        scrollbar-gutter: stable;
+      }
+      .tab-btn {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.5rem 0.85rem;
+        border: 1px solid transparent;
+        border-radius: 8px 8px 0 0;
+        border-bottom: none;
+        margin-bottom: -1px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 0.8125rem;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .tab-btn:hover {
+        color: var(--text);
+        background: rgba(91, 159, 212, 0.08);
+      }
+      .tab-btn[aria-selected="true"] {
+        color: var(--text);
+        background: var(--surface);
+        border-color: var(--border);
+        border-bottom-color: var(--surface);
+        box-shadow: inset 0 2px 0 var(--accent);
+      }
+      .tab-btn--indicator[aria-selected="true"] {
+        box-shadow: inset 0 2px 0 #7ee0cf;
+      }
+      .tab-btn--microdata[aria-selected="true"] {
+        box-shadow: inset 0 2px 0 #c4b5fd;
+      }
+      .tab-btn--document[aria-selected="true"] {
+        box-shadow: inset 0 2px 0 #fcd34d;
+      }
+      .tab-btn--geospatial[aria-selected="true"] {
+        box-shadow: inset 0 2px 0 #6ee7b7;
+      }
+      .tab-badge {
+        display: inline-flex;
+        min-width: 1.25rem;
+        justify-content: center;
+        padding: 0.1rem 0.4rem;
+        border-radius: 999px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        background: rgba(0, 0, 0, 0.28);
+        color: var(--accent);
+      }
+      .tab-btn[aria-selected="true"] .tab-badge {
+        background: rgba(91, 159, 212, 0.22);
+      }
+      .tab-panels {
+        border: 1px solid var(--border);
+        border-top: none;
+        border-radius: 0 0 10px 10px;
+        background: rgba(0, 0, 0, 0.08);
+        padding: 1rem;
+      }
+      .tab-panel[hidden] {
+        display: none;
+      }
+      .tab-panel__meta {
+        font-size: 0.8125rem;
+        color: var(--muted);
+        margin: 0 0 0.75rem;
+      }
+      .tab-panel__meta.err {
+        color: var(--error);
+      }
+      .tab-panel__total {
+        font-weight: 500;
+      }
+      .tab-panel__loading {
+        color: var(--muted);
+        font-size: 0.875rem;
+        padding: 1rem;
+        text-align: center;
       }
       .empty-hits {
         color: var(--muted);
@@ -351,6 +443,11 @@
         color: #dce6f0;
         white-space: pre-wrap;
         word-break: break-word;
+        max-height: 18rem;
+        overflow-y: auto;
+        overflow-x: auto;
+        padding-right: 0.25rem;
+        scrollbar-gutter: stable;
       }
       .hit-card__foot {
         display: flex;
@@ -377,19 +474,285 @@
         align-items: baseline;
         flex-wrap: wrap;
       }
-      .hit-card .inner-hits-block {
+      .hit-card details.inner-hits-block {
         margin-top: 0.75rem;
         padding-top: 0.75rem;
         border-top: 1px dashed var(--border);
+      }
+      .hit-card details.inner-hits-block > summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--muted);
+        user-select: none;
+      }
+      .hit-card details.inner-hits-block > summary::-webkit-details-marker {
+        display: none;
+      }
+      .hit-card details.inner-hits-block > summary::after {
+        content: " ▸";
+        font-size: 0.65rem;
+        opacity: 0.75;
+      }
+      .hit-card details.inner-hits-block[open] > summary::after {
+        content: " ▾";
+      }
+      .hit-card details.inner-hits-block .raw {
+        margin-top: 0.5rem;
+      }
+      .hit-card__metadata {
+        margin-top: 0.75rem;
+        padding: 0.65rem 0.75rem;
+        border-radius: 8px;
+        border: 1px solid rgba(45, 58, 77, 0.65);
+        background: rgba(0, 0, 0, 0.22);
+      }
+      .hit-card__metadata h3 {
+        margin: 0 0 0.5rem;
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+      }
+      .hit-card__metadata dl {
+        margin: 0;
+        display: grid;
+        gap: 0.35rem 1rem;
+        grid-template-columns: auto 1fr;
+        font-size: 0.78rem;
+      }
+      .hit-card__metadata dt {
+        margin: 0;
+        font-weight: 600;
+        color: #6b7c92;
+      }
+      .hit-card__metadata dd {
+        margin: 0;
+        font-family: ui-monospace, monospace;
+        font-size: 0.72rem;
+        color: var(--text);
+        word-break: break-word;
+      }
+      .hit-card__snippet--dim {
+        opacity: 0.55;
+        max-height: 6rem;
+      }
+      .doc-carousel {
+        margin-top: 0.85rem;
+        padding-top: 0.85rem;
+        border-top: 1px dashed var(--border);
+      }
+      .doc-carousel__title {
+        margin: 0 0 0.5rem;
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+      }
+      .doc-carousel__nav {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        margin-bottom: 0.65rem;
+        flex-wrap: wrap;
+      }
+      .doc-carousel__btn {
+        padding: 0.35rem 0.75rem;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.25);
+        color: var(--text);
+        font-size: 0.75rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .doc-carousel__btn:hover:not(:disabled) {
+        border-color: rgba(251, 191, 36, 0.45);
+        color: #fcd34d;
+      }
+      .doc-carousel__btn:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+      .doc-carousel__label {
+        font-size: 0.8125rem;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .doc-carousel__viewport {
+        overflow: hidden;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.28);
+      }
+      .doc-carousel__track {
+        display: flex;
+        transition: transform 0.2s ease;
+      }
+      .doc-carousel__slide {
+        flex: 0 0 100%;
+        min-width: 100%;
+        padding: 0.65rem;
+        box-sizing: border-box;
+      }
+      .doc-carousel__slide[data-active="true"] {
+        outline: 2px solid rgba(251, 191, 36, 0.45);
+        outline-offset: -2px;
+      }
+      .doc-carousel__img-wrap {
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        min-height: 4rem;
+        margin-bottom: 0.5rem;
+        background: #0a0e14;
+        border-radius: 6px;
+        overflow: hidden;
+        cursor: zoom-in;
+      }
+      .doc-carousel__img-wrap.doc-carousel__img-wrap--failed {
+        cursor: default;
+      }
+      .doc-carousel__expand-hint {
+        display: block;
+        margin: 0 0 0.35rem;
+        font-size: 0.68rem;
+        color: var(--muted);
+        text-align: center;
+      }
+      .doc-carousel__img {
+        max-width: 100%;
+        max-height: 28rem;
+        width: auto;
+        height: auto;
+        display: block;
+      }
+      .doc-carousel-lightbox {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        background: rgba(8, 12, 18, 0.94);
+        backdrop-filter: blur(6px);
+      }
+      .doc-carousel-lightbox[hidden] {
+        display: none !important;
+      }
+      .doc-carousel-lightbox__toolbar {
+        flex: 0 0 auto;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem 0.75rem;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.35);
+      }
+      .doc-carousel-lightbox__toolbar .doc-carousel__label {
+        flex: 1 1 auto;
+        min-width: 10rem;
+        color: var(--text);
+        font-size: 0.875rem;
+      }
+      .doc-carousel-lightbox__stage {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+      }
+      .doc-carousel-lightbox__img {
+        max-width: min(100%, 72rem);
+        max-height: none;
+        width: auto;
+        height: auto;
+        transform-origin: center center;
+        transition: transform 0.12s ease;
+        box-shadow: 0 8px 40px rgba(0, 0, 0, 0.55);
+        border-radius: 4px;
+      }
+      .doc-carousel-lightbox__excerpt {
+        flex: 0 0 auto;
+        max-height: 12vh;
+        overflow-y: auto;
+        margin: 0;
+        padding: 0.65rem 1rem 1rem;
+        font-size: 0.8125rem;
+        line-height: 1.45;
+        color: #c8d4e0;
+        border-top: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.25);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      body.doc-carousel-lightbox-open {
+        overflow: hidden;
+      }
+      .doc-carousel__img--failed,
+      .doc-carousel__img.doc-carousel__img--failed {
+        display: none;
+      }
+      .doc-carousel__img-fallback {
+        display: none;
+        padding: 1rem;
+        font-size: 0.75rem;
+        color: var(--muted);
+        text-align: center;
+      }
+      .doc-carousel__img-wrap:has(.doc-carousel__img--failed) .doc-carousel__img-fallback,
+      .doc-carousel__img-wrap.doc-carousel__img-wrap--failed .doc-carousel__img-fallback {
+        display: block;
+      }
+      .doc-carousel__excerpt {
+        font-size: 0.8rem;
+        line-height: 1.45;
+        color: #c8d4e0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 8rem;
+        overflow-y: auto;
+      }
+      .doc-carousel__slide-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem 0.65rem;
+        margin-top: 0.45rem;
+        font-size: 0.7rem;
+      }
+      .doc-variants-other {
+        margin-top: 0.65rem;
+        font-size: 0.78rem;
+      }
+      .doc-variants-other h4 {
+        margin: 0 0 0.35rem;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+      .doc-variants-other ul {
+        margin: 0;
+        padding-left: 1.1rem;
+        color: var(--muted);
+      }
+      .doc-variants-other li {
+        margin-bottom: 0.35rem;
       }
     </style>
   </head>
   <body>
     <div class="wrap">
       <header>
-        <h1>NADA OpenSearch</h1>
+        <h1>NADA AI search</h1>
         <p>
-          Live search against the indexed metadata. API:
+          Live search against indexed metadata (<code>POST /search</code>). API:
           <a href="/docs">OpenAPI docs</a> · <a href="/health">health</a> ·
           <a href="/health/embeddings">embeddings</a>
         </p>
@@ -398,10 +761,10 @@
 
       <form id="search-form" action="#" method="post">
         <div>
-          <label for="q">Query</label>
-          <textarea id="q" required placeholder="e.g. GDP inflation labor">
-consumer price index</textarea
+          <label for="q"
+            >Query <span class="hint">Enter search · Shift+Enter newline</span></label
           >
+          <textarea id="q" required placeholder="e.g. GDP inflation labor">consumer price index</textarea>
         </div>
 
         <details class="search-controls">
@@ -414,9 +777,9 @@ consumer price index</textarea
           <div>
             <label for="mode">Mode</label>
             <select id="mode">
-              <option value="hybrid" selected>hybrid</option>
+              <option value="hybrid">hybrid</option>
               <option value="keyword">keyword</option>
-              <option value="vector">vector</option>
+              <option value="vector" selected>vector</option>
             </select>
           </div>
           <div>
@@ -428,12 +791,16 @@ consumer price index</textarea
             <input type="number" id="from" min="0" value="0" />
           </div>
         </div>
-        <div class="row cols-2">
+        <div class="row cols-3">
           <div>
             <label for="knn_k"
               >knn_k <span class="hint">(vector / hybrid)</span></label
             >
             <input type="number" id="knn_k" min="1" max="500" value="50" />
+          </div>
+          <div class="check" style="align-self: end; padding-bottom: 0.25rem">
+            <input type="checkbox" id="include_facets" />
+            <label for="include_facets">Include facet counts</label>
           </div>
           <div class="check" style="align-self: end; padding-bottom: 0.25rem">
             <input type="checkbox" id="include_embedding" />
@@ -442,6 +809,45 @@ consumer price index</textarea
             >
           </div>
         </div>
+
+        <details class="filter-block" id="query-encoding-block">
+          <summary>
+            Query encoding
+            <span class="hint">(vector / hybrid · local embeddings)</span>
+          </summary>
+          <div class="inner">
+            <div>
+              <label for="query-encoding-mode">Encoding</label>
+              <select id="query-encoding-mode">
+                <option value="server" selected>Server default</option>
+                <option value="prompt_name">prompt_name</option>
+                <option value="literal">Literal prompt</option>
+              </select>
+            </div>
+            <div id="query-encoding-prompt-name-wrap" hidden style="margin-top: 0.75rem">
+              <label for="query-prompt-name"
+                >query_prompt_name
+                <span class="hint">SentenceTransformer prompt name</span></label
+              >
+              <input
+                type="text"
+                id="query-prompt-name"
+                placeholder="e.g. web_search_query"
+              />
+            </div>
+            <div id="query-encoding-literal-wrap" hidden style="margin-top: 0.75rem">
+              <label for="query-prompt-literal"
+                >query_prompt
+                <span class="hint">Literal prefix passed as prompt=</span></label
+              >
+              <textarea
+                id="query-prompt-literal"
+                rows="3"
+                placeholder="e.g. Instruct: Given a web search query, retrieve relevant passages&#10;Query: "
+              ></textarea>
+            </div>
+          </div>
+        </details>
 
         <details class="filter-block" open>
           <summary>
@@ -454,7 +860,12 @@ consumer price index</textarea
           <div class="inner">
             <div class="row cols-2">
               <div>
-                <label for="f-type">type</label>
+                <label for="f-type"
+                  >type
+                  <span class="hint"
+                    >All tab only — use result tabs for per-type search</span
+                  ></label
+                >
                 <input
                   type="text"
                   id="f-type"
@@ -534,13 +945,13 @@ consumer price index</textarea
 
         <details class="filter-block">
           <summary>
-            Field collapse <span class="hint">(dedupe by idno, etc.)</span>
+            Field collapse <span class="hint">(default: idno — clear to disable)</span>
           </summary>
           <div class="inner">
             <div class="row cols-2">
               <div>
                 <label for="collapse_field">collapse_field</label>
-                <input type="text" id="collapse_field" placeholder="idno" />
+                <input type="text" id="collapse_field" value="idno" placeholder="idno" />
               </div>
               <div>
                 <label for="inner_name">inner_hits name</label>
@@ -554,7 +965,7 @@ consumer price index</textarea
                 id="inner_size"
                 min="1"
                 max="100"
-                value="10"
+                value="15"
                 style="max-width: 8rem"
               />
             </div>
@@ -564,9 +975,9 @@ consumer price index</textarea
         <div class="check">
           <input type="checkbox" id="show_os_body" />
           <label for="show_os_body"
-            >Show OpenSearch request body
+            >Show debug request JSON
             <span class="hint"
-              >(JSON sent as <code>body</code> to <code>search</code>)</span
+              >(<code>debug_request</code> / OpenSearch-style body)</span
             ></label
           >
         </div>
@@ -576,24 +987,59 @@ consumer price index</textarea
 
         <div class="search-actions">
           <button type="submit" id="btn">Search</button>
+          <p class="hint" style="margin: 0.5rem 0 0; max-width: 36rem">
+            One search runs five parallel requests (All + each data type). Hybrid/vector
+            modes encode the query once per tab.
+          </p>
         </div>
       </form>
 
       <p id="status"></p>
 
+      <section id="results-region" hidden>
+        <h2 class="results-heading">Results</h2>
+        <div class="tab-bar" id="tab-bar" role="tablist" aria-label="Results by data type"></div>
+        <div class="tab-panels" id="tab-panels"></div>
+      </section>
+
       <section id="query-preview-section" hidden>
-        <h2>OpenSearch request body</h2>
+        <h2>Debug request <span class="hint" id="debug-tab-label"></span></h2>
         <p class="hint" style="margin: 0 0 0.5rem">
-          Exact payload passed to the client (query, size, from, collapse,
-          _source excludes, …).
+          Backend debug payload when enabled (OpenSearch query body or Qdrant debug dict).
         </p>
         <pre class="os-body" id="opensearch-preview"></pre>
       </section>
 
-      <section id="results" hidden>
-        <h2>Results <span id="total"></span></h2>
-        <div id="hits" class="hits-grid"></div>
+      <section id="facets-section" hidden>
+        <h2>Facet counts <span class="hint" id="facets-tab-label"></span></h2>
+        <pre class="os-body" id="facets-preview"></pre>
       </section>
+
+    </div>
+
+    <div
+      id="doc-carousel-lightbox"
+      class="doc-carousel-lightbox"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-label="PDF page preview"
+    >
+      <div class="doc-carousel-lightbox__toolbar">
+        <span class="doc-carousel__label" id="doc-carousel-lightbox-label"></span>
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__prev">Prev</button>
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__next">Next</button>
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__zoom-out" title="Zoom out">−</button>
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__zoom-in" title="Zoom in">+</button>
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__zoom-reset" title="Fit page height to window">
+          Fit
+        </button>
+        <button type="button" class="doc-carousel__btn doc-carousel-lightbox__close">Close</button>
+      </div>
+      <div class="doc-carousel-lightbox__stage">
+        <img class="doc-carousel-lightbox__img" alt="" />
+      </div>
+      <p class="doc-carousel-lightbox__excerpt" id="doc-carousel-lightbox-excerpt"></p>
     </div>
 
     <script>
@@ -638,7 +1084,52 @@ consumer price index</textarea
         return "<strong>Query vectors</strong>: " + escapeHtml(JSON.stringify(qe));
       }
 
+      function syncQueryEncodingFields() {
+        const modeEl = $("query-encoding-mode");
+        const block = $("query-encoding-block");
+        if (!modeEl) return;
+        const mode = modeEl.value;
+        const nameWrap = $("query-encoding-prompt-name-wrap");
+        const litWrap = $("query-encoding-literal-wrap");
+        if (nameWrap) nameWrap.hidden = mode !== "prompt_name";
+        if (litWrap) litWrap.hidden = mode !== "literal";
+        if (block) block.hidden = false;
+      }
+
+      function applyServerEncodingDefaults(qe) {
+        const modeEl = $("query-encoding-mode");
+        const nameEl = $("query-prompt-name");
+        const litEl = $("query-prompt-literal");
+        if (!modeEl) return;
+        if (qe && qe.active === "literal_prompt" && qe.prompt != null) {
+          modeEl.value = "literal";
+          if (litEl) litEl.value = String(qe.prompt);
+        } else if (qe && qe.active === "prompt_name" && qe.prompt_name) {
+          modeEl.value = "prompt_name";
+          if (nameEl) nameEl.value = String(qe.prompt_name);
+        } else {
+          modeEl.value = "server";
+        }
+        syncQueryEncodingFields();
+      }
+
+      function applyQueryEncodingToPayload(body) {
+        const modeEl = $("query-encoding-mode");
+        if (!modeEl) return;
+        const mode = modeEl.value;
+        if (mode === "prompt_name") {
+          const n = $("query-prompt-name").value.trim();
+          if (n) body.query_prompt_name = n;
+          return;
+        }
+        if (mode === "literal") {
+          const p = $("query-prompt-literal").value;
+          if (p.trim()) body.query_prompt = p;
+        }
+      }
+
       async function loadEmbedConfig() {
+        const block = $("query-encoding-block");
         if (!embedConfigEl) return;
         try {
           const res = await fetch("/health/embeddings", {
@@ -650,8 +1141,10 @@ consumer price index</textarea
               "<strong>Query vectors</strong>: not used with this API (<code>embedding_backend</code> is not <code>local</code>).";
             embedConfigEl.hidden = false;
             embedConfigEl.classList.remove("hint");
+            if (block) block.hidden = true;
             return;
           }
+          applyServerEncodingDefaults(data.query_encoding);
           const qeHtml = formatQueryEncodingHtml(data.query_encoding);
           if (qeHtml) {
             embedConfigEl.innerHTML = qeHtml;
@@ -663,14 +1156,91 @@ consumer price index</textarea
         }
       }
 
-      document.addEventListener("DOMContentLoaded", loadEmbedConfig);
+      const TAB_DEFS = [
+        { id: "all", label: "All", filterType: null },
+        { id: "indicator", label: "Indicator", filterType: "indicator" },
+        { id: "microdata", label: "Microdata", filterType: "microdata" },
+        { id: "document", label: "Document", filterType: "document" },
+        { id: "geospatial", label: "Geospatial", filterType: "geospatial" },
+      ];
 
       const statusEl = $("status");
-      const resultsEl = $("results");
-      const hitsEl = $("hits");
-      const totalEl = $("total");
+      const resultsRegion = $("results-region");
+      const tabBarEl = $("tab-bar");
+      const tabPanelsEl = $("tab-panels");
       const previewSection = $("query-preview-section");
       const previewPre = $("opensearch-preview");
+      const facetsSection = $("facets-section");
+      const facetsPre = $("facets-preview");
+      const debugTabLabel = $("debug-tab-label");
+      const facetsTabLabel = $("facets-tab-label");
+
+      let activeTabId = "all";
+      let searchAbortController = null;
+      const tabCache = Object.create(null);
+
+      function initTabs() {
+        if (!tabBarEl || !tabPanelsEl) return;
+        TAB_DEFS.forEach((tab, i) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "tab-btn" + (tab.id !== "all" ? " tab-btn--" + tab.id : "");
+          btn.id = "tab-btn-" + tab.id;
+          btn.setAttribute("role", "tab");
+          btn.setAttribute("aria-selected", tab.id === activeTabId ? "true" : "false");
+          btn.setAttribute("aria-controls", "tab-panel-" + tab.id);
+          btn.setAttribute("data-tab-id", tab.id);
+          btn.tabIndex = tab.id === activeTabId ? 0 : -1;
+          btn.innerHTML =
+            escapeHtml(tab.label) +
+            ' <span class="tab-badge" id="tab-badge-' +
+            tab.id +
+            '" hidden>—</span>';
+          btn.addEventListener("click", () => setActiveTab(tab.id));
+          tabBarEl.appendChild(btn);
+
+          const panel = document.createElement("div");
+          panel.className = "tab-panel";
+          panel.id = "tab-panel-" + tab.id;
+          panel.setAttribute("role", "tabpanel");
+          panel.setAttribute("aria-labelledby", "tab-btn-" + tab.id);
+          panel.hidden = tab.id !== activeTabId;
+          panel.innerHTML =
+            '<p class="tab-panel__meta" id="tab-meta-' +
+            tab.id +
+            '"></p>' +
+            '<div class="hits-grid" id="tab-hits-' +
+            tab.id +
+            '"><p class="tab-panel__loading">Run a search to see results.</p></div>';
+          tabPanelsEl.appendChild(panel);
+
+          tabCache[tab.id] = { data: null, error: null, label: tab.label };
+        });
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        initTabs();
+        loadEmbedConfig();
+        const encModeEl = $("query-encoding-mode");
+        if (encModeEl) {
+          encModeEl.addEventListener("change", syncQueryEncodingFields);
+          syncQueryEncodingFields();
+        }
+        const qEl = $("q");
+        const formEl = $("search-form");
+        if (qEl && formEl) {
+          qEl.addEventListener("keydown", (e) => {
+            if (e.key !== "Enter") return;
+            if (e.shiftKey) return;
+            e.preventDefault();
+            if (typeof formEl.requestSubmit === "function") {
+              formEl.requestSubmit();
+            } else {
+              formEl.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+            }
+          });
+        }
+      });
 
       function splitCsv(id) {
         const v = $(id).value.trim();
@@ -719,7 +1289,7 @@ consumer price index</textarea
         return Object.keys(filters).length ? filters : undefined;
       }
 
-      function buildPayload() {
+      function buildPayload(tabFilterType) {
         const body = {
           query: $("q").value.trim(),
           mode: $("mode").value,
@@ -727,10 +1297,14 @@ consumer price index</textarea
           from: parseInt($("from").value, 10) || 0,
           knn_k: parseInt($("knn_k").value, 10) || 50,
           include_embedding: $("include_embedding").checked,
+          include_facets: $("include_facets").checked,
           include_opensearch_body: $("show_os_body").checked,
         };
-        const filters = collectFilters();
-        if (filters) body.filters = filters;
+        let filters = collectFilters();
+        if (tabFilterType) {
+          filters = { ...(filters || {}), type: tabFilterType };
+        }
+        if (filters && Object.keys(filters).length) body.filters = filters;
 
         const cf = $("collapse_field").value.trim();
         if (cf) {
@@ -740,7 +1314,171 @@ consumer price index</textarea
             size: parseInt($("inner_size").value, 10) || 10,
           };
         }
+        applyQueryEncodingToPayload(body);
         return body;
+      }
+
+      function tabDefById(tabId) {
+        return TAB_DEFS.find((t) => t.id === tabId) || TAB_DEFS[0];
+      }
+
+      function setTabBadge(tabId, pageHits, total) {
+        const badge = $("tab-badge-" + tabId);
+        if (!badge) return;
+        if (pageHits == null) {
+          badge.hidden = true;
+          badge.textContent = "—";
+          return;
+        }
+        badge.hidden = false;
+        const page = String(pageHits);
+        if (total != null && total !== "—" && String(total) !== String(pageHits)) {
+          badge.textContent = page + " / " + total;
+        } else {
+          badge.textContent = page;
+        }
+      }
+
+      function renderTabResults(tabId, data) {
+        const hitsEl = $("tab-hits-" + tabId);
+        const metaEl = $("tab-meta-" + tabId);
+        if (!hitsEl) return;
+        const hits = (data && data.hits) || [];
+        const total = data && data.total != null ? data.total : "—";
+        if (metaEl) {
+          metaEl.classList.remove("err");
+          metaEl.innerHTML =
+            '<span class="tab-panel__total">Total hits: ' +
+            escapeHtml(String(total)) +
+            "</span> · " +
+            hits.length +
+            " on this page";
+        }
+        hitsEl.innerHTML = hits.length
+          ? hits.map(renderHit).join("")
+          : '<p class="empty-hits">No hits for this query.</p>';
+        initCarousels(hitsEl);
+        setTabBadge(tabId, hits.length, total);
+        tabCache[tabId] = {
+          data,
+          error: null,
+          label: tabDefById(tabId).label,
+        };
+      }
+
+      function renderTabError(tabId, message) {
+        const hitsEl = $("tab-hits-" + tabId);
+        const metaEl = $("tab-meta-" + tabId);
+        if (metaEl) {
+          metaEl.classList.add("err");
+          metaEl.textContent = message;
+        }
+        if (hitsEl) {
+          hitsEl.innerHTML =
+            '<p class="empty-hits">' + escapeHtml(message) + "</p>";
+        }
+        setTabBadge(tabId, null);
+        tabCache[tabId] = {
+          data: null,
+          error: message,
+          label: tabDefById(tabId).label,
+        };
+      }
+
+      function setTabLoading(tabId, message) {
+        const hitsEl = $("tab-hits-" + tabId);
+        const metaEl = $("tab-meta-" + tabId);
+        if (metaEl) {
+          metaEl.classList.remove("err");
+          metaEl.textContent = message || "Searching…";
+        }
+        if (hitsEl) {
+          hitsEl.innerHTML =
+            '<p class="tab-panel__loading">' +
+            escapeHtml(message || "Searching…") +
+            "</p>";
+        }
+      }
+
+      function updateDebugFromCache(tabId) {
+        const cached = tabCache[tabId];
+        const label = cached ? " (" + cached.label + " tab)" : "";
+        if (debugTabLabel) debugTabLabel.textContent = label;
+        if (facetsTabLabel) facetsTabLabel.textContent = label;
+
+        if (!cached || cached.error) {
+          previewSection.hidden = true;
+          if (facetsSection) facetsSection.hidden = true;
+          return;
+        }
+        const data = cached.data;
+        const dbg =
+          data &&
+          (data.debug_request != null ? data.debug_request : data.opensearch_body);
+        if (dbg != null) {
+          previewPre.textContent = JSON.stringify(dbg, null, 2);
+          previewSection.hidden = false;
+        } else {
+          previewSection.hidden = true;
+        }
+        if (facetsSection && facetsPre) {
+          if (data && data.facets != null && Object.keys(data.facets).length) {
+            facetsPre.textContent = JSON.stringify(data.facets, null, 2);
+            facetsSection.hidden = false;
+          } else {
+            facetsSection.hidden = true;
+          }
+        }
+      }
+
+      function setActiveTab(tabId) {
+        activeTabId = tabId;
+        TAB_DEFS.forEach((tab) => {
+          const btn = $("tab-btn-" + tab.id);
+          const panel = $("tab-panel-" + tab.id);
+          const selected = tab.id === tabId;
+          if (btn) {
+            btn.setAttribute("aria-selected", selected ? "true" : "false");
+            btn.tabIndex = selected ? 0 : -1;
+          }
+          if (panel) panel.hidden = !selected;
+        });
+        updateDebugFromCache(tabId);
+      }
+
+      async function searchTab(tabDef, signal) {
+        const payload = buildPayload(tabDef.filterType);
+        try {
+          const res = await fetch("/search", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify(payload),
+            signal,
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const detail =
+              data.detail != null
+                ? typeof data.detail === "string"
+                  ? data.detail
+                  : JSON.stringify(data.detail)
+                : res.statusText;
+            return { tabId: tabDef.id, ok: false, error: detail || "Request failed" };
+          }
+          return { tabId: tabDef.id, ok: true, data };
+        } catch (err) {
+          if (err.name === "AbortError") {
+            return { tabId: tabDef.id, ok: false, aborted: true };
+          }
+          return {
+            tabId: tabDef.id,
+            ok: false,
+            error: String(err.message || err),
+          };
+        }
       }
 
       function formatTypeLabel(t) {
@@ -758,22 +1496,574 @@ consumer price index</textarea
         return "badge--type";
       }
 
+      function formatMetaValue(v) {
+        if (v === null || v === undefined) return "—";
+        if (Array.isArray(v)) {
+          const parts = v.map((x) => (x != null && typeof x === "object" ? JSON.stringify(x) : String(x)));
+          return escapeHtml(parts.join(", "));
+        }
+        if (typeof v === "object") return escapeHtml(JSON.stringify(v));
+        return escapeHtml(String(v));
+      }
+
+      function hitSource(hit) {
+        return (hit && hit._source) || {};
+      }
+
+      function hitMetadata(hit) {
+        const src = hitSource(hit);
+        return src.metadata && typeof src.metadata === "object" ? src.metadata : {};
+      }
+
+      function getInnerHitsName() {
+        const el = $("inner_name");
+        return (el && el.value.trim()) || "variants";
+      }
+
+      function collectInnerHitVariants(h) {
+        const ih = h.inner_hits;
+        if (!ih || typeof ih !== "object") return [];
+        const name = getInnerHitsName();
+        const bucket = ih[name] || (Object.keys(ih).length ? ih[Object.keys(ih)[0]] : null);
+        if (!bucket || !bucket.hits || !Array.isArray(bucket.hits.hits)) return [];
+        return bucket.hits.hits;
+      }
+
+      function variantFromHit(hit) {
+        const src = hitSource(hit);
+        const m = hitMetadata(hit);
+        const dm = m.doc_meta && typeof m.doc_meta === "object" ? m.doc_meta : null;
+        let page = null;
+        if (dm && dm.page != null && !Number.isNaN(Number(dm.page))) {
+          page = Number(dm.page);
+        }
+        return {
+          hit,
+          score: hit._score,
+          qfield: m.qfield != null ? String(m.qfield) : "",
+          page_content: src.page_content != null ? String(src.page_content) : "",
+          doc_meta: dm,
+          page,
+          total_pages:
+            dm && dm.total_pages != null && !Number.isNaN(Number(dm.total_pages))
+              ? Number(dm.total_pages)
+              : null,
+        };
+      }
+
+      function isPassageVariant(v) {
+        return v.qfield === "passages" && v.page != null;
+      }
+
+      function compareByScoreDesc(a, b) {
+        const sa = a.score != null ? Number(a.score) : -Infinity;
+        const sb = b.score != null ? Number(b.score) : -Infinity;
+        if (sb !== sa) return sb - sa;
+        if (a.page != null && b.page != null) return a.page - b.page;
+        return 0;
+      }
+
+      function splitDocumentVariants(outerHit) {
+        const byPage = new Map();
+        const others = [];
+        const seenOther = new Set();
+
+        function addPassage(v) {
+          if (!isPassageVariant(v)) return;
+          const prev = byPage.get(v.page);
+          if (!prev || (v.score != null && (prev.score == null || v.score > prev.score))) {
+            byPage.set(v.page, v);
+          }
+        }
+
+        function addOther(v) {
+          if (isPassageVariant(v)) return;
+          const key = v.qfield + "|" + v.page_content.slice(0, 80);
+          if (seenOther.has(key)) return;
+          seenOther.add(key);
+          others.push(v);
+        }
+
+        const outer = variantFromHit(outerHit);
+        addPassage(outer);
+        addOther(outer);
+        collectInnerHitVariants(outerHit).forEach((ih) => {
+          const v = variantFromHit(ih);
+          addPassage(v);
+          addOther(v);
+        });
+
+        const passages = [...byPage.values()].sort(compareByScoreDesc);
+        others.sort(compareByScoreDesc);
+        return { passages, others };
+      }
+
+      function pageLabel(v) {
+        const human = v.page + 1;
+        if (v.total_pages != null) return "Page " + human + " of " + v.total_pages;
+        return "Page " + human;
+      }
+
+      function excerptText(text, maxLen) {
+        const t = (text || "").trim();
+        if (t.length <= maxLen) return t;
+        return t.slice(0, maxLen) + "…";
+      }
+
+      function onCarouselImgError(img) {
+        img.classList.add("doc-carousel__img--failed");
+        const wrap = img.closest(".doc-carousel__img-wrap");
+        if (wrap) wrap.classList.add("doc-carousel__img-wrap--failed");
+      }
+
+      const docCarouselLightboxState = {
+        carousel: null,
+        setCarouselIndex: null,
+        index: 0,
+        zoom: 1,
+        userAdjustedZoom: false,
+        keyHandler: null,
+        wheelHandler: null,
+      };
+
+      const DOC_CAROUSEL_LIGHTBOX_DPI = 200;
+
+      function docCarouselLightboxEl() {
+        return $("doc-carousel-lightbox");
+      }
+
+      function clampLightboxZoom(z) {
+        return Math.max(0.5, Math.min(3, z));
+      }
+
+      function applyDocCarouselLightboxZoom() {
+        const img = document.querySelector(".doc-carousel-lightbox__img");
+        if (img) img.style.transform = "scale(" + docCarouselLightboxState.zoom + ")";
+        const resetBtn = document.querySelector(".doc-carousel-lightbox__zoom-reset");
+        if (resetBtn) {
+          resetBtn.textContent = docCarouselLightboxState.userAdjustedZoom
+            ? Math.round(docCarouselLightboxState.zoom * 100) + "%"
+            : "Fit";
+        }
+      }
+
+      function fitDocCarouselLightboxToStage() {
+        const lb = docCarouselLightboxEl();
+        if (!lb) return;
+        const stage = lb.querySelector(".doc-carousel-lightbox__stage");
+        const img = lb.querySelector(".doc-carousel-lightbox__img");
+        if (!stage || !img || !img.naturalHeight) return;
+        const style = getComputedStyle(stage);
+        const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+        const available = stage.clientHeight - padY;
+        if (available <= 0) return;
+        docCarouselLightboxState.zoom = clampLightboxZoom(available / img.naturalHeight);
+        applyDocCarouselLightboxZoom();
+      }
+
+      function onDocCarouselLightboxImgLoad(img) {
+        if (!docCarouselLightboxState.userAdjustedZoom) {
+          fitDocCarouselLightboxToStage();
+        } else {
+          applyDocCarouselLightboxZoom();
+        }
+      }
+
+      function updateDocCarouselLightboxView() {
+        const lb = docCarouselLightboxEl();
+        const carousel = docCarouselLightboxState.carousel;
+        if (!lb || !carousel) return;
+        const track = carousel.querySelector(".doc-carousel__track");
+        if (!track) return;
+        const list = [...track.querySelectorAll(".doc-carousel__slide")];
+        const i = docCarouselLightboxState.index;
+        const slide = list[i];
+        if (!slide) return;
+
+        const idno = carousel.dataset.idno || "";
+        const page = slide.dataset.page;
+        const labelEl = $("doc-carousel-lightbox-label");
+        const img = lb.querySelector(".doc-carousel-lightbox__img");
+        const excerptEl = $("doc-carousel-lightbox-excerpt");
+        const pdfPage = page != null ? Number(page) + 1 : i + 1;
+        const scoreEl = slide.querySelector(".badge--score");
+        const scoreTxt = scoreEl ? scoreEl.textContent.trim() : "";
+
+        if (labelEl) {
+          labelEl.textContent =
+            i +
+            1 +
+            " of " +
+            list.length +
+            " by score · PDF page " +
+            pdfPage +
+            (scoreTxt ? " · score " + scoreTxt : "");
+        }
+        if (img && idno && page != null) {
+          img.alt = "PDF page " + pdfPage;
+          img.classList.remove("doc-carousel__img--failed");
+          img.onload = function () {
+            onDocCarouselLightboxImgLoad(img);
+          };
+          img.onerror = function () {
+            img.classList.add("doc-carousel__img--failed");
+          };
+          img.src =
+            "/demo/documents/" +
+            encodeURIComponent(idno) +
+            "/pages/" +
+            encodeURIComponent(page) +
+            ".png?dpi=" +
+            DOC_CAROUSEL_LIGHTBOX_DPI;
+        }
+        if (excerptEl) {
+          const ex = slide.querySelector(".doc-carousel__excerpt");
+          excerptEl.textContent = ex ? ex.textContent : "";
+        }
+
+        const prevLb = lb.querySelector(".doc-carousel-lightbox__prev");
+        const nextLb = lb.querySelector(".doc-carousel-lightbox__next");
+        if (prevLb) prevLb.disabled = i <= 0;
+        if (nextLb) nextLb.disabled = i >= list.length - 1;
+
+        if (typeof docCarouselLightboxState.setCarouselIndex === "function") {
+          docCarouselLightboxState.setCarouselIndex(i);
+        }
+      }
+
+      function docCarouselLightboxStep(delta) {
+        const carousel = docCarouselLightboxState.carousel;
+        if (!carousel) return;
+        const list = carousel.querySelectorAll(".doc-carousel__slide");
+        if (!list.length) return;
+        const next = Math.max(0, Math.min(docCarouselLightboxState.index + delta, list.length - 1));
+        if (next === docCarouselLightboxState.index) return;
+        docCarouselLightboxState.index = next;
+        updateDocCarouselLightboxView();
+      }
+
+      function closeDocCarouselLightbox() {
+        const lb = docCarouselLightboxEl();
+        if (!lb) return;
+        lb.hidden = true;
+        document.body.classList.remove("doc-carousel-lightbox-open");
+        if (docCarouselLightboxState.keyHandler) {
+          document.removeEventListener("keydown", docCarouselLightboxState.keyHandler);
+          docCarouselLightboxState.keyHandler = null;
+        }
+        docCarouselLightboxState.carousel = null;
+        docCarouselLightboxState.setCarouselIndex = null;
+        docCarouselLightboxState.zoom = 1;
+        docCarouselLightboxState.userAdjustedZoom = false;
+      }
+
+      function openDocCarouselLightbox(carousel, index, setCarouselIndex) {
+        const lb = docCarouselLightboxEl();
+        if (!lb || !carousel) return;
+        const list = carousel.querySelectorAll(".doc-carousel__slide");
+        if (!list.length) return;
+
+        docCarouselLightboxState.carousel = carousel;
+        docCarouselLightboxState.setCarouselIndex = setCarouselIndex;
+        docCarouselLightboxState.index = Math.max(0, Math.min(index, list.length - 1));
+        docCarouselLightboxState.userAdjustedZoom = false;
+
+        lb.hidden = false;
+        document.body.classList.add("doc-carousel-lightbox-open");
+        updateDocCarouselLightboxView();
+
+        if (!lb.dataset.lightboxReady) {
+          lb.dataset.lightboxReady = "1";
+          lb.querySelector(".doc-carousel-lightbox__close")?.addEventListener("click", closeDocCarouselLightbox);
+          lb.querySelector(".doc-carousel-lightbox__prev")?.addEventListener("click", () => docCarouselLightboxStep(-1));
+          lb.querySelector(".doc-carousel-lightbox__next")?.addEventListener("click", () => docCarouselLightboxStep(1));
+          lb.querySelector(".doc-carousel-lightbox__zoom-in")?.addEventListener("click", () => {
+            docCarouselLightboxState.userAdjustedZoom = true;
+            docCarouselLightboxState.zoom = clampLightboxZoom(docCarouselLightboxState.zoom + 0.25);
+            applyDocCarouselLightboxZoom();
+          });
+          lb.querySelector(".doc-carousel-lightbox__zoom-out")?.addEventListener("click", () => {
+            docCarouselLightboxState.userAdjustedZoom = true;
+            docCarouselLightboxState.zoom = clampLightboxZoom(docCarouselLightboxState.zoom - 0.25);
+            applyDocCarouselLightboxZoom();
+          });
+          lb.querySelector(".doc-carousel-lightbox__zoom-reset")?.addEventListener("click", () => {
+            docCarouselLightboxState.userAdjustedZoom = false;
+            fitDocCarouselLightboxToStage();
+          });
+          const stage = lb.querySelector(".doc-carousel-lightbox__stage");
+          if (stage) {
+            docCarouselLightboxState.wheelHandler = (e) => {
+              e.preventDefault();
+              docCarouselLightboxState.userAdjustedZoom = true;
+              const delta = e.deltaY < 0 ? 0.15 : -0.15;
+              docCarouselLightboxState.zoom = clampLightboxZoom(docCarouselLightboxState.zoom + delta);
+              applyDocCarouselLightboxZoom();
+            };
+            stage.addEventListener("wheel", docCarouselLightboxState.wheelHandler, { passive: false });
+          }
+        }
+
+        if (!docCarouselLightboxState.keyHandler) {
+          docCarouselLightboxState.keyHandler = (e) => {
+            if (lb.hidden) return;
+            if (e.key === "Escape") closeDocCarouselLightbox();
+            else if (e.key === "ArrowLeft") docCarouselLightboxStep(-1);
+            else if (e.key === "ArrowRight") docCarouselLightboxStep(1);
+          };
+        }
+        document.addEventListener("keydown", docCarouselLightboxState.keyHandler);
+        lb.querySelector(".doc-carousel-lightbox__close")?.focus();
+      }
+
+      function renderDocumentCarousel(idno, passages, activePage) {
+        if (!passages.length || idno === "—") return "";
+        let startIdx = 0;
+        if (activePage != null) {
+          const idx = passages.findIndex((p) => p.page === activePage);
+          if (idx >= 0) startIdx = idx;
+        }
+        const slides = passages
+          .map((v, idx) => {
+            const active = idx === startIdx ? "true" : "false";
+            const scoreStr = v.score != null ? Number(v.score).toFixed(4) : "—";
+            const imgUrl =
+              "/demo/documents/" +
+              encodeURIComponent(idno) +
+              "/pages/" +
+              encodeURIComponent(String(v.page)) +
+              ".png?dpi=120";
+            return (
+              '<article class="doc-carousel__slide" data-slide-index="' +
+              idx +
+              '" data-page="' +
+              v.page +
+              '" data-active="' +
+              active +
+              '">' +
+              '<p class="doc-carousel__expand-hint">Click preview to expand</p>' +
+              '<div class="doc-carousel__img-wrap" role="button" tabindex="0" title="Expand preview">' +
+              '<img class="doc-carousel__img" src="' +
+              escapeHtml(imgUrl) +
+              '" alt="' +
+              escapeHtml(pageLabel(v)) +
+              '" loading="lazy" onerror="onCarouselImgError(this)" />' +
+              '<p class="doc-carousel__img-fallback">Preview unavailable (PDF not cached or render failed).</p>' +
+              "</div>" +
+              '<p class="doc-carousel__excerpt">' +
+              escapeHtml(excerptText(v.page_content, 600)) +
+              "</p>" +
+              '<div class="doc-carousel__slide-meta">' +
+              '<span class="badge badge--type-document">' +
+              escapeHtml(pageLabel(v)) +
+              "</span>" +
+              '<span class="badge badge--score" title="Relevance score">' +
+              escapeHtml(scoreStr) +
+              "</span>" +
+              "</div>" +
+              "</article>"
+            );
+          })
+          .join("");
+        return (
+          '<section class="doc-carousel" data-idno="' +
+          escapeHtml(idno) +
+          '" data-active-index="' +
+          startIdx +
+          '">' +
+          '<h3 class="doc-carousel__title">PDF pages (by relevance)</h3>' +
+          '<div class="doc-carousel__nav">' +
+          '<button type="button" class="doc-carousel__btn doc-carousel__btn--prev" aria-label="Previous page">Prev</button>' +
+          '<span class="doc-carousel__label"></span>' +
+          '<button type="button" class="doc-carousel__btn doc-carousel__btn--next" aria-label="Next page">Next</button>' +
+          "</div>" +
+          '<div class="doc-carousel__viewport">' +
+          '<div class="doc-carousel__track">' +
+          slides +
+          "</div>" +
+          "</div>" +
+          "</section>"
+        );
+      }
+
+      function renderOtherVariantsList(others) {
+        if (!others.length) return "";
+        const items = others
+          .map((v) => {
+            const scoreStr = v.score != null ? " · score " + Number(v.score).toFixed(4) : "";
+            return (
+              "<li><strong>" +
+              escapeHtml(v.qfield || "variant") +
+              "</strong>" +
+              scoreStr +
+              ": " +
+              escapeHtml(excerptText(v.page_content, 200)) +
+              "</li>"
+            );
+          })
+          .join("");
+        return (
+          '<div class="doc-variants-other"><h4>Other variants</h4><ul>' + items + "</ul></div>"
+        );
+      }
+
+      function renderInnerHitsFallback(h) {
+        if (!h.inner_hits || typeof h.inner_hits !== "object") return "";
+        const innerKeys = Object.keys(h.inner_hits);
+        const keysLabel = innerKeys.length ? " (" + innerKeys.map(escapeHtml).join(", ") + ")" : "";
+        return (
+          '<details class="inner-hits-block"><summary class="inner-hits__summary">inner_hits' +
+          keysLabel +
+          '</summary><pre class="raw">' +
+          escapeHtml(JSON.stringify(h.inner_hits, null, 2)) +
+          "</pre></details>"
+        );
+      }
+
+      function initCarousels(root) {
+        const scope = root || document;
+        scope.querySelectorAll(".doc-carousel").forEach((carousel) => {
+          if (carousel.dataset.carouselReady === "1") return;
+          carousel.dataset.carouselReady = "1";
+          const track = carousel.querySelector(".doc-carousel__track");
+          const label = carousel.querySelector(".doc-carousel__label");
+          const prevBtn = carousel.querySelector(".doc-carousel__btn--prev");
+          const nextBtn = carousel.querySelector(".doc-carousel__btn--next");
+          if (!track || !label || !prevBtn || !nextBtn) return;
+
+          const slides = () => [...track.querySelectorAll(".doc-carousel__slide")];
+
+          function setIndex(idx) {
+            const list = slides();
+            if (!list.length) return;
+            const i = Math.max(0, Math.min(idx, list.length - 1));
+            carousel.dataset.activeIndex = String(i);
+            track.style.transform = "translateX(-" + i * 100 + "%)";
+            list.forEach((sl, j) => {
+              sl.dataset.active = j === i ? "true" : "false";
+            });
+            const v = list[i];
+            const pdfPage =
+              v.dataset.page != null ? Number(v.dataset.page) + 1 : null;
+            label.textContent =
+              i +
+              1 +
+              " of " +
+              list.length +
+              " by score" +
+              (pdfPage != null ? " · PDF page " + pdfPage : "");
+            prevBtn.disabled = i <= 0;
+            nextBtn.disabled = i >= list.length - 1;
+          }
+
+          prevBtn.addEventListener("click", () => {
+            setIndex(Number(carousel.dataset.activeIndex || 0) - 1);
+          });
+          nextBtn.addEventListener("click", () => {
+            setIndex(Number(carousel.dataset.activeIndex || 0) + 1);
+          });
+          setIndex(Number(carousel.dataset.activeIndex || 0));
+
+          carousel.querySelectorAll(".doc-carousel__img-wrap").forEach((wrap) => {
+            wrap.addEventListener("click", () => {
+              if (wrap.classList.contains("doc-carousel__img-wrap--failed")) return;
+              const slide = wrap.closest(".doc-carousel__slide");
+              const idx = slide
+                ? Number(slide.dataset.slideIndex || carousel.dataset.activeIndex || 0)
+                : Number(carousel.dataset.activeIndex || 0);
+              openDocCarouselLightbox(carousel, idx, setIndex);
+            });
+            wrap.addEventListener("keydown", (e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              wrap.click();
+            });
+          });
+        });
+      }
+
+      /** Renders metadata key/values for the card; summarizes doc_meta page fields for documents. */
+      function renderMetadataBlock(m, dtype) {
+        if (!m || typeof m !== "object") return "";
+        const extraRows = [];
+        if (dtype === "document" && m.doc_meta && typeof m.doc_meta === "object") {
+          const dm = m.doc_meta;
+          if (dm.page != null && !Number.isNaN(Number(dm.page))) {
+            const human = Number(dm.page) + 1;
+            extraRows.push(
+              "<dt>pdf_page</dt><dd>" +
+                escapeHtml(String(human)) +
+                (dm.total_pages != null ? " / " + escapeHtml(String(dm.total_pages)) : "") +
+                "</dd>"
+            );
+          }
+        }
+        const keys = Object.keys(m)
+          .filter((k) => k !== "doc_meta")
+          .sort();
+        if (!keys.length && !extraRows.length) return "";
+        const rows = extraRows
+          .concat(
+            keys.map(
+              (k) =>
+                "<dt>" +
+                escapeHtml(k) +
+                "</dt><dd>" +
+                formatMetaValue(m[k]) +
+                "</dd>"
+            )
+          )
+          .join("");
+        return (
+          '<div class="hit-card__metadata"><h3>Metadata</h3><dl>' +
+          rows +
+          "</dl></div>"
+        );
+      }
+
       function renderHit(h, i) {
-        const src = h._source || {};
-        const idno = src.idno != null ? String(src.idno) : "—";
-        const qf = src.qfield != null ? String(src.qfield) : "—";
-        const dtype = src.type != null ? String(src.type) : "";
+        const src = hitSource(h);
+        const m = hitMetadata(h);
+        const idno =
+          m.idno != null
+            ? String(m.idno)
+            : src.idno != null
+              ? String(src.idno)
+              : "—";
+        const qf =
+          m.qfield != null
+            ? String(m.qfield)
+            : src.qfield != null
+              ? String(src.qfield)
+              : "—";
+        const dtype =
+          m.type != null
+            ? String(m.type)
+            : src.type != null
+              ? String(src.type)
+              : "";
         const typeLabel = formatTypeLabel(dtype || "unknown");
         const typeCls = typeBadgeClass(dtype);
-        const text = (src.page_content || "").slice(0, 1200);
+        const text = src.page_content != null ? String(src.page_content) : "";
         const scoreStr =
           h._score != null ? Number(h._score).toFixed(4) : "—";
+        const isDocument = dtype.toLowerCase() === "document";
         let innerHtml = "";
-        if (h.inner_hits && typeof h.inner_hits === "object") {
-          innerHtml =
-            '<div class="inner-hits-block"><strong style="font-size:0.75rem;color:var(--muted)">inner_hits</strong><pre class="raw">' +
-            escapeHtml(JSON.stringify(h.inner_hits, null, 2)) +
-            "</pre></div>";
+        let snippetCls = "hit-card__snippet";
+        if (isDocument && h.inner_hits) {
+          const { passages, others } = splitDocumentVariants(h);
+          const outerVariant = variantFromHit(h);
+          const activePage = isPassageVariant(outerVariant) ? outerVariant.page : null;
+          if (passages.length) {
+            innerHtml =
+              renderDocumentCarousel(idno, passages, activePage) +
+              renderOtherVariantsList(others);
+            snippetCls += " hit-card__snippet--dim";
+          } else {
+            innerHtml = renderOtherVariantsList(others) + renderInnerHitsFallback(h);
+          }
+        } else if (h.inner_hits && typeof h.inner_hits === "object") {
+          innerHtml = renderInnerHitsFallback(h);
         }
         return (
           '<article class="hit-card">' +
@@ -794,10 +2084,12 @@ consumer price index</textarea
           "</span>" +
           "</header>" +
           '<div class="hit-card__body">' +
-          '<div class="hit-card__snippet">' +
+          '<div class="' +
+          snippetCls +
+          '">' +
           escapeHtml(text) +
-          (text.length >= 1200 ? "…" : "") +
           "</div>" +
+          renderMetadataBlock(m, dtype) +
           '<div class="hit-card__foot">' +
           "<div><span class=\"meta-k\">idno</span><span class=\"meta-v\">" +
           escapeHtml(idno) +
@@ -814,54 +2106,81 @@ consumer price index</textarea
 
       $("search-form").addEventListener("submit", async (e) => {
         e.preventDefault();
-        statusEl.textContent = "Searching…";
+        if (searchAbortController) searchAbortController.abort();
+        searchAbortController = new AbortController();
+        const { signal } = searchAbortController;
+
+        statusEl.textContent =
+          "Searching (" + TAB_DEFS.length + " parallel requests)…";
         statusEl.classList.remove("err");
-        resultsEl.hidden = true;
+        resultsRegion.hidden = false;
         previewSection.hidden = true;
+        if (facetsSection) facetsSection.hidden = true;
+        TAB_DEFS.forEach((tab) => setTabLoading(tab.id, "Searching…"));
         $("btn").disabled = true;
-        try {
-          const res = await fetch("/search", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-            },
-            body: JSON.stringify(buildPayload()),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            const detail =
-              data.detail != null
-                ? typeof data.detail === "string"
-                  ? data.detail
-                  : JSON.stringify(data.detail)
-                : res.statusText;
-            throw new Error(detail || "Request failed");
-          }
-          if (data.opensearch_body != null) {
-            previewPre.textContent = JSON.stringify(
-              data.opensearch_body,
-              null,
-              2,
-            );
-            previewSection.hidden = false;
-          } else {
-            previewSection.hidden = true;
-          }
-          const total = data.total != null ? data.total : "—";
-          totalEl.textContent = "(total hits: " + total + ")";
-          const hits = data.hits || [];
-          hitsEl.innerHTML = hits.length
-            ? hits.map(renderHit).join("")
-            : '<p class="empty-hits">No hits for this query.</p>';
-          resultsEl.hidden = false;
-          statusEl.textContent = "OK · " + hits.length + " hit(s) in this page";
-        } catch (err) {
-          statusEl.textContent = String(err.message || err);
-          statusEl.classList.add("err");
-        } finally {
+
+        const outcomes = await Promise.allSettled(
+          TAB_DEFS.map((tab) => searchTab(tab, signal))
+        );
+
+        if (signal.aborted) {
           $("btn").disabled = false;
+          return;
         }
+
+        let okCount = 0;
+        let failCount = 0;
+        let allPageHits = 0;
+
+        outcomes.forEach((outcome, i) => {
+          const tabDef = TAB_DEFS[i];
+          if (outcome.status === "rejected") {
+            failCount += 1;
+            renderTabError(tabDef.id, String(outcome.reason || "Failed"));
+            return;
+          }
+          const result = outcome.value;
+          if (result.aborted) return;
+          if (result.ok) {
+            okCount += 1;
+            renderTabResults(result.tabId, result.data);
+            if (result.tabId === "all") {
+              allPageHits = (result.data.hits || []).length;
+            }
+          } else {
+            failCount += 1;
+            renderTabError(result.tabId, result.error || "Request failed");
+          }
+        });
+
+        setActiveTab(activeTabId);
+        const totalTabs = TAB_DEFS.length;
+        if (failCount === 0) {
+          statusEl.textContent =
+            "OK · " +
+            okCount +
+            "/" +
+            totalTabs +
+            " tabs · " +
+            allPageHits +
+            " hit(s) on All (this page)";
+        } else if (okCount === 0) {
+          statusEl.textContent =
+            "All " + totalTabs + " tab requests failed";
+          statusEl.classList.add("err");
+        } else {
+          statusEl.textContent =
+            "Partial · " +
+            okCount +
+            "/" +
+            totalTabs +
+            " tabs OK · " +
+            failCount +
+            " failed";
+          statusEl.classList.add("err");
+        }
+        $("btn").disabled = false;
+        searchAbortController = null;
       });
     </script>
   </body>

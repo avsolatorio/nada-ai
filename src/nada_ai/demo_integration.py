@@ -68,8 +68,12 @@ def _print_hits(label: str, resp: dict[str, Any], max_show: int = 3) -> None:
     print(f"\n--- {label} ({len(hits)} hits) ---")
     for h in hits[:max_show]:
         src = h.get("_source", {})
+        meta = src.get("metadata") or {}
         snippet = (src.get("page_content") or "")[:200].replace("\n", " ")
-        print(f"  score={h.get('_score')} idno={src.get('idno')} type={src.get('type')} qfield={src.get('qfield')}")
+        idno = meta.get("idno", src.get("idno"))
+        mtype = meta.get("type", src.get("type"))
+        qfield = meta.get("qfield", src.get("qfield"))
+        print(f"  score={h.get('_score')} idno={idno} type={mtype} qfield={qfield}")
         print(f"  text: {snippet}...")
     if len(hits) > max_show:
         print(f"  ... and {len(hits) - max_show} more")

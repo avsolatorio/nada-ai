@@ -1,11 +1,16 @@
-# Dev-only: single-node OpenSearch 3.6 LTS (no security plugin). Do not use in production.
-# Build context: this repo root (`ai4data` comes from the git pin in pyproject.toml / uv.lock).
+# Dev-only: Qdrant 1.18.x + nada-ai API (vector search via Qdrant, local embeddings).
+# Pair with optional extra ``qdrant-client`` in pyproject.toml / Dockerfile ``--extra qdrant``.
 #
-# OpenSearch data uses a named volume so the container user (UID 1000) can write without
-# `chown` on a host bind mount. For a host path instead, use
-# `./data/opensearch-data:/usr/share/opensearch/data` and run `chown -R 1000:1000 ./data/opensearch-data`.
+# Qdrant storage uses a named volume so data persists across restarts. For a host path instead,
+# use ``./data/qdrant-storage:/qdrant/storage`` and ensure the container user can write there.
+#
+# Usage (API + Qdrant):
+#   docker compose -f docker-compose.qdrant.yml up -d
+#
+# Qdrant only (no API):
+#   docker compose -f docker-compose.qdrant.yml up -d qdrant-nada
 volumes:
-  opensearch-nada-data:
+  qdrant-nada-data:
 
 services:
   nada-ai-api:
@@ -14,23 +19,23 @@ services:
       dockerfile: Dockerfile
       network: host
     image: nada-ai-api:local
-    container_name: nada-ai-api-dev
+    container_name: nada-ai-api-qdrant-dev
     restart: always
     ports:
       - "8020:8020"
     environment:
-      NADA_SEARCH_BACKEND: opensearch
-      NADA_OPENSEARCH_URL: http://opensearch-nada:9200
+      NADA_SEARCH_BACKEND: qdrant
+      NADA_EMBEDDING_BACKEND: local
+      # Sparse BM25 leg is on by default (``NADA_QDRANT_SPARSE_LEXICAL``). New collections get ``sparse_vectors_config`` automatically.
+      # Opt out: NADA_QDRANT_SPARSE_LEXICAL: "false"
+      # If you already have a dense-only volume, either recreate the collection + reindex or set sparse to false until you migrate.
+      NADA_QDRANT_URL: http://qdrant-nada:6333
       # NADA_EMBEDDING_MODEL_ID: microsoft/harrier-oss-v1-270m
       NADA_QUERY_PROMPT_NAME: web_search_query
       HF_HOME: /models/huggingface
       SENTENCE_TRANSFORMERS_HOME: /models/sentence_transformers
       AI4DATA_DISCOVERY_DATA_PATH: /workspace/data/nada-discovery
       NADA_EMBEDDING_DEVICE: cpu
-      # Optional OpenSearch ops: composable index template (knn_vector on auto-created indices) and cluster allowlist.
-      # NADA_OPENSEARCH_PUT_COMPOSABLE_INDEX_TEMPLATE: "true"
-      # NADA_OPENSEARCH_INDEX_TEMPLATE_PRIORITY: "500"
-      # NADA_OPENSEARCH_CLUSTER_AUTO_CREATE_INDEX: "false"
       # Optional: override Data Compass URL for ai4data discovery (see ai4data MetadataCatalogConfig).
       # AI4DATA_METADATA_CATALOG_URL: https://your-host.example/index.php
       # Optional if thumbnails live elsewhere: AI4DATA_METADATA_CATALOG_THUMBNAIL_URL
@@ -39,7 +44,7 @@ services:
       # If downloads are hosted on a different subdomain than the catalog (e.g. training.ihsn.org),
       # allow-list the extra hosts that may receive the key:
       # AI4DATA_METADATA_CATALOG_X_API_KEY_HOSTS: training.ihsn.org,files.ihsn.org
-      NADA_QUERY_PROMPT: "Instruct: Retrieve semantically similar text that helps answer the user's query or find related information\nQuery: "
+      NADA_QUERY_PROMPT: "Instruct: Retrieve texts that help answer the user's query or find related information\nQuery: "
       # NADA_ADMIN_API_KEY: ${NADA_ADMIN_API_KEY}
     volumes:
       - ${HOME}/.cache/huggingface:/models/huggingface
@@ -48,24 +53,16 @@ services:
     env_file:
       - .env
     depends_on:
-      - opensearch-nada
+      - qdrant-nada
 
-  opensearch-nada:
-    image: opensearchproject/opensearch:3.6.0
-    container_name: nada-ai-opensearch-dev
+  qdrant-nada:
+    image: qdrant/qdrant:v1.18.0
+    container_name: nada-ai-qdrant-dev
     restart: always
-    environment:
-      - discovery.type=single-node
-      - plugins.security.disabled=true
-      - cluster.routing.allocation.disk.threshold_enabled=false
-      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
     ports:
-      - "9200:9200"
+      - "6333:6333"
+      - "6334:6334"
     volumes:
-      - opensearch-nada-data:/usr/share/opensearch/data
+      - qdrant-nada-data:/qdrant/storage
     env_file:
       - .env
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1

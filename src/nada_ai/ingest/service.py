@@ -10,9 +10,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from nada_ai.ingest.pipeline import ensure_index, run_bulk_index
+from nada_ai.ingest.pipeline import run_bulk_index
 from nada_ai.search.backend.opensearch.client import build_client
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
+from nada_ai.search.backend.opensearch.index_template import (
+    put_cluster_auto_create_index,
+    put_composable_index_template,
+)
 from nada_ai.search.backend.opensearch.ml.setup import ensure_text_embedding_ingest_pipeline
 from nada_ai.settings import Settings
 
@@ -26,30 +30,54 @@ def _close_quiet(client: Any) -> None:
         pass
 
 
+def put_index_template_op(settings: Settings) -> dict[str, Any]:
+    """Install composable index template (and optional cluster auto-create setting) for OpenSearch only."""
+    if settings.search_backend == "qdrant":
+        return {
+            "skipped": True,
+            "detail": "Index templates apply to OpenSearch only (search_backend=qdrant).",
+        }
+    if settings.embedding_backend == "opensearch_ml":
+        dim = int(settings.opensearch_ml_embedding_dimension or 0)
+    else:
+        dim = EmbeddingService(settings).embedding_dimension()
+
+    client = build_client(settings)
+    try:
+        out: dict[str, Any] = {"dim": dim}
+        if settings.opensearch_put_composable_index_template:
+            out["template"] = put_composable_index_template(client, settings, dim)
+        else:
+            out["template"] = {"skipped": True, "reason": "opensearch_put_composable_index_template is false"}
+        if settings.opensearch_cluster_auto_create_index:
+            out["cluster_auto_create_index"] = put_cluster_auto_create_index(
+                client, settings.opensearch_cluster_auto_create_index
+            )
+        return out
+    finally:
+        _close_quiet(client)
+
+
 def create_index_op(settings: Settings, recreate: bool = False) -> dict[str, Any]:
-    """Create the OpenSearch index (drop first if ``recreate``).
+    """Create the search index or Qdrant collection (drop first if ``recreate``).
 
     Returns ``{"index", "dim", "recreated", "embedding_backend"}``.
     """
-    client = build_client(settings)
-    try:
-        recreated = False
-        if recreate and client.indices.exists(index=settings.index_name):
-            client.indices.delete(index=settings.index_name)
-            recreated = True
-        if settings.embedding_backend == "opensearch_ml":
-            ensure_text_embedding_ingest_pipeline(client, settings)
-            dim = int(settings.opensearch_ml_embedding_dimension or 0)
-        else:
-            embedding = EmbeddingService(settings)
-            dim = embedding.embedding_dimension()
-        ensure_index(client, settings, dim)
-    finally:
-        _close_quiet(client)
+    from nada_ai.ingest.factory import create_ingest_writer
+
+    if settings.embedding_backend == "opensearch_ml":
+        dim = int(settings.opensearch_ml_embedding_dimension or 0)
+    else:
+        dim = EmbeddingService(settings).embedding_dimension()
+
+    writer = create_ingest_writer(settings)
+    writer.ensure_target(dim, recreate=recreate)
+
+    index_name = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
     return {
-        "index": settings.index_name,
+        "index": index_name,
         "dim": dim,
-        "recreated": recreated,
+        "recreated": recreate,
         "embedding_backend": settings.embedding_backend,
     }
 
@@ -59,6 +87,13 @@ def setup_ingest_pipeline_op(settings: Settings) -> dict[str, Any]:
 
     Returns ``{"pipeline", "embedding_backend", "skipped"}``.
     """
+    if settings.search_backend == "qdrant":
+        return {
+            "pipeline": None,
+            "embedding_backend": settings.embedding_backend,
+            "skipped": True,
+            "detail": "OpenSearch ingest pipelines do not apply when search_backend=qdrant.",
+        }
     client = build_client(settings)
     try:
         skipped = settings.opensearch_ml_skip_ingest_pipeline_setup
@@ -94,12 +129,13 @@ def index_ids_op(
         show_progress_bar=show_progress_bar,
         buffer_size=buffer_size,
     )
+    idx = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
     return {
         "indexed": int(n),
         "errors": err or [],
         "requested": len(idnos),
         "metadata_type": metadata_type,
-        "index": settings.index_name,
+        "index": idx,
     }
 
 
@@ -142,10 +178,11 @@ def index_from_catalog_op(
         show_progress_bar=show_progress_bar,
         buffer_size=buffer_size,
     )
+    idx = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
     return {
         "indexed": int(n),
         "errors": err or [],
         "rows": len(pairs),
         "catalog_type": catalog_type,
-        "index": settings.index_name,
+        "index": idx,
     }
