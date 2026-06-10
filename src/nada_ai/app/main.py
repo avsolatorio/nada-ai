@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from nada_ai.app.state import AppState, ensure_embedding_initialized, get_state,
 from nada_ai.search.backend.opensearch.client import build_async_client
 from nada_ai.search.factory import create_search_backend
 from nada_ai.search.ports import RecommendParams, SearchParams
+from nada_ai.search.dynamic_filters import load_dynamic_facet_keys
 from nada_ai.search.query_heuristics import looks_like_catalog_idno
 from nada_ai.settings import Settings
 
@@ -66,12 +68,18 @@ _STATIC = Path(__file__).resolve().parent / "static"
 
 
 @app.get("/demo", response_class=HTMLResponse, include_in_schema=False)
-async def demo_search_ui() -> HTMLResponse:
+async def demo_search_ui(s: AppState = Depends(get_state)) -> HTMLResponse:
     """Minimal browser UI that calls ``POST /search`` (same origin)."""
     path = _STATIC / "demo.html"
     if not path.is_file():
         raise HTTPException(status_code=404, detail="demo.html not found")
-    return HTMLResponse(path.read_text(encoding="utf-8"))
+    html = path.read_text(encoding="utf-8")
+    facet_keys = sorted(load_dynamic_facet_keys(s.settings))
+    config_snippet = (
+        f'<script id="facet-keys-config" type="application/json">{json.dumps(facet_keys)}</script>'
+    )
+    html = html.replace("<!-- FACET_KEYS_CONFIG -->", config_snippet)
+    return HTMLResponse(html)
 
 
 @app.get(

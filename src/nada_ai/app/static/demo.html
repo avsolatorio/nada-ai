@@ -153,6 +153,50 @@
         opacity: 0.5;
         cursor: not-allowed;
       }
+      .btn-ghost {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        padding: 0.45rem 0.75rem;
+        font-size: 0.8125rem;
+        font-weight: 500;
+      }
+      .btn-ghost:hover:not(:disabled) {
+        color: var(--text);
+        border-color: var(--accent);
+      }
+      .dynamic-filters {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .dynamic-filter-row {
+        display: grid;
+        grid-template-columns: minmax(7rem, 1fr) minmax(10rem, 1.75fr) auto;
+        gap: 0.5rem;
+        align-items: end;
+      }
+      .dynamic-filter-row .dyn-label {
+        display: block;
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        margin-bottom: 0.35rem;
+      }
+      .dynamic-filter-row .dyn-filter-remove {
+        padding: 0.5rem 0.7rem;
+        line-height: 1;
+        font-size: 1.1rem;
+      }
+      @media (max-width: 639px) {
+        .dynamic-filter-row {
+          grid-template-columns: 1fr;
+        }
+        .dynamic-filter-row .dyn-filter-remove {
+          justify-self: start;
+        }
+      }
       details.filter-block {
         border: 1px solid var(--border);
         border-radius: 8px;
@@ -943,6 +987,32 @@
           </div>
         </details>
 
+        <details class="filter-block" open id="dynamic-filters-block">
+          <summary>
+            Dynamic filters (filter_facets)
+            <span class="hint"
+              >(any key → <code>metadata.filter_facets.&lt;key&gt;</code>)</span
+            >
+          </summary>
+          <div class="inner">
+            <p class="hint" style="margin: 0 0 0.75rem">
+              Arbitrary catalog filter keys (e.g.
+              <code>doctype</code>, <code>countries</code>, <code>tags</code>).
+              Comma-separated values match any value for that key.
+            </p>
+            <datalist id="facet-key-suggestions"></datalist>
+            <div id="dynamic-filters-list" class="dynamic-filters"></div>
+            <button
+              type="button"
+              class="btn-ghost"
+              id="btn-add-dynamic-filter"
+              style="margin-top: 0.65rem"
+            >
+              + Add filter
+            </button>
+          </div>
+        </details>
+
         <details class="filter-block">
           <summary>
             Field collapse <span class="hint">(default: idno — clear to disable)</span>
@@ -1042,9 +1112,115 @@
       <p class="doc-carousel-lightbox__excerpt" id="doc-carousel-lightbox-excerpt"></p>
     </div>
 
+    <!-- FACET_KEYS_CONFIG -->
     <script>
       const $ = (id) => document.getElementById(id);
       const embedConfigEl = $("embed-config");
+
+      const FIXED_FILTER_KEYS = new Set([
+        "type",
+        "idno",
+        "idnos",
+        "geographies",
+        "source",
+        "periodicity",
+        "document_type",
+        "authors",
+        "year_start",
+        "year_end",
+      ]);
+
+      let DYNAMIC_FACET_KEYS = [];
+      (function loadFacetKeySuggestions() {
+        const el = document.getElementById("facet-keys-config");
+        if (!el) return;
+        try {
+          const parsed = JSON.parse(el.textContent || "[]");
+          if (Array.isArray(parsed)) DYNAMIC_FACET_KEYS = parsed.map(String);
+        } catch (_) {
+          /* ignore */
+        }
+      })();
+
+      function populateFacetKeyDatalist() {
+        const dl = $("facet-key-suggestions");
+        if (!dl) return;
+        dl.replaceChildren();
+        DYNAMIC_FACET_KEYS.forEach((key) => {
+          const opt = document.createElement("option");
+          opt.value = key;
+          dl.appendChild(opt);
+        });
+      }
+
+      function createDynamicFilterRow(key, value) {
+        const row = document.createElement("div");
+        row.className = "dynamic-filter-row";
+
+        const keyWrap = document.createElement("div");
+        const keyLabel = document.createElement("label");
+        keyLabel.className = "dyn-label";
+        keyLabel.textContent = "Key";
+        const keyInput = document.createElement("input");
+        keyInput.type = "text";
+        keyInput.className = "dyn-filter-key";
+        keyInput.setAttribute("list", "facet-key-suggestions");
+        keyInput.placeholder = "e.g. countries";
+        if (key) keyInput.value = key;
+        keyWrap.append(keyLabel, keyInput);
+
+        const valWrap = document.createElement("div");
+        const valLabel = document.createElement("label");
+        valLabel.className = "dyn-label";
+        valLabel.textContent = "Value(s)";
+        const valInput = document.createElement("input");
+        valInput.type = "text";
+        valInput.className = "dyn-filter-value";
+        valInput.placeholder = "comma-separated, e.g. 181 or tag1, tag2";
+        if (value) valInput.value = value;
+        valWrap.append(valLabel, valInput);
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "btn-ghost dyn-filter-remove";
+        removeBtn.title = "Remove filter";
+        removeBtn.setAttribute("aria-label", "Remove filter");
+        removeBtn.textContent = "×";
+        removeBtn.addEventListener("click", () => row.remove());
+
+        row.append(keyWrap, valWrap, removeBtn);
+        return row;
+      }
+
+      function addDynamicFilterRow(key, value) {
+        const list = $("dynamic-filters-list");
+        if (!list) return;
+        list.appendChild(createDynamicFilterRow(key, value));
+      }
+
+      function parseFilterValues(raw) {
+        const parts = raw
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (!parts.length) return null;
+        return parts.length > 1 ? parts : parts[0];
+      }
+
+      function collectDynamicFilters() {
+        const out = {};
+        const list = $("dynamic-filters-list");
+        if (!list) return out;
+        list.querySelectorAll(".dynamic-filter-row").forEach((row) => {
+          const key = (row.querySelector(".dyn-filter-key")?.value || "").trim();
+          const raw = (row.querySelector(".dyn-filter-value")?.value || "").trim();
+          if (!key || !raw) return;
+          if (FIXED_FILTER_KEYS.has(key)) return;
+          const parsed = parseFilterValues(raw);
+          if (parsed != null) out[key] = parsed;
+        });
+        return out;
+      }
 
       function escapeHtml(s) {
         const d = document.createElement("div");
@@ -1286,6 +1462,8 @@
           const n = parseInt(ye, 10);
           if (!Number.isNaN(n)) filters.year_end = n;
         }
+        const dynamic = collectDynamicFilters();
+        Object.assign(filters, dynamic);
         return Object.keys(filters).length ? filters : undefined;
       }
 
@@ -2103,6 +2281,12 @@
           "</article>"
         );
       }
+
+      populateFacetKeyDatalist();
+      $("btn-add-dynamic-filter")?.addEventListener("click", () =>
+        addDynamicFilterRow()
+      );
+      addDynamicFilterRow();
 
       $("search-form").addEventListener("submit", async (e) => {
         e.preventDefault();

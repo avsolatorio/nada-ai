@@ -36,3 +36,5 @@ def test_demo_route_returns_html():
     assert "doc-carousel" in r.text
     assert "doc-carousel-lightbox" in r.text
     assert "splitDocumentVariants" in r.text
+    assert "dynamic-filters-list" in r.text
+    assert "facet-keys-config" in r.text
