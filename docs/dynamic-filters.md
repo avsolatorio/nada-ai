@@ -48,6 +48,41 @@ Admin API (when `NADA_ADMIN_API_KEY` is set):
 
 Sync updates **all points** sharing the same `metadata.idno` (all langdoc chunks).
 
+## IHSN metadata-extract API
+
+Fetch filters from the IHSN admin metadata-extract API and sync them in one step:
+
+```bash
+# Single study
+uv run python -m nada_ai.filters.cli sync-from-ihsn \
+  --idno=RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1
+
+# Paginate all studies (optional --limit for testing)
+uv run python -m nada_ai.filters.cli sync-from-ihsn --all --page-size=100
+
+# Fetch only (no index write)
+uv run python -m nada_ai.filters.cli fetch-from-ihsn --all --out=records.json
+
+# Preview what would sync
+uv run python -m nada_ai.filters.cli sync-from-ihsn --all --dry-run --limit=5
+```
+
+Configure auth in `.env` if the host requires it:
+
+```env
+NADA_IHSN_METADATA_EXTRACT_BASE_URL=https://training.ihsn.org/index.php/api/admin/search-metadata-extract
+NADA_IHSN_API_KEY=your-key
+# or
+NADA_IHSN_AUTH_BEARER=your-token
+# or
+NADA_IHSN_AUTH_COOKIE=session=...
+```
+
+Query flags (defaults match typical filter-only extraction):
+
+- `--include_admin_metadata=true` (default)
+- `--include_metadata=false` (default) — set `true` to include full study metadata in API responses
+
 ## Search
 
 Pass dynamic keys alongside fixed filters in `SearchRequest.filters`:

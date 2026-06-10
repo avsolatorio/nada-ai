@@ -99,6 +99,15 @@ class Settings(BaseSettings):
     #: Optional path to JSON registry of facetable dynamic filter keys (see ``config/dynamic_filter_facets.json``).
     dynamic_filter_facets_path: str | None = Field(default=None)
 
+    #: IHSN search-metadata-extract API base URL (no trailing slash).
+    ihsn_metadata_extract_base_url: str | None = Field(default=None)
+    #: Optional API key sent as ``X-API-KEY`` (if the deployment requires it).
+    ihsn_api_key: str | None = Field(default=None)
+    #: Optional bearer token for ``Authorization: Bearer ...``.
+    ihsn_auth_bearer: str | None = Field(default=None)
+    #: Optional raw Cookie header value for authenticated training/production hosts.
+    ihsn_auth_cookie: str | None = Field(default=None)
+
     @field_validator("opensearch_cluster_auto_create_index", mode="before")
     @classmethod
     def empty_auto_create_to_none(cls, v: Any) -> str | None:
