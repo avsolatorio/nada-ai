@@ -25,12 +25,28 @@ For **Amazon OpenSearch / IAM SigV4**:
 uv sync --extra aws
 ```
 
+For **Qdrant** vector search (recommended local stack — see guide below):
+
+```bash
+uv sync --extra local --extra qdrant
+```
+
+## Guides
+
+| Guide | Description |
+|-------|-------------|
+| **[Qdrant pipeline guide](docs/qdrant-pipeline-guide.md)** | End-to-end catalog ingest and search with Qdrant — **host ingest** and **full Docker** setups, metadata-extract catalog, verification, troubleshooting |
+| [Dynamic filters](docs/dynamic-filters.md) | Sync IHSN catalog filters into the index and search by facet keys |
+
 ## Configuration (`NADA_*`)
 
 Settings use the **`NADA_`** prefix (see `nada_ai.settings`). Common variables:
 
 | Variable | Purpose |
 |----------|---------|
+| `NADA_SEARCH_BACKEND` | `opensearch` (default) or `qdrant` — see [Qdrant pipeline guide](docs/qdrant-pipeline-guide.md) |
+| `NADA_QDRANT_URL` | Qdrant HTTP URL (default `http://localhost:6333`; compose uses `http://qdrant-nada:6333`) |
+| `NADA_QDRANT_COLLECTION_NAME` | Qdrant collection (defaults to `NADA_INDEX_NAME`) |
 | `NADA_OPENSEARCH_URL` | Cluster URL (default `http://localhost:9200`) |
 | `NADA_INDEX_NAME` | Index name (default `nada-metadata`) |
 | `NADA_EMBEDDING_BACKEND` | `local` (default) or `opensearch_ml` |
@@ -47,13 +63,37 @@ Settings use the **`NADA_`** prefix (see `nada_ai.settings`). Common variables:
 |----------|---------|
 | `AI4DATA_DISCOVERY_DATA_PATH` | Writable directory for discovery caches and bundled metadata helpers (set in Docker and CLI jobs) |
 
+**Discovery caches** (standalone `ai4data`):
+
+| Variable | Purpose |
+|----------|---------|
+| `AI4DATA_DISCOVERY_DATA_PATH` | Writable directory for discovery caches and bundled metadata helpers (set in Docker and CLI jobs) |
+| `AI4DATA_METADATA_CATALOG_URL` | NADA catalog base URL (default Data Compass) |
+| `AI4DATA_METADATA_CATALOG_EXTRACT_PATH` | When set, use bulk `search-metadata-extract/studies` instead of catalog search + JSON — [details](docs/qdrant-pipeline-guide.md#configuration) |
+
 Optional: call `init_discovery_paths(Path(...))` from `ai4data.discovery.config` at startup if you prefer code over env.
 
-## Search and OpenSearch
+## Search backends
+
+### Qdrant
+
+Use **`docker-compose.qdrant.yml`** and follow **[docs/qdrant-pipeline-guide.md](docs/qdrant-pipeline-guide.md)** for host vs Docker ingest, catalog configuration, and search verification.
+
+Quick start:
+
+```bash
+mkdir -p data/nada-discovery
+docker compose -f docker-compose.qdrant.yml up --build -d
+docker exec nada-ai-api-qdrant-dev python -m nada_ai.ingest.cli create_index
+docker exec nada-ai-api-qdrant-dev python -m nada_ai.ingest.cli index_from_catalog --catalog_type=document --limit=10
+curl -s -X POST http://localhost:8020/health/embeddings/warmup
+```
+
+### OpenSearch
 
 The FastAPI app exposes **`POST /search`** (keyword, vector, hybrid), **`GET /demo`**, health routes, and **admin/ingest** routes that mirror the CLI. Search query DSL lives under **`nada_ai.search.backend.opensearch`**.
 
-### Version compatibility
+#### Version compatibility
 
 Target server: **OpenSearch 3.x** (e.g. **3.6 LTS**). The Python client is **`opensearch-py` 3.x**, aligned with supported server versions per [upstream compatibility](https://github.com/opensearch-project/opensearch-py/blob/main/COMPATIBILITY.md).
 
@@ -325,18 +365,3 @@ Integration tests against a live OpenSearch cluster are optional (`@pytest.mark.
 ## MCP
 
 Not implemented in this phase; reserve `nada_ai/mcp/` or an optional `[project.optional-dependencies] mcp = [...]` when you add MCP servers.
-
-
-```bash
-docker compose -f docker-compose.opensearch.yml up --build -d
-mkdir -p data/nada-discovery
-docker exec nada-ai-api-dev python -m nada_ai.ingest.cli create_index
-docker exec -it nada-ai-api-dev \
-  python -m nada_ai.ingest.cli index_from_catalog --catalog_type=timeseries
-
-docker exec nada-ai-api-dev curl -s -X POST http://127.0.0.1:8020/health/embeddings/warmup
-
-
-uv run python -m nada_ai.ingest.cli index_from_catalog --catalog_type=timeseries
-
-```

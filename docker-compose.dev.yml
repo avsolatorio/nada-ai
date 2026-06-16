@@ -1,4 +1,5 @@
 # Development overlay — merge *after* the base file:
+#   docker compose -f docker-compose.qdrant.yml -f docker-compose.dev.yml up --build -d
 #   docker compose -f docker-compose.opensearch.yml -f docker-compose.dev.yml up --build -d
 #
 # Optional (Unix): export COMPOSE_FILE=docker-compose.opensearch.yml:docker-compose.dev.yml

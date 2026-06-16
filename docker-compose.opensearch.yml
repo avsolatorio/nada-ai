@@ -33,6 +33,8 @@ services:
       # NADA_OPENSEARCH_CLUSTER_AUTO_CREATE_INDEX: "false"
       # Optional: override Data Compass URL for ai4data discovery (see ai4data MetadataCatalogConfig).
       # AI4DATA_METADATA_CATALOG_URL: https://your-host.example/index.php
+      # Optional bulk metadata extract (replaces catalog search + per-idno JSON when set):
+      # AI4DATA_METADATA_CATALOG_EXTRACT_PATH: api/admin/search-metadata-extract
       # Optional if thumbnails live elsewhere: AI4DATA_METADATA_CATALOG_THUMBNAIL_URL
       # Optional: authenticate catalog API calls and PDF downloads with an `x-api-key` header.
       # AI4DATA_METADATA_CATALOG_X_API_KEY: ${AI4DATA_METADATA_CATALOG_X_API_KEY}

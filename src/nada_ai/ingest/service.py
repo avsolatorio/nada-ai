@@ -153,7 +153,7 @@ def index_from_catalog_op(
 
     Returns ``{"indexed", "errors", "rows", "catalog_type", "index"}``.
     """
-    from ai4data.discovery.catalog import get_metadata_ids
+    from ai4data.discovery.catalog import get_metadata_ids, is_extract_mode
 
     params: dict[str, Any] = {"sk": "", "ps": ps, "type": catalog_type, "sort_by": "year", "sort_order": "asc"}
     if catalog_type == "indicator":
@@ -161,7 +161,12 @@ def index_from_catalog_op(
     elif catalog_type == "microdata":
         params["type"] = "survey"
 
-    rows = get_metadata_ids(params, max_items=limit)
+    rows = get_metadata_ids(
+        params,
+        max_items=limit,
+        cache_metadata=is_extract_mode(),
+        include_resources=True,
+    )
     pairs: list[tuple[str, str]] = []
     for row in rows:
         idno = row.get("idno")
