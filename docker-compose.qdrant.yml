@@ -47,12 +47,17 @@ services:
       # If downloads are hosted on a different subdomain than the catalog (e.g. training.ihsn.org),
       # allow-list the extra hosts that may receive the key:
       # AI4DATA_METADATA_CATALOG_X_API_KEY_HOSTS: training.ihsn.org,files.ihsn.org
+      # Corporate TLS: export org root CA to ./certs/wbg-root-ca.pem, then uncomment:
+      # SSL_CERT_FILE: /etc/ssl/certs/custom/wbg-root-ca.pem
+      # REQUESTS_CA_BUNDLE: /etc/ssl/certs/custom/wbg-root-ca.pem
       NADA_QUERY_PROMPT: "Instruct: Retrieve texts that help answer the user's query or find related information\nQuery: "
       # NADA_ADMIN_API_KEY: ${NADA_ADMIN_API_KEY}
     volumes:
       - ${HOME}/.cache/huggingface:/models/huggingface
       - ${HOME}/.cache/torch/sentence_transformers:/models/sentence_transformers
       - ./data/nada-discovery:/workspace/data/nada-discovery
+      # Corporate TLS (optional): place wbg-root-ca.pem in ./certs/ and uncomment next line + SSL_CERT_FILE above
+      # - ./certs/wbg-root-ca.pem:/etc/ssl/certs/custom/wbg-root-ca.pem:ro
     env_file:
       - .env
     depends_on:

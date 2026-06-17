@@ -443,6 +443,64 @@ Run through this after ingest to confirm the pipeline succeeded.
 
 ---
 
+## TLS and corporate proxies
+
+Catalog fetch uses **httpx** over HTTPS. On a **Mac behind a corporate proxy**, Python's default CA bundle (`certifi`) often fails with:
+
+```text
+SSL: CERTIFICATE_VERIFY_FAILED ... self-signed certificate in certificate chain
+```
+
+**ai4data** (via the `discovery` extra) installs **`truststore`**, which wires Python to the **OS trust store** (macOS Keychain). That fixes host-side ingest when your browser already trusts the catalog URL.
+
+### Host ingest (recommended when you hit SSL errors in Docker)
+
+Run ingest on the host; keep Qdrant in Docker:
+
+```bash
+export NADA_QDRANT_URL=http://localhost:6333
+export AI4DATA_DISCOVERY_DATA_PATH="$(pwd)/data/nada-discovery"
+
+uv sync --extra local --extra qdrant
+uv run python -m nada_ai.ingest.cli index_from_catalog --catalog_type=document --limit=10
+```
+
+Ensure `ai4data` includes the latest `truststore` change (bump the git pin / run `uv lock --upgrade-package ai4data`).
+
+### Docker: add your org root CA
+
+Containers use **Debian's public CAs only** — not your Mac Keychain. Mount a PEM export of your corporate root CA:
+
+1. Export the root CA from Keychain Access (or ask IT) as **`certs/wbg-root-ca.pem`** (do not commit secrets; keep local).
+
+2. Uncomment in **`docker-compose.qdrant.yml`** (or add to `.env`):
+
+   ```yaml
+   environment:
+     SSL_CERT_FILE: /etc/ssl/certs/custom/wbg-root-ca.pem
+     REQUESTS_CA_BUNDLE: /etc/ssl/certs/custom/wbg-root-ca.pem
+   volumes:
+     - ./certs/wbg-root-ca.pem:/etc/ssl/certs/custom/wbg-root-ca.pem:ro
+   ```
+
+3. Rebuild and retry:
+
+   ```bash
+   docker compose -f docker-compose.qdrant.yml up --build -d
+   docker exec nada-ai-api-qdrant-dev \
+     python -m nada_ai.ingest.cli index_from_catalog --catalog_type=document --limit=5
+   ```
+
+### Verify TLS from inside the container
+
+```bash
+docker exec nada-ai-api-qdrant-dev curl -sI "https://training.ihsn.org/index.php" | head
+```
+
+If `curl` fails with certificate errors, httpx will too until the CA is mounted.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
@@ -455,6 +513,7 @@ Run through this after ingest to confirm the pipeline succeeded.
 | Dimension mismatch errors | Model changed after ingest | `create_index --recreate=True` and re-ingest with the same `NADA_EMBEDDING_MODEL_ID` |
 | Sparse / hybrid errors after upgrade | Old dense-only collection | `create_index --recreate=True` or set `NADA_QDRANT_SPARSE_LEXICAL=false` until reindexed |
 | Extract mode not used | Old ai4data pin | Bump `[tool.uv.sources]` rev or use local `path` dependency |
+| `SSL: CERTIFICATE_VERIFY_FAILED` | Docker lacks corporate CA; or old ai4data without `truststore` | Host ingest, or mount CA + `SSL_CERT_FILE` — see [TLS section](#tls-and-corporate-proxies) |
 | Slow first search | Model load | `POST /health/embeddings/warmup` |
 
 **Logs**
