@@ -118,6 +118,20 @@ Omit **`AI4DATA_METADATA_CATALOG_EXTRACT_PATH`**. Ingest uses the legacy flow:
 
 Same CLI commands; more HTTP round-trips on large catalogs.
 
+### Document PDFs in extract mode
+
+Extract studies expose downloadable files on `study.resources` (sibling to `metadata`). Ingest uses only resources where `_links.type == "download"` — typically the NADA-hosted admin URL (`…/resources/download/{resource_id}`), not external `"link"` URLs.
+
+Cached PDFs are written to:
+
+```text
+{AI4DATA_DISCOVERY_DATA_PATH}/document_cache/document/document_{idno}--{resource_id}.pdf
+```
+
+Example: `document_RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1--772.pdf`.
+
+Ensure catalog auth (`AI4DATA_METADATA_CATALOG_X_API_KEY` and/or cookies) covers the catalog host so admin download URLs succeed. After upgrading to this naming scheme, re-run ingest with `--force` or remove stale `document_{idno}.pdf` files from the cache.
+
 ### URL reference (host vs Docker)
 
 | Variable | Host ingest | Inside `nada-ai-api` container |

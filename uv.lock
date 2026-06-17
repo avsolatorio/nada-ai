@@ -18,8 +18,8 @@ resolution-markers = [
 
 [[package]]
 name = "ai4data"
-version = "0.1.dev33+g59f565d38"
-source = { git = "https://github.com/avsolatorio/ai4data.git?branch=search%2Fimprove-filter#59f565d380fed9abce37d66211c6e6f82fab5188" }
+version = "0.1.dev34+g0da878ed8"
+source = { git = "https://github.com/avsolatorio/ai4data.git?branch=search%2Fimprove-filter#0da878ed833dcbd23091690c131295e09dbf0eea" }
 dependencies = [
     { name = "fastapi" },
     { name = "fire" },

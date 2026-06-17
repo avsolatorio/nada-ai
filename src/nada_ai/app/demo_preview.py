@@ -9,9 +9,23 @@ import pymupdf
 from ai4data.discovery.paths import get_document_cache_path
 
 
-def resolve_document_pdf_path(idno: str) -> Path:
+def resolve_document_pdf_path(idno: str, resource_id: str | None = None) -> Path:
     """Return cached PDF path for a document idno (does not check existence)."""
-    return get_document_cache_path(idno.strip(), "document")
+    idno = idno.strip()
+    if resource_id is not None:
+        return get_document_cache_path(idno, "document", resource_id=resource_id.strip())
+
+    legacy = get_document_cache_path(idno, "document")
+    if legacy.exists():
+        return legacy
+
+    doc_dir = legacy.parent
+    pattern = f"document_{idno}--*.pdf"
+    matches = sorted(doc_dir.glob(pattern))
+    if matches:
+        return matches[0]
+
+    return legacy
 
 
 def render_pdf_page_png(pdf_path: Path, page_index: int, *, dpi: int = 120) -> bytes:
