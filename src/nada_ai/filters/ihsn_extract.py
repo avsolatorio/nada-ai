@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import urllib.error
-import urllib.parse
-import urllib.request
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
+
+import ai4data.discovery.catalog.extract as catalog_extract
+from ai4data.discovery.config import metadata_catalog
 
 from nada_ai.settings import Settings
 
@@ -22,59 +22,62 @@ class IhsnExtractError(RuntimeError):
 
 def _build_headers(settings: Settings) -> dict[str, str]:
     headers = {"Accept": "application/json", "User-Agent": "nada-ai-filters-cli/1.0"}
-    if settings.ihsn_api_key:
-        headers["X-API-KEY"] = settings.ihsn_api_key
-    if settings.ihsn_auth_bearer:
-        headers["Authorization"] = f"Bearer {settings.ihsn_auth_bearer}"
-    if settings.ihsn_auth_cookie:
-        headers["Cookie"] = settings.ihsn_auth_cookie
+    api_key = settings.ihsn_api_key or metadata_catalog.x_api_key
+    if api_key:
+        headers["X-API-KEY"] = api_key
+    bearer = settings.ihsn_auth_bearer or metadata_catalog.auth_bearer
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    cookie = settings.ihsn_auth_cookie or metadata_catalog.cookies
+    if cookie:
+        headers["Cookie"] = cookie
     return headers
 
 
+def _build_cookies(settings: Settings) -> dict[str, str]:
+    raw = settings.ihsn_auth_cookie or metadata_catalog.cookies
+    if not raw:
+        return {}
+    out: dict[str, str] = {}
+    for part in raw.split(";"):
+        if "=" not in part:
+            continue
+        name, value = part.split("=", 1)
+        name = name.strip()
+        if name:
+            out[name] = value.strip()
+    return out
+
+
 def _base_url(settings: Settings) -> str:
-    return (settings.ihsn_metadata_extract_base_url or DEFAULT_BASE_URL).rstrip("/")
+    if settings.ihsn_metadata_extract_base_url:
+        return settings.ihsn_metadata_extract_base_url.rstrip("/")
+    if url := catalog_extract.extract_base_url():
+        return url
+    return DEFAULT_BASE_URL
 
 
-def _fetch_json(url: str, settings: Settings, *, timeout: float = 120.0) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers=_build_headers(settings), method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise IhsnExtractError(f"HTTP {e.code} for {url}: {body[:500]}") from e
-    except urllib.error.URLError as e:
-        raise IhsnExtractError(f"Request failed for {url}: {e}") from e
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise IhsnExtractError(f"Non-JSON response from {url}: {raw[:500]}") from e
-
-    if not isinstance(data, dict):
-        raise IhsnExtractError(f"Expected JSON object from {url}, got {type(data).__name__}")
-
-    status = str(data.get("status") or "").lower()
-    if status not in {"", "success", "ok"}:
-        message = data.get("message") or data.get("error") or status
-        raise IhsnExtractError(f"API error ({status}): {message}")
-
-    return data
+def _request_kwargs(settings: Settings) -> dict[str, Any]:
+    return {
+        "base_url": _base_url(settings),
+        "headers": _build_headers(settings),
+        "cookies": _build_cookies(settings),
+    }
 
 
-def _study_idno(study: dict[str, Any]) -> str | None:
-    core = study.get("core_fields")
-    if isinstance(core, dict):
-        idno = core.get("idno")
-        if idno:
-            return str(idno).strip()
-    idno = study.get("idno")
-    return str(idno).strip() if idno else None
+def _wrap_extract_error(exc: Exception) -> IhsnExtractError:
+    if isinstance(exc, catalog_extract.CatalogExtractError):
+        return IhsnExtractError(str(exc))
+    return IhsnExtractError(str(exc))
+
+
+def study_idno(study: dict[str, Any]) -> str | None:
+    return catalog_extract.study_idno(study)
 
 
 def study_to_sync_record(study: dict[str, Any]) -> dict[str, Any] | None:
     """Extract ``{idno, filters}`` from one study payload."""
-    idno = _study_idno(study)
+    idno = study_idno(study)
     filters = study.get("filters")
     if not idno or not isinstance(filters, dict):
         return None
@@ -102,40 +105,6 @@ def parse_extract_response(data: dict[str, Any]) -> list[dict[str, Any]]:
     return records
 
 
-def _studies_list_url(
-    settings: Settings,
-    *,
-    offset: int,
-    limit: int,
-    include_admin_metadata: bool,
-    include_metadata: bool,
-) -> str:
-    params = {
-        "offset": offset,
-        "limit": limit,
-        "include_admin_metadata": "1" if include_admin_metadata else "0",
-        "include_metadata": "1" if include_metadata else "0",
-    }
-    query = urllib.parse.urlencode(params)
-    return f"{_base_url(settings)}/studies?{query}"
-
-
-def _study_url(
-    settings: Settings,
-    idno: str,
-    *,
-    include_admin_metadata: bool,
-    include_metadata: bool,
-) -> str:
-    params = {
-        "include_admin_metadata": "1" if include_admin_metadata else "0",
-        "include_metadata": "1" if include_metadata else "0",
-    }
-    query = urllib.parse.urlencode(params)
-    encoded_idno = urllib.parse.quote(idno.strip(), safe="")
-    return f"{_base_url(settings)}/studies/{encoded_idno}?{query}"
-
-
 def fetch_study_records(
     settings: Settings,
     idno: str,
@@ -144,13 +113,16 @@ def fetch_study_records(
     include_metadata: bool = False,
 ) -> list[dict[str, Any]]:
     """Fetch filters for a single study idno."""
-    url = _study_url(
-        settings,
-        idno,
-        include_admin_metadata=include_admin_metadata,
-        include_metadata=include_metadata,
-    )
-    data = _fetch_json(url, settings)
+    try:
+        data = catalog_extract.fetch_extract_study(
+            idno,
+            include_admin_metadata=include_admin_metadata,
+            include_metadata=include_metadata,
+            **_request_kwargs(settings),
+        )
+    except Exception as e:
+        raise _wrap_extract_error(e) from e
+
     records = parse_extract_response(data)
     if not records:
         raise IhsnExtractError(f"No filters found in response for idno {idno!r}")
@@ -167,19 +139,22 @@ def iter_study_records(
     show_progress_bar: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """Paginate all studies and yield ``{idno, filters}`` records."""
+    request_kwargs = _request_kwargs(settings)
     offset = 0
     seen = 0
     pbar: Any = None
     try:
         while True:
-            url = _studies_list_url(
-                settings,
-                offset=offset,
-                limit=page_size,
-                include_admin_metadata=include_admin_metadata,
-                include_metadata=include_metadata,
-            )
-            data = _fetch_json(url, settings)
+            try:
+                data = catalog_extract.fetch_extract_page(
+                    {"offset": offset, "limit": page_size},
+                    include_admin_metadata=include_admin_metadata,
+                    include_metadata=include_metadata,
+                    **request_kwargs,
+                )
+            except Exception as e:
+                raise _wrap_extract_error(e) from e
+
             batch = parse_extract_response(data)
             if not batch:
                 break

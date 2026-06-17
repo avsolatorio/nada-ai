@@ -18,8 +18,8 @@ resolution-markers = [
 
 [[package]]
 name = "ai4data"
-version = "0.1.dev35+g92a73ca63"
-source = { git = "https://github.com/avsolatorio/ai4data.git?rev=92a73ca635fe413c8bff6e0a2f96f4128b639b30#92a73ca635fe413c8bff6e0a2f96f4128b639b30" }
+version = "0.1.dev34+g0da878ed8"
+source = { git = "https://github.com/avsolatorio/ai4data.git?branch=search%2Fimprove-filter#0da878ed833dcbd23091690c131295e09dbf0eea" }
 dependencies = [
     { name = "fastapi" },
     { name = "fire" },
@@ -27,6 +27,7 @@ dependencies = [
     { name = "pexpect" },
     { name = "pycountry" },
     { name = "requests" },
+    { name = "truststore" },
     { name = "uvicorn" },
 ]
 
@@ -51,6 +52,7 @@ discovery = [
     { name = "tika" },
     { name = "torch" },
     { name = "tqdm" },
+    { name = "truststore" },
 ]
 
 [[package]]
@@ -1591,7 +1593,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ai4data", extras = ["discovery"], git = "https://github.com/avsolatorio/ai4data.git?rev=92a73ca635fe413c8bff6e0a2f96f4128b639b30" },
+    { name = "ai4data", extras = ["discovery"], git = "https://github.com/avsolatorio/ai4data.git?branch=search%2Fimprove-filter" },
     { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.34.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "fastembed", marker = "extra == 'qdrant'", specifier = ">=0.4.0,<0.7" },
@@ -3297,6 +3299,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/df/3d/9e7eee57b37c80cec63322c0231bb6da3cfe535a91d7a4d64896fcb89357/triton-3.6.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a17a5d5985f0ac494ed8a8e54568f092f7057ef60e1b0fa09d3fd1512064e803", size = 188273063, upload-time = "2026-01-20T16:01:07.278Z" },
     { url = "https://files.pythonhosted.org/packages/48/db/56ee649cab5eaff4757541325aca81f52d02d4a7cd3506776cad2451e060/triton-3.6.0-cp314-cp314t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0b3a97e8ed304dfa9bd23bb41ca04cdf6b2e617d5e782a8653d616037a5d537d", size = 176274804, upload-time = "2026-01-20T16:16:31.528Z" },
     { url = "https://files.pythonhosted.org/packages/f6/56/6113c23ff46c00aae423333eb58b3e60bdfe9179d542781955a5e1514cb3/triton-3.6.0-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:46bd1c1af4b6704e554cad2eeb3b0a6513a980d470ccfa63189737340c7746a7", size = 188397994, upload-time = "2026-01-20T16:01:14.236Z" },
+]
+
+[[package]]
+name = "truststore"
+version = "0.10.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/53/a3/1585216310e344e8102c22482f6060c7a6ea0322b63e026372e6dcefcfd6/truststore-0.10.4.tar.gz", hash = "sha256:9d91bd436463ad5e4ee4aba766628dd6cd7010cf3e2461756b3303710eebc301", size = 26169, upload-time = "2025-08-12T18:49:02.73Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/97/56608b2249fe206a67cd573bc93cd9896e1efb9e98bce9c163bcdc704b88/truststore-0.10.4-py3-none-any.whl", hash = "sha256:adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981", size = 18660, upload-time = "2025-08-12T18:49:01.46Z" },
 ]
 
 [[package]]

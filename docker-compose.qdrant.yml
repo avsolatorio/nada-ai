@@ -1,4 +1,5 @@
 # Dev-only: Qdrant 1.18.x + nada-ai API (vector search via Qdrant, local embeddings).
+# Full setup: docs/qdrant-pipeline-guide.md
 # Pair with optional extra ``qdrant-client`` in pyproject.toml / Dockerfile ``--extra qdrant``.
 #
 # Qdrant storage uses a named volume so data persists across restarts. For a host path instead,
@@ -38,18 +39,25 @@ services:
       NADA_EMBEDDING_DEVICE: cpu
       # Optional: override Data Compass URL for ai4data discovery (see ai4data MetadataCatalogConfig).
       # AI4DATA_METADATA_CATALOG_URL: https://your-host.example/index.php
+      # Optional bulk metadata extract (replaces catalog search + per-idno JSON when set):
+      # AI4DATA_METADATA_CATALOG_EXTRACT_PATH: api/admin/search-metadata-extract
       # Optional if thumbnails live elsewhere: AI4DATA_METADATA_CATALOG_THUMBNAIL_URL
       # Optional: authenticate catalog API calls and PDF downloads with an `x-api-key` header.
       # AI4DATA_METADATA_CATALOG_X_API_KEY: ${AI4DATA_METADATA_CATALOG_X_API_KEY}
       # If downloads are hosted on a different subdomain than the catalog (e.g. training.ihsn.org),
       # allow-list the extra hosts that may receive the key:
       # AI4DATA_METADATA_CATALOG_X_API_KEY_HOSTS: training.ihsn.org,files.ihsn.org
+      # Corporate TLS: export org root CA to ./certs/wbg-root-ca.pem, then uncomment:
+      # SSL_CERT_FILE: /etc/ssl/certs/custom/wbg-root-ca.pem
+      # REQUESTS_CA_BUNDLE: /etc/ssl/certs/custom/wbg-root-ca.pem
       NADA_QUERY_PROMPT: "Instruct: Retrieve texts that help answer the user's query or find related information\nQuery: "
       # NADA_ADMIN_API_KEY: ${NADA_ADMIN_API_KEY}
     volumes:
       - ${HOME}/.cache/huggingface:/models/huggingface
       - ${HOME}/.cache/torch/sentence_transformers:/models/sentence_transformers
       - ./data/nada-discovery:/workspace/data/nada-discovery
+      # Corporate TLS (optional): place wbg-root-ca.pem in ./certs/ and uncomment next line + SSL_CERT_FILE above
+      # - ./certs/wbg-root-ca.pem:/etc/ssl/certs/custom/wbg-root-ca.pem:ro
     env_file:
       - .env
     depends_on:

@@ -56,3 +56,24 @@ def test_demo_page_preview_endpoint(
 
         bad_page = client.get(f"/demo/documents/{idno}/pages/99.png")
         assert bad_page.status_code == 400
+
+
+def test_resolve_document_pdf_path_resource_id_suffix(
+    tmp_discovery_data_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai4data.discovery import config as discovery_config
+    from ai4data.discovery.paths import get_document_cache_path, init_discovery_paths
+    from nada_ai.app.demo_preview import resolve_document_pdf_path
+
+    monkeypatch.setattr(discovery_config.discovery_data, "data_path", tmp_discovery_data_path)
+    init_discovery_paths(tmp_discovery_data_path)
+
+    idno = "RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1"
+    resource_id = "772"
+    pdf_path = get_document_cache_path(idno, "document", resource_id=resource_id)
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_minimal_pdf(pdf_path, pages=1)
+
+    resolved = resolve_document_pdf_path(idno)
+    assert resolved == pdf_path
+    assert resolved.name == f"document_{idno}--{resource_id}.pdf"
