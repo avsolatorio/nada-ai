@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import sys
+from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import load_dotenv
@@ -172,3 +175,71 @@ class Settings(BaseSettings):
                     "embedding_backend is opensearch_ml"
                 )
         return self
+
+
+class MCPServerSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="NADA_MCP_", case_sensitive=False, extra="ignore")
+
+    port: int = Field(default=8025, description="Port to bind the MCP server to.")
+    transport: str = Field(default="http", description="Transport to use for the MCP server.")
+    log_file: str | None = Field(default=None, description="Path to log file. If None, logs go to stderr/stdout.")
+    log_level: str = Field(default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).")
+    env: str | None = Field(default=None, description="Deployment environment (e.g. local, dev, staging, prod).")
+    readiness_enabled: bool = Field(
+        default=True,
+        description="When false, GET /ready returns 200 with readiness_checks=disabled (no dependency probes).",
+    )
+    health_check_timeout: float = Field(
+        default=5.0,
+        description="Per-check timeout in seconds for GET /ready outbound probes.",
+    )
+
+
+def get_mcp_server_settings() -> MCPServerSettings:
+    return MCPServerSettings()  # pyright: ignore[reportCallIssue]
+
+
+def setup_mcp_logging(
+    log_file: str | None = None,
+    log_level: str = "INFO",
+    env: str | None = None,
+) -> None:
+    """Configure logging to write to a file and/or console.
+
+    Args:
+        log_file: Path to log file. If None, logs only go to stderr.
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        env: Deployment environment.
+    """
+    # Convert string level to logging constant
+    numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+
+    # Create formatter
+    formatter = logging.Formatter(
+        fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # Get root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(numeric_level)
+
+    # Remove existing handlers to avoid duplicates
+    root_logger.handlers.clear()
+
+    # Console handler (stderr)
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setLevel(numeric_level)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+
+    # File handler (if log_file is specified)
+    if log_file:
+        log_path = Path(log_file)
+        # Create parent directories if they don't exist
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        file_handler.setLevel(numeric_level)
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)

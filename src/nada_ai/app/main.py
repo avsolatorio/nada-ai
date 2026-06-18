@@ -22,12 +22,17 @@ from nada_ai.app.schemas import (
     coerce_search_facets,
 )
 from nada_ai.app.state import AppState, ensure_embedding_initialized, get_state, state
+from nada_ai.mcp_server import mcp
 from nada_ai.search.backend.opensearch.client import build_async_client
+from nada_ai.search.dynamic_filters import load_dynamic_facet_keys
 from nada_ai.search.factory import create_search_backend
 from nada_ai.search.ports import RecommendParams, SearchParams
-from nada_ai.search.dynamic_filters import load_dynamic_facet_keys
 from nada_ai.search.query_heuristics import looks_like_catalog_idno
 from nada_ai.settings import Settings
+
+# NOTE: import to be able to run the server with all definitions loaded
+# path="/mcp" means the MCP endpoint lives at /mcp (no trailing slash needed)
+mcp_app = mcp.http_app(path="/mcp")
 
 
 @asynccontextmanager
@@ -42,7 +47,9 @@ async def lifespan(app: FastAPI):
     state.embedding_init_lock = asyncio.Lock()
     state.embedding_init_error = None
     state.jobs = JobRegistry()
-    yield
+
+    async with mcp_app.router.lifespan_context(mcp_app):
+        yield
     try:
         await state.jobs.shutdown()
     except Exception:
@@ -75,9 +82,7 @@ async def demo_search_ui(s: AppState = Depends(get_state)) -> HTMLResponse:
         raise HTTPException(status_code=404, detail="demo.html not found")
     html = path.read_text(encoding="utf-8")
     facet_keys = sorted(load_dynamic_facet_keys(s.settings))
-    config_snippet = (
-        f'<script id="facet-keys-config" type="application/json">{json.dumps(facet_keys)}</script>'
-    )
+    config_snippet = f'<script id="facet-keys-config" type="application/json">{json.dumps(facet_keys)}</script>'
     html = html.replace("<!-- FACET_KEYS_CONFIG -->", config_snippet)
     return HTMLResponse(html)
 
@@ -270,10 +275,7 @@ def _search_backend_http_exception(e: Exception, s: AppState) -> HTTPException:
         tgt = s.settings.qdrant_collection if s.settings.search_backend == "qdrant" else s.settings.index_name
         return HTTPException(
             status_code=404,
-            detail=(
-                f"Search target `{tgt}` was not found or is empty. "
-                "Create and populate it before searching."
-            ),
+            detail=(f"Search target `{tgt}` was not found or is empty. Create and populate it before searching."),
         )
     if isinstance(e, RequestError):
         detail = str(e)
@@ -325,3 +327,22 @@ async def search_explain(body: ExplainSearchRequest, s: AppState = Depends(get_s
         return await s.search.explain_by_idno(body.idno.strip(), filters)
     except Exception as e:
         raise _search_backend_http_exception(e, s) from e
+
+
+@app.get("/")
+async def root() -> dict[str, Any]:
+    return {
+        "demo": "/demo",
+        "health": "/health",
+        "health/embeddings": "/health/embeddings",
+        "health/embeddings/warmup": "/health/embeddings/warmup",
+        # "health/mcp": "/health/mcp",
+        "recommendations": "/recommendations",
+        "search/explain": "/search/explain",
+        "search": "/search",
+        "mcp": "/mcp",
+    }
+
+
+# Mount MCP app at root — the path="/mcp" in http_app() handles the /mcp route
+app.mount("/", mcp_app)
