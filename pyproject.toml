@@ -50,7 +50,8 @@ packages = ["src/nada_ai"]
 
 # Pin standalone discovery package to a reproducible revision (Docker + CI use this; no sibling checkout required).
 [tool.uv.sources]
-ai4data = { git = "https://github.com/avsolatorio/ai4data.git", branch = "search/improve-filter" }
+ai4data = { git = "https://github.com/avsolatorio/ai4data.git", rev = "4f91d68ae3c9d8b3b4173fd62053eeaf4d790bd1" }
+# ai4data = { git = "https://github.com/avsolatorio/ai4data.git", branch = "search/improve-filter" }
 # ai4data = { git = "https://github.com/avsolatorio/ai4data.git", rev = "97f226fff2f1af630c2c253c82302ac03aa40258" }
 # ai4data = { path = "../ai4data", editable = true }
 
