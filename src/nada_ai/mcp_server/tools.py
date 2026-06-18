@@ -43,16 +43,19 @@ async def _search_catalog(
     sort_by: CatalogSortBy = "title",
     sort_order: CatalogSortOrder = "asc",
 ) -> CatalogSearchResponse:
-    """Search and filter published studies in the NADA catalog.
+    """Search and filter published studies, surveys, and indicator timeseries in the NADA catalog.
 
-    Use when the user wants to find surveys, documents, timeseries metadata, geospatial
-    datasets, or browse the catalog. Catalog host is configured via AI4DATA_METADATA_CATALOG_URL
-    (e.g. https://training.ihsn.org/index.php).
+    Use this whenever someone wants to find data, indicators, statistics, surveys, microdata, geospatial datasets, or timeseries on a given topic — even if they don't say "NADA," "catalog," or "search" explicitly. The signal is a topic + a request to locate/discover data about it. Trigger on questions like:
+        - "can you help me find malnutrition timeseries?"
+        - "what survey data exists on labor force participation?"
+        - "do you have stunting/wasting data for Sub-Saharan Africa?"
+        - "browse datasets on food security"
+        - "what's available on household income surveys?"
+    Also trigger for explicit catalog-browsing requests ("show me what's in the catalog," "list surveys from DHS").
 
-    Provide `keywords` for full-text search; omit keywords to browse with filters only.
-    Set `include_facets=True` when facet counts by type, country, or topic are needed.
-    Use `page` and `page_size` for pagination; check `has_more` and `next_page` in the response.
-    Each result includes `idno` and `url` for follow-up metadata retrieval.
+    Do NOT use for: questions about indicator definitions/codes/methodology with no discovery intent (answer from knowledge or web search instead), or requests for actual data values/timeseries points (this tool finds *what datasets and metadata exist*, not the data itself — follow up with the returned `idno`/`url` for that).
+
+    Provide `keywords` for full-text search — extract the topic/indicator name from the user's question (e.g. "malnutrition", "stunting", "labor force"), not generic words like "data," "timeseries," or "survey." Omit keywords to browse with filters only. Set `include_facets=True` when facet counts by type, country, or topic are needed. Use `page` and `page_size` for pagination; check `has_more` and `next_page` in the response. Each result includes `idno` and `url` for follow-up metadata retrieval.
 
     Args:
         keywords: Full-text search across study-level metadata.
