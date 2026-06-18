@@ -133,63 +133,21 @@ def validate_search_query(query: str) -> tuple[bool, str | None]:
     return (True, None)
 
 
-def _collect_search_query_strings(arguments: dict[str, Any]) -> list[str]:
+def validate_catalog_search_arguments(arguments: dict[str, Any]) -> tuple[bool, str | None]:
     """
-    Collect non-empty search terms from nada_search_indicators arguments.
+    Validate keywords for nada_search_catalog.
 
-    Mirrors search() input modes: ``query``, ``queries``, and ``query_groups``.
-    Empty or whitespace-only entries are skipped (same as api.search normalisation).
-    """
-    terms: list[str] = []
-
-    query = arguments.get("query")
-    if isinstance(query, str) and query.strip():
-        terms.append(query)
-
-    queries = arguments.get("queries")
-    if isinstance(queries, list):
-        for item in queries:
-            if isinstance(item, str) and item.strip():
-                terms.append(item)
-
-    query_groups = arguments.get("query_groups")
-    if isinstance(query_groups, list):
-        for group in query_groups:
-            if not isinstance(group, dict):
-                continue
-            group_queries = group.get("queries")
-            if not isinstance(group_queries, list):
-                continue
-            for item in group_queries:
-                if isinstance(item, str) and item.strip():
-                    terms.append(item)
-
-    return terms
-
-
-def validate_search_arguments(arguments: dict[str, Any]) -> tuple[bool, str | None]:
-    """
-    Validate all search terms for nada_search_indicators.
-
-    Applies per-term checks for ``query``, each entry in ``queries``, and each
-    nested term in ``query_groups[].queries``.
+    Empty or missing keywords is allowed (browse mode). When keywords are provided,
+    apply min-length and injection checks.
 
     Returns:
         (is_valid, error_message)
     """
-    terms = _collect_search_query_strings(arguments)
-    if not terms:
-        return (
-            False,
-            "One of 'query', 'queries', or 'query_groups' must include at least one non-empty search term.",
-        )
+    keywords = arguments.get("keywords")
+    if not isinstance(keywords, str) or not keywords.strip():
+        return (True, None)
 
-    for term in terms:
-        is_valid, error_msg = validate_search_query(term)
-        if not is_valid:
-            return (False, error_msg)
-
-    return (True, None)
+    return validate_search_query(keywords)
 
 
 def sanitize_string(value: str, max_length: int = 1000) -> str:
