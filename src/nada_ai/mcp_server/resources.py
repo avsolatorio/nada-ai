@@ -8,20 +8,27 @@ import json
 from ._server_definition import mcp
 
 SEARCH_USAGE = {
-    "basic_search": {
-        "example": "nada_search_indicators(query='poverty', limit=10)",
-        "note": "Uses default select_fields",
+    "keyword_search": {
+        "example": "nada_search_catalog(keywords='population census', type='survey', page_size=10)",
+        "note": "Full-text search with optional type filter",
     },
-    "enriched_search": {
-        "example": "nada_search_indicators(query='poverty', limit=5, select_fields=['idno', 'name', 'database_id', 'definition_long', 'periodicity', 'time_periods', 'dimensions'])",
-        "note": "Use when LLM needs to pick best indicator",
+    "browse_by_type": {
+        "example": "nada_search_catalog(type='timeseries', sort_by='popularity', sort_order='desc', page_size=15)",
+        "note": "Browse without keywords; omit keywords for filtered catalog browse",
     },
-    "indicator_selection_workflow": [
-        "1. Use enriched search with select_fields for extra coverage info",
-        "2. Call get_disaggregation to check TIME_PERIOD and REF_AREA",
-        "3. Pick indicator based on coverage, time range, and relevance",
+    "with_facets": {
+        "example": "nada_search_catalog(keywords='health', include_facets=True)",
+        "note": "Include facet counts by dataset type, country, topic, etc.",
+    },
+    "pagination": {
+        "example": "nada_search_catalog(keywords='Rwanda', page=2, page_size=15)",
+        "note": "Check has_more and next_page in the response for additional pages",
+    },
+    "workflow": [
+        "1. Search catalog with nada_search_catalog to find relevant studies",
+        "2. Note idno and url from results for follow-up metadata or data access",
+        "3. Use type filter (survey, document, timeseries) to narrow results",
     ],
-    "warning": "DO NOT use odata_options - it is deprecated",
 }
 
 
