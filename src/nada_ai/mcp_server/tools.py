@@ -7,6 +7,8 @@ concise docstrings to reduce token context bloat, and validation schemas.
 from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import (
     CatalogDataAccessType,
+    CatalogMetadataRequest,
+    CatalogMetadataResponse,
     CatalogSearchRequest,
     CatalogSearchResponse,
     CatalogSortBy,
@@ -112,7 +114,17 @@ async def _search_catalog(
     return await nada_api.search_catalog(request)
 
 
+def _get_metadata(idno: str) -> CatalogMetadataResponse:
+    """Get metadata for a given idno."""
+    return nada_api.get_metadata(idno)
+
+
 search_catalog = mcp.tool(
     instrument_mcp_tool(_search_catalog, tool_name="nada_search_catalog"),
     name="nada_search_catalog",
+)
+
+get_metadata = mcp.tool(
+    instrument_mcp_tool(_get_metadata, tool_name="nada_get_metadata"),
+    name="nada_get_metadata",
 )

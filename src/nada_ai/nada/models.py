@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from metadataschemas.document_schema import ScriptSchemaDraft
+from metadataschemas.geospatial_schema import GeospatialSchema
+from metadataschemas.indicator_schema import TimeseriesSchema
+from metadataschemas.microdata_schema import MicrodataSchema
+from metadataschemas.table_schema import Model as TableSchema
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class MCPPagedResponse(BaseModel):
@@ -186,3 +191,166 @@ class CatalogSearchResponse(MCPPagedResponse):
     facets: dict[str, Any] | None = None
     params: dict[str, Any] | None = None
     error: str | None = None
+
+
+class CatalogMetadataRequest(BaseModel):
+    """Request model for NADA catalog metadata (/api/catalog/{idno})."""
+
+    idno: str = Field(description="The identifier number for the catalog item")
+
+
+class TimeseriesCatalogMetadata(TimeseriesSchema):
+    """IHSN timeseries / indicator metadata (``schematype`` timeseries or indicator)."""
+
+    schematype: Literal["timeseries", "indicator"] = Field(
+        default="timeseries",
+        description="Schema discriminator for timeseries catalog metadata",
+    )
+
+
+class DocumentCatalogMetadata(ScriptSchemaDraft):
+    """IHSN document metadata."""
+
+    schematype: Literal["document"] = Field(
+        default="document",
+        description="Schema discriminator for document catalog metadata",
+    )
+
+
+class MicrodataCatalogMetadata(MicrodataSchema):
+    """IHSN microdata / survey metadata."""
+
+    schematype: Literal["microdata", "survey"] = Field(
+        default="microdata",
+        description="Schema discriminator for microdata catalog metadata",
+    )
+
+
+class GeospatialCatalogMetadata(GeospatialSchema):
+    """IHSN geospatial metadata."""
+
+    schematype: Literal["geospatial"] = Field(
+        default="geospatial",
+        description="Schema discriminator for geospatial catalog metadata",
+    )
+
+
+class TableCatalogMetadata(TableSchema):
+    """IHSN table metadata."""
+
+    schematype: Literal["table"] = Field(
+        default="table",
+        description="Schema discriminator for table catalog metadata",
+    )
+
+
+class FallbackCatalogMetadata(BaseModel):
+    """Untyped metadata fallback when ``schematype`` is unknown or missing."""
+
+    model_config = ConfigDict(extra="allow")
+
+    schematype: str | None = Field(default=None, description="Reported schema type when present")
+
+
+_METADATA_BY_SCHEMATYPE: dict[str, type[BaseModel]] = {
+    "timeseries": TimeseriesCatalogMetadata,
+    "indicator": TimeseriesCatalogMetadata,
+    "document": DocumentCatalogMetadata,
+    "microdata": MicrodataCatalogMetadata,
+    "survey": MicrodataCatalogMetadata,
+    "geospatial": GeospatialCatalogMetadata,
+    "table": TableCatalogMetadata,
+}
+
+_METADATA_BY_DATASET_TYPE: dict[str, type[BaseModel]] = {
+    "timeseries": TimeseriesCatalogMetadata,
+    "indicator": TimeseriesCatalogMetadata,
+    "document": DocumentCatalogMetadata,
+    "microdata": MicrodataCatalogMetadata,
+    "survey": MicrodataCatalogMetadata,
+    "geospatial": GeospatialCatalogMetadata,
+    "table": TableCatalogMetadata,
+}
+
+
+def _metadata_model_for(schema_type: str) -> type[BaseModel]:
+    return _METADATA_BY_SCHEMATYPE.get(schema_type, FallbackCatalogMetadata)
+
+
+def _parse_catalog_metadata(value: Any, *, dataset_type: str | None = None) -> Any:
+    if not isinstance(value, dict):
+        return value
+
+    schema_type = str(value.get("schematype") or dataset_type or "").lower()
+    return _metadata_model_for(schema_type).model_validate(value)
+
+
+CatalogMetadata = (
+    TimeseriesCatalogMetadata
+    | DocumentCatalogMetadata
+    | MicrodataCatalogMetadata
+    | GeospatialCatalogMetadata
+    | TableCatalogMetadata
+    | FallbackCatalogMetadata
+)
+
+
+class CatalogMetadataDataset(BaseModel):
+    """A catalog study row with typed metadata from GET /api/catalog/{idno}."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = Field(description="Internal catalog study ID")
+    doi: str | None = Field(default=None, description="Digital object identifier")
+    repositoryid: str | None = Field(default=None, description="Owning repository ID")
+    type: str = Field(description="Dataset type (timeseries, document, survey, etc.)")
+    idno: str = Field(description="Catalog identifier number")
+    title: str = Field(description="Study title")
+    year_start: str | None = Field(default=None, description="Start year of data coverage")
+    year_end: str | None = Field(default=None, description="End year of data coverage")
+    nation: str | None = Field(default=None, description="Primary nation or country label")
+    authoring_entity: str | None = Field(default=None, description="Authoring organization")
+    published: str | None = Field(default=None, description="Publication flag from catalog")
+    created: str | None = Field(default=None, description="Record creation timestamp")
+    changed: str | None = Field(default=None, description="Record last-changed timestamp")
+    varcount: str | None = Field(default=None, description="Variable count when applicable")
+    total_views: str | None = Field(default=None, description="Total catalog views")
+    total_downloads: str | None = Field(default=None, description="Total catalog downloads")
+    formid: str | None = Field(default=None, description="Associated form ID")
+    data_access_type: str | None = Field(default=None, description="Data access classification")
+    remote_data_url: str | None = Field(default=None, description="Remote data access URL")
+    data_class_id: str | None = Field(default=None, description="Data classification ID")
+    data_class_code: str | None = Field(default=None, description="Data classification code")
+    data_class_title: str | None = Field(default=None, description="Data classification title")
+    thumbnail: str | None = Field(default=None, description="Thumbnail asset filename or URL")
+    abstract: str | None = Field(default=None, description="Study abstract or summary")
+    link_study: str | None = Field(default=None, description="Linked study URL")
+    link_indicator: str | None = Field(default=None, description="Linked indicator URL")
+    link_report: str | None = Field(default=None, description="Linked report URL")
+    # metadata: CatalogMetadata = Field(description="Type-specific IHSN metadata payload")
+    metadata: dict[str, Any] = Field(description="Type-specific IHSN metadata payload")
+
+    # @model_validator(mode="before")
+    # @classmethod
+    # def parse_typed_metadata(cls, data: Any) -> Any:
+    #     if not isinstance(data, dict):
+    #         return data
+
+    #     raw_meta = data.get("metadata")
+    #     if isinstance(raw_meta, dict):
+    #         data = {
+    #             **data,
+    #             "metadata": _parse_catalog_metadata(raw_meta, dataset_type=str(data.get("type") or "")),
+    #         }
+    #     return data
+
+
+class CatalogMetadataResponse(BaseModel):
+    """Response model for NADA catalog metadata (/api/catalog/{idno})."""
+
+    status: str = Field(description="API status (e.g. success)")
+    dataset: CatalogMetadataDataset | None = Field(
+        default=None,
+        description="Catalog study payload when the request succeeds",
+    )
+    error: str | None = Field(default=None, description="Error message when the request fails")
