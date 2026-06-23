@@ -7,7 +7,6 @@ concise docstrings to reduce token context bloat, and validation schemas.
 from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import (
     CatalogDataAccessType,
-    CatalogMetadataRequest,
     CatalogMetadataResponse,
     CatalogSearchRequest,
     CatalogSearchResponse,
@@ -16,7 +15,10 @@ from nada_ai.nada.models import (
 )
 
 from ._server_definition import mcp
+from .tool_config import get_mcp_tool_texts
 from .tool_spans import instrument_mcp_tool
+
+_TOOL_TEXTS = get_mcp_tool_texts()
 
 
 async def _search_catalog(
@@ -45,19 +47,7 @@ async def _search_catalog(
     sort_by: CatalogSortBy = "title",
     sort_order: CatalogSortOrder = "asc",
 ) -> CatalogSearchResponse:
-    """Search and filter published studies, surveys, and indicator timeseries in the NADA catalog.
-
-    Use this whenever someone wants to find data, indicators, statistics, surveys, microdata, geospatial datasets, or timeseries on a given topic — even if they don't say "NADA," "catalog," or "search" explicitly. The signal is a topic + a request to locate/discover data about it. Trigger on questions like:
-        - "can you help me find malnutrition timeseries?"
-        - "what survey data exists on labor force participation?"
-        - "do you have stunting/wasting data for Sub-Saharan Africa?"
-        - "browse datasets on food security"
-        - "what's available on household income surveys?"
-    Also trigger for explicit catalog-browsing requests ("show me what's in the catalog," "list surveys from DHS").
-
-    Do NOT use for: questions about indicator definitions/codes/methodology with no discovery intent (answer from knowledge or web search instead), or requests for actual data values/timeseries points (this tool finds *what datasets and metadata exist*, not the data itself — follow up with the returned `idno`/`url` for that).
-
-    Provide `keywords` for full-text search — extract the topic/indicator name from the user's question (e.g. "malnutrition", "stunting", "labor force"), not generic words like "data," "timeseries," or "survey." Omit keywords to browse with filters only. Set `include_facets=True` when facet counts by type, country, or topic are needed. Use `page` and `page_size` for pagination; check `has_more` and `next_page` in the response. Each result includes `idno` and `url` for follow-up metadata retrieval.
+    """Search the metadata catalog (step 1 of the catalog workflow).
 
     Args:
         keywords: Full-text search across study-level metadata.
@@ -115,16 +105,22 @@ async def _search_catalog(
 
 
 def _get_metadata(idno: str) -> CatalogMetadataResponse:
-    """Get metadata for a given idno."""
+    """Fetch full metadata for one catalog item by idno (step 2 of the catalog workflow).
+
+    Args:
+        idno: Catalog identifier from a prior search result (`items[].idno`). Required; do not guess.
+    """
     return nada_api.get_metadata(idno)
 
 
 search_catalog = mcp.tool(
-    instrument_mcp_tool(_search_catalog, tool_name="nada_search_catalog"),
-    name="nada_search_catalog",
+    instrument_mcp_tool(_search_catalog, tool_name=_TOOL_TEXTS.search_tool_name),
+    name=_TOOL_TEXTS.search_tool_name,
+    description=_TOOL_TEXTS.search_description,
 )
 
 get_metadata = mcp.tool(
-    instrument_mcp_tool(_get_metadata, tool_name="nada_get_metadata"),
-    name="nada_get_metadata",
+    instrument_mcp_tool(_get_metadata, tool_name=_TOOL_TEXTS.get_metadata_tool_name),
+    name=_TOOL_TEXTS.get_metadata_tool_name,
+    description=_TOOL_TEXTS.get_metadata_description,
 )

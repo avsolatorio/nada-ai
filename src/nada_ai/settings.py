@@ -185,6 +185,26 @@ class MCPServerSettings(BaseSettings):
     log_file: str | None = Field(default=None, description="Path to log file. If None, logs go to stderr/stdout.")
     log_level: str = Field(default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).")
     env: str | None = Field(default=None, description="Deployment environment (e.g. local, dev, staging, prod).")
+    server_name: str | None = Field(
+        default=None,
+        description="Display name for the MCP server (default: NADA MCP Server).",
+    )
+    tool_prefix: str = Field(
+        default="nada",
+        description="Prefix for MCP tool names, e.g. 'wdr' -> wdr_search_catalog (lowercase letters, digits, underscores).",
+    )
+    catalog_name: str = Field(
+        default="NADA catalog",
+        description="Human-readable catalog label inserted into default MCP tool descriptions.",
+    )
+    search_catalog_description: str | None = Field(
+        default=None,
+        description="Full override for the search_catalog MCP tool description shown to LLMs.",
+    )
+    get_metadata_description: str | None = Field(
+        default=None,
+        description="Full override for the get_metadata MCP tool description shown to LLMs.",
+    )
     readiness_enabled: bool = Field(
         default=True,
         description="When false, GET /ready returns 200 with readiness_checks=disabled (no dependency probes).",
