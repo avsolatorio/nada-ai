@@ -7,7 +7,13 @@ import httpx
 from ai4data.discovery.auth import get_catalog_auth_headers, get_catalog_cookies
 from ai4data.discovery.config import metadata_catalog
 
-from nada_ai.nada.models import CatalogSearchRequest, CatalogSearchResponse, CatalogStudyRow
+from nada_ai.nada.models import (
+    CatalogMetadataDataset,
+    CatalogMetadataResponse,
+    CatalogSearchRequest,
+    CatalogSearchResponse,
+    CatalogStudyRow,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -16,6 +22,10 @@ _CATALOG_SEARCH_TIMEOUT = 30.0
 
 def _catalog_search_url() -> str:
     return f"{metadata_catalog.url.rstrip('/')}/api/catalog/search"
+
+
+def _catalog_metadata_url(idno: str) -> str:
+    return f"{metadata_catalog.url.rstrip('/')}/api/catalog/{idno}"
 
 
 def _parse_study_rows(rows: list[dict[str, Any]]) -> list[CatalogStudyRow]:
@@ -85,4 +95,42 @@ async def search_catalog(request: CatalogSearchRequest) -> CatalogSearchResponse
         result,
         facets=facets,
         params=payload.get("params"),
+    )
+
+
+def get_metadata(idno: str) -> CatalogMetadataResponse:
+    """Get metadata for a given idno."""
+
+    url = _catalog_metadata_url(idno)
+    try:
+        response = httpx.get(
+            url,
+            headers=get_catalog_auth_headers(),
+            cookies=get_catalog_cookies(),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except httpx.HTTPStatusError as exc:
+        _logger.exception("Catalog metadata HTTP error")
+        detail = exc.response.text[:500] if exc.response is not None else str(exc)
+        return CatalogMetadataResponse(
+            status="error",
+            error=f"Catalog metadata failed ({exc.response.status_code}): {detail}",
+        )
+    except httpx.HTTPError as exc:
+        _logger.exception("Catalog metadata network error")
+        return CatalogMetadataResponse(status="error", error=f"Catalog metadata failed: {exc}")
+
+    status = str(payload.get("status") or "").lower()
+    if status not in {"", "success", "ok"}:
+        message = payload.get("message") or payload.get("error") or status
+        return CatalogMetadataResponse(status=status or "error", error=f"Catalog metadata API error: {message}")
+
+    dataset = payload.get("dataset")
+    if not isinstance(dataset, dict):
+        return CatalogMetadataResponse(status=status or "error", error="Catalog metadata API returned no dataset")
+
+    return CatalogMetadataResponse(
+        status=str(payload.get("status") or "success"),
+        dataset=CatalogMetadataDataset.model_validate(dataset),
     )
