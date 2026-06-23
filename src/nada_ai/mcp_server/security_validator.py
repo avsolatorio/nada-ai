@@ -4,6 +4,8 @@ import logging
 import re
 from typing import Any
 
+from nada_ai.mcp_server.tool_config import is_allowed_mcp_tool_name
+
 _logger = logging.getLogger(__name__)
 
 # Prompt injection patterns that indicate malicious intent
@@ -60,11 +62,11 @@ def validate_tool_call(tool_name: str, arguments: dict[str, Any]) -> tuple[bool,
     if not tool_name or not isinstance(tool_name, str):
         return (False, "Invalid tool name")
 
-    # Only allow nada tools
-    if not tool_name.startswith("nada_"):
+    # Only allow tools registered for this deployment prefix
+    if not is_allowed_mcp_tool_name(tool_name):
         return (
             False,
-            f"Unauthorized tool: {tool_name}. Only nada_* tools are allowed.",
+            f"Unauthorized tool: {tool_name}. Only catalog MCP tools for this deployment are allowed.",
         )
 
     # Check arguments for prompt injection
