@@ -49,8 +49,12 @@ async def _search_catalog(
 ) -> CatalogSearchResponse:
     """Search the metadata catalog (step 1 of the catalog workflow).
 
+    Returns matching catalog entries with `idno`, `title`, and often `abstract`.
+    For definition or methodology questions, search here first, then call get_metadata
+    on the best `idno` to read full fields (e.g. indicator definition, survey methodology).
+
     Args:
-        keywords: Full-text search across study-level metadata.
+        keywords: Semantic search over study metadata (titles, abstracts, definitions, methodology) by topic. Omit to browse with filters only.
         type: Dataset type filter (default timeseries). Use survey, document, geospatial, table, etc. Comma-separated for multiple.
         from_year: Start year for data collection period (inclusive).
         to_year: End year for data collection period (inclusive).
@@ -106,6 +110,9 @@ async def _search_catalog(
 
 def _get_metadata(idno: str) -> CatalogMetadataResponse:
     """Fetch full metadata for one catalog item by idno (step 2 of the catalog workflow).
+
+    Use after search to answer definition, methodology, coverage, and producer questions
+    from catalog fields (e.g. indicator `definition`, survey sampling details, document `abstract`).
 
     Args:
         idno: Catalog identifier from a prior search result (`items[].idno`). Required; do not guess.

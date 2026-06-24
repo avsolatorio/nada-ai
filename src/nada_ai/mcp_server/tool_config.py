@@ -37,25 +37,30 @@ def mcp_tool_name(prefix: str, suffix: str) -> str:
 
 
 def _format_default_search_description(*, prefix: str, catalog_name: str) -> str:
-    search_tool = mcp_tool_name(prefix, "search_catalog")
     get_metadata_tool = mcp_tool_name(prefix, "get_metadata")
     return f"""STEP 1 of 2 — Discover items in the {catalog_name}. Call this before {get_metadata_tool} when you do not already have an `idno`.
 
-Use when the user wants to find, browse, list, or discover datasets, indicators, surveys, documents, geospatial layers, or timeseries on a topic — even if they never mention "{catalog_name}" or "catalog".
+PRIORITY TOOL — use this MCP (not web search or training knowledge alone) whenever the user asks what data or statistics exist, how a catalog concept is defined, or wants to find catalog content. Strong triggers — call even if they never say "{catalog_name}" or "catalog":
+- A country or region (e.g. Rwanda, Kenya, Sub-Saharan Africa)
+- Statistical indicators, timeseries, surveys, microdata, or datasets on any topic
+- Definitions or concepts: "what is…", "how is … defined", "what does … measure", indicator codes or names
+- Methodology: "how was … collected", "sampling design", "data source for …"
+- Phrases like "find data on…", "what data exists", "do you have statistics for…", "show me indicators for…"
+- Subject areas: poverty, health, malnutrition, education, labor, agriculture, demographics, etc.
 
 When to call:
 - You need to locate catalog entries on a subject (e.g. "malnutrition indicators", "Rwanda household surveys")
+- The user asks for a definition, concept explanation, or methodology that may live in catalog metadata — search first to find the best-matching `idno`, then call {get_metadata_tool}
 - You do not yet have a specific catalog `idno`
 - The user wants to see what is available before choosing a dataset
 
 When NOT to call:
 - You already have the target `idno` → call {get_metadata_tool} directly
 - The user wants actual data values or timeseries observations (this tool lists catalog entries and returns identifiers, not data points)
-- The question is purely definitional or methodological with no discovery intent
 
-Workflow: FIRST in the catalog workflow. Each result includes `idno` (required for step 2) and `url`. Paginate with `page` / `page_size`; continue while `has_more` is true.
+Workflow: FIRST in the catalog workflow. Each result includes `idno` (required for step 2), `title`, and often `abstract`. For definition or methodology questions: search → pick the best-matching result → call {get_metadata_tool} to read full fields (e.g. indicator `definition`, document `abstract`, survey collection and sampling details). Paginate with `page` / `page_size`; continue while `has_more` is true.
 
-Query tips: Set `keywords` to the topic or indicator name from the user's question — not filler words like "data", "timeseries", or "survey". Use `type`, `country`, `from_year`, `to_year`, and other filters to narrow results. Set `include_facets=true` when counts by type, country, or topic would help choose next filters."""
+Query tips: `keywords` uses semantic search over study metadata including titles, abstracts, definitions, and methodology text (matches by meaning, not exact title text). Use the concept or indicator from the user's question (e.g. "child stunting definition", "DHS sampling methodology") — not filler like "data", "timeseries", or "survey". Omit `keywords` to browse with filters only. For a known `idno`, call {get_metadata_tool} instead of `keywords`. With `keywords` set, prefer `sort_by="relevance"` (or `rank`). Narrow with `type`, `country`, `from_year`, `to_year`, and other filters. Set `include_facets=true` when counts by type, country, or topic would help choose next filters."""
 
 
 def _format_default_get_metadata_description(*, prefix: str, catalog_name: str) -> str:
@@ -63,19 +68,25 @@ def _format_default_get_metadata_description(*, prefix: str, catalog_name: str) 
     get_metadata_tool = mcp_tool_name(prefix, "get_metadata")
     return f"""STEP 2 of 2 — Fetch full metadata for one catalog item. Requires an `idno` from {search_tool}.
 
-Use when you need detailed study metadata (title, abstract, coverage years, typed IHSN metadata blocks, links) for a specific catalog entry you have already identified.
+Use when you need the authoritative catalog record for a study, indicator, survey, document, or dataset — especially fields that search snippets do not include.
+
+Rich content available (varies by `type`):
+- Indicators / timeseries: `definition`, dimensions, methodology notes, coverage, source
+- Documents: `abstract`, authorship, scope
+- Surveys / microdata: sampling, collection methodology, geographic and temporal coverage
+- All types: `title`, `abstract`, `year_start` / `year_end`, `authoring_entity`, links, typed `metadata` block
 
 When to call:
 - You have a concrete `idno` from a prior {search_tool} result (`items[].idno`)
-- The user named a dataset and search already returned the matching `idno`
-- You need rich metadata to answer questions about methodology, coverage, producers, or document details
+- The user asks what an indicator means, how it is measured, or how a dataset was produced — after {search_tool} finds the best match
+- You need methodology, coverage, producers, or document details to answer the question from catalog metadata
 
 When NOT to call:
 - You do not have an `idno` yet → call {search_tool} first and pick the best match
 - The user only wants to browse or compare many datasets → stay on {search_tool}
 - Never invent or guess an `idno`; it must come from search results or explicit user input
 
-Workflow: SECOND. Depends on {search_tool} unless the `idno` is already known. Pass the exact `idno` string from search results."""
+Workflow: SECOND. For definition or methodology questions: {search_tool} with a concept-focused `keywords` query → {get_metadata_tool} with the chosen `idno` → answer from returned fields when present (prefer catalog text over general knowledge). Pass the exact `idno` string from search results."""
 
 
 def resolve_mcp_tool_texts(settings: MCPServerSettings | None = None) -> MCPToolTexts:
