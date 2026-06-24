@@ -19,10 +19,11 @@ def _search_usage_payload() -> dict:
             f"1. Call {search_tool} first to discover datasets and obtain an `idno`",
             f"2. Call {get_metadata_tool} with that `idno` for full study metadata",
             "3. Use the `type` filter on search (survey, document, timeseries, etc.) to narrow results",
+            "4. For definitions or methodology: search by concept → get_metadata on best match → answer from catalog fields",
         ],
         "keyword_search": {
             "example": f"{search_tool}(keywords='population census', type='survey', page_size=10)",
-            "note": "Full-text search with optional type filter",
+            "note": "Semantic keyword search over titles, abstracts, definitions, and methodology; prefer sort_by='relevance' when keywords are set",
         },
         "browse_by_type": {
             "example": f"{search_tool}(type='timeseries', sort_by='popularity', sort_order='desc', page_size=15)",
@@ -39,6 +40,10 @@ def _search_usage_payload() -> dict:
         "metadata_follow_up": {
             "example": f"{get_metadata_tool}(idno='SI.POV.DDAY')",
             "note": f"Requires `idno` from a prior {search_tool} result",
+        },
+        "definition_or_methodology": {
+            "example": f"{search_tool}(keywords='prevalence of stunting definition', sort_by='relevance') → {get_metadata_tool}(idno='<from search>')",
+            "note": "Search by concept, then fetch full metadata to read definition, methodology, abstract, and related fields",
         },
     }
 

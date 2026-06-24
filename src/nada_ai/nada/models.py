@@ -50,7 +50,13 @@ CatalogDataAccessType = Literal[
 class CatalogSearchRequest(BaseModel):
     """Request model for NADA catalog search (/api/catalog/search)."""
 
-    keywords: str | None = Field(default=None, description="Full-text search across study metadata (API: sk)")
+    keywords: str | None = Field(
+        default=None,
+        description=(
+            "Semantic search over study metadata by topic or meaning, including titles, abstracts, "
+            "definitions, and methodology text (API: sk). Omit to browse with filters only."
+        ),
+    )
     type: str = Field(
         default="timeseries",
         description="Dataset type filter: survey, geospatial, document, table, timeseries, etc. (comma-separated)",

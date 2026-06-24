@@ -17,6 +17,10 @@ def test_default_tool_names_and_workflow_text():
     assert "STEP 2 of 2" in texts.get_metadata_description
     assert "nada_search_catalog" in texts.get_metadata_description
     assert "nada_get_metadata" in texts.search_description
+    assert "semantic search" in texts.search_description.lower()
+    assert "Rwanda" in texts.search_description
+    assert "definition" in texts.search_description.lower()
+    assert "methodology" in texts.get_metadata_description.lower()
 
 
 def test_custom_prefix_and_catalog_name():
