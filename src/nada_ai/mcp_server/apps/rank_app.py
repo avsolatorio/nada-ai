@@ -44,14 +44,14 @@ async def do_rank(
     schema_resp = await nada_api.get_indicator_schema(idno)
     if schema_resp.error or not schema_resp.schema_:
         return RankResponse(idno=idno, period=period, n=n, ascending=ascending,
-                            geo_column="", time_column="", obs_column="",
+                            geo_column=None, time_column=None, obs_column=None,
                             error=schema_resp.error or "Schema unavailable")
     schema = schema_resp.schema_
     data = await nada_api.get_all_timeseries_data(idno, dimensions=dimensions)
     if data.error:
         return RankResponse(idno=idno, period=period, n=n, ascending=ascending,
-                            geo_column=schema.geo_column or "", time_column=schema.time_column or "",
-                            obs_column=schema.obs_column or "", error=data.error)
+                            geo_column=schema.geo_column, time_column=schema.time_column,
+                            obs_column=schema.obs_column, error=data.error)
     return analytics.rank(data.data, schema, period=period, n=n, ascending=ascending, dimensions=dimensions)
 
 

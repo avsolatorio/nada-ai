@@ -4,8 +4,12 @@ Thin wrapper layer that registers API functions as MCP tools with optimized sign
 concise docstrings to reduce token context bloat, and validation schemas.
 """
 
+import asyncio
+
 from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import (
+    AggregateResponse,
+    BenchmarkResponse,
     CatalogDataAccessType,
     CatalogMetadataResponse,
     CatalogSearchRequest,
@@ -14,12 +18,17 @@ from nada_ai.nada.models import (
     CatalogSortOrder,
     CodelistResponse,
     CompareResponse,
+    CorrelateResponse,
+    CoverageResponse,
     ExtremesResponse,
     GrowthResponse,
     IndicatorSchemaResponse,
+    JoinResponse,
+    OutliersResponse,
     RankResponse,
     SummarizeResponse,
     TimeseriesDataResponse,
+    TrendResponse,
 )
 from nada_ai.mcp_server import analytics
 
@@ -179,6 +188,13 @@ _rank_tool_name = _TOOL_TEXTS.prefix + "_rank"
 _extremes_tool_name = _TOOL_TEXTS.prefix + "_extremes"
 _compare_tool_name = _TOOL_TEXTS.prefix + "_compare"
 _summarize_tool_name = _TOOL_TEXTS.prefix + "_summarize"
+_correlate_tool_name = _TOOL_TEXTS.prefix + "_correlate"
+_outliers_tool_name = _TOOL_TEXTS.prefix + "_outliers"
+_trend_tool_name = _TOOL_TEXTS.prefix + "_trend"
+_benchmark_tool_name = _TOOL_TEXTS.prefix + "_benchmark"
+_coverage_tool_name = _TOOL_TEXTS.prefix + "_coverage"
+_join_tool_name = _TOOL_TEXTS.prefix + "_join"
+_aggregate_tool_name = _TOOL_TEXTS.prefix + "_aggregate"
 _growth_tool_name = _TOOL_TEXTS.prefix + "_growth"
 
 search_catalog = mcp.tool(
@@ -541,5 +557,425 @@ growth_tool = mcp.tool(
         "Compute period-over-period absolute and percentage change per ref area. "
         "Returns base value, end value, absolute change, and % change for each geography.\n\n"
         f"Prerequisite: call {_get_schema_tool_name} first. Pass `dimensions` for disaggregated indicators."
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Correlate — cross-indicator Pearson r
+# ---------------------------------------------------------------------------
+
+
+async def _nada_correlate(
+    idno1: str,
+    idno2: str,
+    period: str,
+    dimensions1: dict[str, str] | None = None,
+    dimensions2: dict[str, str] | None = None,
+) -> CorrelateResponse:
+    """Compute Pearson correlation between two indicators across all ref areas for a period.
+
+    Args:
+        idno1: First indicator idno. Required.
+        idno2: Second indicator idno. Required.
+        period: Time period to correlate within (e.g. ``"2022"``). Required.
+        dimensions1: Disaggregation filters for indicator 1 (e.g. ``{"SEX": "F"}``).
+        dimensions2: Disaggregation filters for indicator 2.
+    """
+    schema1_resp, schema2_resp = await asyncio.gather(
+        nada_api.get_indicator_schema(idno1),
+        nada_api.get_indicator_schema(idno2),
+    )
+    if schema1_resp.error or not schema1_resp.schema_:
+        return CorrelateResponse(idno1=idno1, idno2=idno2, period=period,
+                                 error=schema1_resp.error or "Schema unavailable for idno1")
+    if schema2_resp.error or not schema2_resp.schema_:
+        return CorrelateResponse(idno1=idno1, idno2=idno2, period=period,
+                                 error=schema2_resp.error or "Schema unavailable for idno2")
+
+    data1, data2 = await asyncio.gather(
+        nada_api.get_all_timeseries_data(idno1, dimensions=dimensions1),
+        nada_api.get_all_timeseries_data(idno2, dimensions=dimensions2),
+    )
+    if data1.error:
+        return CorrelateResponse(idno1=idno1, idno2=idno2, period=period, error=data1.error)
+    if data2.error:
+        return CorrelateResponse(idno1=idno1, idno2=idno2, period=period, error=data2.error)
+
+    try:
+        return analytics.correlate(
+            data1.data, schema1_resp.schema_, data2.data, schema2_resp.schema_,
+            period=period, dimensions1=dimensions1, dimensions2=dimensions2,
+        )
+    except ValueError as exc:
+        return CorrelateResponse(idno1=idno1, idno2=idno2, period=period, error=str(exc))
+
+
+correlate_tool = mcp.tool(
+    instrument_mcp_tool(_nada_correlate, tool_name=_correlate_tool_name),
+    name=_correlate_tool_name,
+    description=(
+        "Compute Pearson correlation between two indicators across ref areas for a given period. "
+        "Returns a correlation coefficient and a scatter table (ref_area, value1, value2). "
+        "Useful for answering questions like 'does GDP correlate with literacy?'\n\n"
+        f"Prerequisite: call {_get_schema_tool_name} on both idnos. Pass `dimensions1`/`dimensions2` "
+        "for disaggregated indicators."
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Outliers — Z-score detection
+# ---------------------------------------------------------------------------
+
+
+async def _nada_outliers(
+    idno: str,
+    period: str,
+    threshold: float = 2.0,
+    from_year: int | None = None,
+    to_year: int | None = None,
+    dimensions: dict[str, str] | None = None,
+) -> OutliersResponse:
+    """Detect Z-score outliers across all ref areas for a given period.
+
+    Args:
+        idno: Indicator idno. Required.
+        period: Time period to analyse (e.g. ``"2022"``). Required.
+        threshold: Z-score magnitude above which a ref area is flagged (default 2.0).
+        from_year: Optional year filter for data fetch.
+        to_year: Optional year filter for data fetch.
+        dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
+    """
+    schema_resp = await nada_api.get_indicator_schema(idno)
+    if schema_resp.error or not schema_resp.schema_:
+        return OutliersResponse(idno=idno, period=period, threshold=threshold,
+                                error=schema_resp.error or "Schema unavailable")
+    schema = schema_resp.schema_
+
+    data = await nada_api.get_all_timeseries_data(
+        idno, from_year=from_year, to_year=to_year, dimensions=dimensions
+    )
+    if data.error:
+        return OutliersResponse(idno=idno, period=period, threshold=threshold,
+                                geo_column=schema.geo_column, obs_column=schema.obs_column,
+                                error=data.error)
+
+    try:
+        return analytics.detect_outliers(data.data, schema, period=period,
+                                         threshold=threshold, dimensions=dimensions)
+    except ValueError as exc:
+        return OutliersResponse(idno=idno, period=period, threshold=threshold,
+                                geo_column=schema.geo_column, obs_column=schema.obs_column,
+                                error=str(exc))
+
+
+outliers_tool = mcp.tool(
+    instrument_mcp_tool(_nada_outliers, tool_name=_outliers_tool_name),
+    name=_outliers_tool_name,
+    description=(
+        "Detect statistical outliers (Z-score) across all ref areas for an indicator in a given period. "
+        "Returns each ref area with its Z-score and an outlier flag. "
+        "Useful for spotting data anomalies or exceptional performers.\n\n"
+        f"Prerequisite: call {_get_schema_tool_name} first. Default threshold is 2.0 (|Z| ≥ 2)."
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Trend — linear regression per ref area
+# ---------------------------------------------------------------------------
+
+
+async def _nada_trend(
+    idno: str,
+    ref_areas: list[str] | None = None,
+    from_year: int | None = None,
+    to_year: int | None = None,
+    dimensions: dict[str, str] | None = None,
+) -> TrendResponse:
+    """Fit a linear trend per ref area over available periods.
+
+    Returns slope, R², and direction (improving/declining/stable) for each ref area.
+
+    Args:
+        idno: Indicator idno. Required.
+        ref_areas: Specific ref areas to analyse (default: all).
+        from_year: Filter to observations from this year.
+        to_year: Filter to observations up to this year.
+        dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
+    """
+    schema_resp = await nada_api.get_indicator_schema(idno)
+    if schema_resp.error or not schema_resp.schema_:
+        return TrendResponse(idno=idno, error=schema_resp.error or "Schema unavailable")
+    schema = schema_resp.schema_
+
+    data = await nada_api.get_all_timeseries_data(
+        idno,
+        from_year=from_year,
+        to_year=to_year,
+        country_codes=ref_areas,
+        geo_column=schema.geo_column or "COUNTRY_CODE",
+        dimensions=dimensions,
+    )
+    if data.error:
+        return TrendResponse(idno=idno, geo_column=schema.geo_column,
+                             obs_column=schema.obs_column, error=data.error)
+
+    try:
+        return analytics.trend(data.data, schema, ref_areas=ref_areas, dimensions=dimensions)
+    except ValueError as exc:
+        return TrendResponse(idno=idno, geo_column=schema.geo_column,
+                             obs_column=schema.obs_column, error=str(exc))
+
+
+trend_tool = mcp.tool(
+    instrument_mcp_tool(_nada_trend, tool_name=_trend_tool_name),
+    name=_trend_tool_name,
+    description=(
+        "Fit a linear trend (OLS regression) per ref area over all available periods. "
+        "Returns slope, R², and direction (improving/declining/stable) for each geography — "
+        "ideal for 'which countries are improving fastest on X?' questions.\n\n"
+        f"Prerequisite: call {_get_schema_tool_name} first. Narrow time window with `from_year`/`to_year`."
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Benchmark — ref area vs peer group
+# ---------------------------------------------------------------------------
+
+
+async def _nada_benchmark(
+    idno: str,
+    period: str,
+    ref_areas: list[str],
+    from_year: int | None = None,
+    to_year: int | None = None,
+    dimensions: dict[str, str] | None = None,
+) -> BenchmarkResponse:
+    """Benchmark ref areas against all peers for a given period.
+
+    Returns percentile rank, Z-score, and deviation from peer mean/median.
+
+    Args:
+        idno: Indicator idno. Required.
+        period: The period to benchmark in (e.g. ``"2022"``). Required.
+        ref_areas: Ref area codes to benchmark (e.g. ``["KEN", "UGA"]``). Required.
+        from_year: Optional year filter for data fetch.
+        to_year: Optional year filter for data fetch.
+        dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
+    """
+    schema_resp = await nada_api.get_indicator_schema(idno)
+    if schema_resp.error or not schema_resp.schema_:
+        return BenchmarkResponse(idno=idno, period=period,
+                                 error=schema_resp.error or "Schema unavailable")
+    schema = schema_resp.schema_
+
+    data = await nada_api.get_all_timeseries_data(
+        idno, from_year=from_year, to_year=to_year, dimensions=dimensions
+    )
+    if data.error:
+        return BenchmarkResponse(idno=idno, period=period,
+                                 geo_column=schema.geo_column, obs_column=schema.obs_column,
+                                 error=data.error)
+
+    try:
+        return analytics.benchmark(data.data, schema, ref_areas=ref_areas,
+                                   period=period, dimensions=dimensions)
+    except ValueError as exc:
+        return BenchmarkResponse(idno=idno, period=period,
+                                 geo_column=schema.geo_column, obs_column=schema.obs_column,
+                                 error=str(exc))
+
+
+benchmark_tool = mcp.tool(
+    instrument_mcp_tool(_nada_benchmark, tool_name=_benchmark_tool_name),
+    name=_benchmark_tool_name,
+    description=(
+        "Benchmark one or more ref areas against all peers for an indicator in a given period. "
+        "Returns percentile rank, Z-score, and deviation from peer mean/median. "
+        "Answers 'where does Kenya stand among all countries for indicator X in 2022?'\n\n"
+        f"Prerequisite: call {_get_schema_tool_name} first."
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Coverage — data availability per ref area
+# ---------------------------------------------------------------------------
+
+
+async def _nada_coverage(
+    idno: str,
+    dimensions: dict[str, str] | None = None,
+) -> CoverageResponse:
+    """Summarise data availability per ref area: n_periods, first/last period, coverage %.
+
+    Args:
+        idno: Indicator idno. Required.
+        dimensions: Optional dimension filters.
+    """
+    schema_resp = await nada_api.get_indicator_schema(idno)
+    if schema_resp.error or not schema_resp.schema_:
+        return CoverageResponse(idno=idno, error=schema_resp.error or "Schema unavailable")
+    schema = schema_resp.schema_
+
+    data = await nada_api.get_all_timeseries_data(idno, dimensions=dimensions)
+    if data.error:
+        return CoverageResponse(idno=idno, geo_column=schema.geo_column,
+                                time_column=schema.time_column, error=data.error)
+
+    try:
+        return analytics.coverage(data.data, schema, dimensions=dimensions)
+    except ValueError as exc:
+        return CoverageResponse(idno=idno, geo_column=schema.geo_column,
+                                time_column=schema.time_column, error=str(exc))
+
+
+coverage_tool = mcp.tool(
+    instrument_mcp_tool(_nada_coverage, tool_name=_coverage_tool_name),
+    name=_coverage_tool_name,
+    description=(
+        "Summarise data availability per ref area for an indicator: number of periods covered, "
+        "first and last period, and coverage percentage. "
+        "Useful for understanding gaps before starting analysis.\n\n"
+        f"Prerequisite: call {_get_schema_tool_name} first."
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Join — cross-indicator row alignment
+# ---------------------------------------------------------------------------
+
+
+async def _nada_join(
+    idno1: str,
+    idno2: str,
+    from_year: int | None = None,
+    to_year: int | None = None,
+    ref_areas: list[str] | None = None,
+    dimensions1: dict[str, str] | None = None,
+    dimensions2: dict[str, str] | None = None,
+) -> JoinResponse:
+    """Align two indicators by (ref_area, period) and return merged rows.
+
+    Returns one row per (ref_area, period) combination present in either indicator,
+    with values from both. Null where one indicator has no data for that combination.
+
+    Args:
+        idno1: First indicator idno. Required.
+        idno2: Second indicator idno. Required.
+        from_year: Optional year filter applied to both indicators.
+        to_year: Optional year filter applied to both indicators.
+        ref_areas: Geography codes to include (applied to both).
+        dimensions1: Disaggregation filters for indicator 1.
+        dimensions2: Disaggregation filters for indicator 2.
+    """
+    schema1_resp, schema2_resp = await asyncio.gather(
+        nada_api.get_indicator_schema(idno1),
+        nada_api.get_indicator_schema(idno2),
+    )
+    if schema1_resp.error or not schema1_resp.schema_:
+        return JoinResponse(idno1=idno1, idno2=idno2,
+                            error=schema1_resp.error or "Schema unavailable for idno1")
+    if schema2_resp.error or not schema2_resp.schema_:
+        return JoinResponse(idno1=idno1, idno2=idno2,
+                            error=schema2_resp.error or "Schema unavailable for idno2")
+
+    schema1, schema2 = schema1_resp.schema_, schema2_resp.schema_
+
+    data1, data2 = await asyncio.gather(
+        nada_api.get_all_timeseries_data(
+            idno1, from_year=from_year, to_year=to_year,
+            country_codes=ref_areas, geo_column=schema1.geo_column or "COUNTRY_CODE",
+            dimensions=dimensions1,
+        ),
+        nada_api.get_all_timeseries_data(
+            idno2, from_year=from_year, to_year=to_year,
+            country_codes=ref_areas, geo_column=schema2.geo_column or "COUNTRY_CODE",
+            dimensions=dimensions2,
+        ),
+    )
+    if data1.error:
+        return JoinResponse(idno1=idno1, idno2=idno2, error=data1.error)
+    if data2.error:
+        return JoinResponse(idno1=idno1, idno2=idno2, error=data2.error)
+
+    try:
+        return analytics.join_indicators(
+            data1.data, schema1, data2.data, schema2,
+            dimensions1=dimensions1, dimensions2=dimensions2,
+        )
+    except ValueError as exc:
+        return JoinResponse(idno1=idno1, idno2=idno2, error=str(exc))
+
+
+join_tool = mcp.tool(
+    instrument_mcp_tool(_nada_join, tool_name=_join_tool_name),
+    name=_join_tool_name,
+    description=(
+        "Align two indicators by (ref_area, period) into a single merged table. "
+        "Useful for multi-indicator analysis, scatter plots, or building regression inputs.\n\n"
+        f"Prerequisite: call {_get_schema_tool_name} on both idnos. "
+        "Both indicators should share the same geography type."
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Aggregate — group-level statistics per period
+# ---------------------------------------------------------------------------
+
+
+async def _nada_aggregate(
+    idno: str,
+    ref_areas: list[str] | None = None,
+    from_year: int | None = None,
+    to_year: int | None = None,
+    dimensions: dict[str, str] | None = None,
+) -> AggregateResponse:
+    """Compute group-level statistics (mean, median, total, min, max, std) per period.
+
+    Args:
+        idno: Indicator idno. Required.
+        ref_areas: Ref areas to include in the group (default: all).
+        from_year: Filter to observations from this year.
+        to_year: Filter to observations up to this year.
+        dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
+    """
+    schema_resp = await nada_api.get_indicator_schema(idno)
+    if schema_resp.error or not schema_resp.schema_:
+        return AggregateResponse(idno=idno, error=schema_resp.error or "Schema unavailable")
+    schema = schema_resp.schema_
+
+    data = await nada_api.get_all_timeseries_data(
+        idno,
+        from_year=from_year,
+        to_year=to_year,
+        country_codes=ref_areas,
+        geo_column=schema.geo_column or "COUNTRY_CODE",
+        dimensions=dimensions,
+    )
+    if data.error:
+        return AggregateResponse(idno=idno, geo_column=schema.geo_column,
+                                 obs_column=schema.obs_column, error=data.error)
+
+    try:
+        return analytics.aggregate(data.data, schema, ref_areas=ref_areas, dimensions=dimensions)
+    except ValueError as exc:
+        return AggregateResponse(idno=idno, geo_column=schema.geo_column,
+                                 obs_column=schema.obs_column, error=str(exc))
+
+
+aggregate_tool = mcp.tool(
+    instrument_mcp_tool(_nada_aggregate, tool_name=_aggregate_tool_name),
+    name=_aggregate_tool_name,
+    description=(
+        "Compute group-level statistics (mean, median, total, min, max, std) per period "
+        "for a custom set of ref areas. Returns a time series of aggregate values. "
+        "Useful for regional aggregates, custom groupings, or constructing composite baselines.\n\n"
+        f"Prerequisite: call {_get_schema_tool_name} first."
     ),
 )
