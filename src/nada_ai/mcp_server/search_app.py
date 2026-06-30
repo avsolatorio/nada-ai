@@ -217,7 +217,7 @@ def search_catalog_ui() -> PrefabApp:
                     )
                     with If(STATE.results.has_more):
                         Small(
-                            "Page {{ results.page }} of {{ results.total_count }}",
+                            "Page {{ results.page }} of {{ results.total_pages }}",
                             css_class="text-muted-foreground",
                         )
 

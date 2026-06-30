@@ -19,7 +19,6 @@ from prefab_ui.components import (
     Small,
     Text,
 )
-from prefab_ui.components.charts import ChartSeries, LineChart
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
@@ -41,16 +40,18 @@ async def do_compare(
     """Fetch schema + data and build a pivoted comparison."""
     schema_resp = await nada_api.get_indicator_schema(idno)
     if schema_resp.error or not schema_resp.schema_:
-        return CompareResponse(idno=idno, geo_column="", time_column="", obs_column="",
+        return CompareResponse(idno=idno, geo_column=None, time_column=None, obs_column=None,
                                error=schema_resp.error or "Schema unavailable")
     schema = schema_resp.schema_
     data = await nada_api.get_all_timeseries_data(
-        idno, from_year=from_year, to_year=to_year, country_codes=ref_areas, dimensions=dimensions
+        idno, from_year=from_year, to_year=to_year,
+        country_codes=ref_areas, geo_column=schema.geo_column or "COUNTRY_CODE",
+        dimensions=dimensions,
     )
     if data.error:
-        return CompareResponse(idno=idno, geo_column=schema.geo_column or "",
-                               time_column=schema.time_column or "",
-                               obs_column=schema.obs_column or "", error=data.error)
+        return CompareResponse(idno=idno, geo_column=schema.geo_column,
+                               time_column=schema.time_column,
+                               obs_column=schema.obs_column, error=data.error)
     return analytics.compare(data.data, schema, ref_areas=ref_areas, dimensions=dimensions)
 
 
@@ -93,7 +94,6 @@ def compare_ref_areas(
         ),
     ]
 
-    # Parse comma-separated ref_areas into a list for initial state
     parsed_refs = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else []
 
     with PrefabApp(
@@ -140,40 +140,23 @@ def compare_ref_areas(
             with Column(gap=3):
                 with Row(css_class="items-center gap-2 mb-1 flex-wrap"):
                     Small("{{ result.indicator_name }}", css_class="text-muted-foreground")
-                    # Show ref area labels/codes as badges
-                    # (static series from initial ref_areas; chart legend handles labelling)
                     Text(
                         "{{ result.ref_areas | join(', ') }}",
                         css_class="text-sm text-muted-foreground",
                     )
 
-                # Line chart — series are defined by ref_areas at render time
-                # Each row has period + values.{ref_area}; flatten for chart
-                LineChart(
-                    data="{{ result.rows_flat }}",
-                    series=[
-                        ChartSeries(data_key=ra, label=ra)
-                        for ra in (parsed_refs or ["value"])
-                    ],
-                    x_axis="period",
-                    curve="smooth",
-                    show_dots=False,
-                    value_format="compact",
-                    height=350,
-                )
-
+                # Use unpivoted rows so the table works regardless of which ref_areas were queried
                 DataTable(
                     columns=[
                         DataTableColumn(key="period", header="Period", sortable=True),
-                        *[
-                            DataTableColumn(key=ra, header=ra, sortable=True,
-                                            format="number:2", align="right")
-                            for ra in (parsed_refs or [])
-                        ],
+                        DataTableColumn(key="ref_area", header="Ref Area", sortable=True),
+                        DataTableColumn(key="value", header="Value",
+                                        sortable=True, format="number:2", align="right"),
                     ],
-                    rows="{{ result.rows_flat }}",
+                    rows="{{ result.rows_unpivoted }}",
                     paginated=True,
-                    page_size=15,
+                    page_size=20,
+                    search=True,
                 )
 
     return app
