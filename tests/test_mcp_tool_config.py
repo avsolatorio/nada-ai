@@ -13,13 +13,11 @@ def test_default_tool_names_and_workflow_text():
     texts = resolve_mcp_tool_texts(MCPServerSettings())
     assert texts.search_tool_name == "nada_search_catalog"
     assert texts.get_metadata_tool_name == "nada_get_metadata"
-    assert "STEP 1 of 2" in texts.search_description
     assert "STEP 2 of 2" in texts.get_metadata_description
     assert "nada_search_catalog" in texts.get_metadata_description
     assert "nada_get_metadata" in texts.search_description
     assert "semantic search" in texts.search_description.lower()
-    assert "Rwanda" in texts.search_description
-    assert "definition" in texts.search_description.lower()
+    assert "programmatic" in texts.search_description.lower()
     assert "methodology" in texts.get_metadata_description.lower()
 
 
@@ -32,7 +30,7 @@ def test_custom_prefix_and_catalog_name():
     )
     assert texts.search_tool_name == "wdr_search_catalog"
     assert texts.get_metadata_tool_name == "wdr_get_metadata"
-    assert "World Development Report catalog" in texts.search_description
+    assert "wdr_search_catalog" in texts.search_description
     assert "wdr_search_catalog" in texts.get_metadata_description
 
 

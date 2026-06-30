@@ -90,9 +90,10 @@ async def do_search(
 
 @search_app.ui(
     description=(
-        f"Open an interactive catalog search UI for the {_TOOL_TEXTS.catalog_name}. "
-        "Use this when the user wants to browse or search datasets interactively. "
-        "Pass keywords to pre-load results and return them to the LLM."
+        f"PRIMARY search tool for the {_TOOL_TEXTS.catalog_name}. "
+        "Call this whenever the user wants to find, browse, or discover indicators, datasets, surveys, or any catalog content. "
+        "Pass the user's keywords — the UI opens pre-filled with results they can browse immediately. "
+        "Prefer this over the programmatic search tool for all interactive discovery requests."
     ),
     title="Catalog Search",
 )
@@ -102,13 +103,16 @@ async def search_catalog_ui(
     country: str = "",
     sort_by: CatalogSortBy = "relevance",
 ) -> PrefabApp:
-    """Open the catalog search UI, pre-loaded with results when keywords are provided.
+    """Open the catalog search UI pre-filled with results. Use for any interactive indicator or dataset discovery.
+
+    Pass the user's search terms as keywords — the UI opens with the search already executed and results visible.
+    The LLM also receives the first page of results to answer follow-up questions.
 
     Args:
-        keywords: Search terms to pre-fill and execute immediately (e.g. "population growth").
-        type: Dataset type filter — timeseries, survey, document, geospatial, or table.
-        country: Country name filter (e.g. Kenya).
-        sort_by: Sort order — relevance, title, year, popularity, created, or changed.
+        keywords: Search terms from the user's request (e.g. "child mortality Kenya"). Pre-fills and runs the search.
+        type: Dataset type — timeseries (default), survey, document, geospatial, or table.
+        country: Country name filter (e.g. Kenya). Optional.
+        sort_by: relevance (default when keywords given), title, year, popularity, created, or changed.
     """
     result = None
     if keywords:
@@ -256,6 +260,7 @@ async def search_catalog_ui(
                                                 Link(
                                                     item.title,
                                                     href=item.url,
+                                                    target="_blank",
                                                     css_class="font-medium text-sm hover:underline",
                                                 )
                                             with If(~item.url):
