@@ -46,6 +46,7 @@ from nada_ai.nada.models import (
     CatalogStudyRow,
 )
 from nada_ai.mcp_server.tool_config import get_mcp_tool_texts
+from nada_ai.mcp_server.apps._ui_result import ui_result
 
 _TOOL_TEXTS = get_mcp_tool_texts()
 
@@ -90,17 +91,31 @@ async def do_search(
 @search_app.ui(
     description=(
         f"Open an interactive catalog search UI for the {_TOOL_TEXTS.catalog_name}. "
-        "Use this when the user wants to browse or search datasets interactively."
+        "Use this when the user wants to browse or search datasets interactively. "
+        "Pass keywords to pre-load results and return them to the LLM."
     ),
     title="Catalog Search",
 )
-def search_catalog_ui() -> PrefabApp:
-    """Open the interactive catalog search UI. Call this when the user wants to browse datasets.
+async def search_catalog_ui(
+    keywords: str = "",
+    type: str = "timeseries",
+    country: str = "",
+    sort_by: CatalogSortBy = "relevance",
+) -> PrefabApp:
+    """Open the catalog search UI, pre-loaded with results when keywords are provided.
 
-    No parameters — the UI provides keyword search, type filter, country filter,
-    and year range filters interactively. Use nada_search_catalog instead when you
-    need results programmatically.
+    Args:
+        keywords: Search terms to pre-fill and execute immediately (e.g. "population growth").
+        type: Dataset type filter — timeseries, survey, document, geospatial, or table.
+        country: Country name filter (e.g. Kenya).
+        sort_by: Sort order — relevance, title, year, popularity, created, or changed.
     """
+    result = None
+    if keywords:
+        result = await do_search(
+            keywords=keywords, type=type, country=country,
+            sort_by=sort_by if keywords else "title",
+        )
 
     _TYPE_OPTIONS = [
         ("timeseries", "Timeseries"),
@@ -148,13 +163,13 @@ def search_catalog_ui() -> PrefabApp:
     with PrefabApp(
         title=f"{_TOOL_TEXTS.catalog_name} — Catalog Search",
         state={
-            "keywords": "",
-            "type": "timeseries",
-            "country": "",
-            "sort_by": "relevance",
+            "keywords": keywords,
+            "type": type,
+            "country": country,
+            "sort_by": sort_by,
             "loading": False,
-            "results": None,
-            "error": None,
+            "results": result.model_dump() if result and not result.error else None,
+            "error": result.error if result else None,
         },
         css_class="p-4 max-w-4xl mx-auto",
     ) as app:
@@ -264,4 +279,6 @@ def search_catalog_ui() -> PrefabApp:
                                         with If(item.idno):
                                             Small(item.idno, css_class="text-muted-foreground font-mono")
 
-    return app
+    return ui_result(app, app_name="CatalogSearch", result=result,
+                     params={"keywords": keywords or None, "type": type,
+                             "country": country or None, "sort_by": sort_by})

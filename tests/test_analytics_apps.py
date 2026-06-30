@@ -22,10 +22,11 @@ def _get_json(app):
 # search_app
 # ---------------------------------------------------------------------------
 
-def test_search_app_renders():
+@pytest.mark.asyncio
+async def test_search_app_renders():
     from nada_ai.mcp_server.search_app import search_catalog_ui
 
-    app = search_catalog_ui()
+    app = await search_catalog_ui()
     assert isinstance(app, PrefabApp)
     d = app.to_json()
     assert "state" in d
