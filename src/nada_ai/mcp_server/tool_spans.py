@@ -16,6 +16,16 @@ _tracer = trace.get_tracer("nada.mcp.tools")
 _logger = logging.getLogger(__name__)
 
 
+def _bind_arguments(fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Return a complete {param_name: value} mapping for a call, including positional args."""
+    try:
+        bound = inspect.signature(fn).bind(*args, **kwargs)
+        bound.apply_defaults()
+        return dict(bound.arguments)
+    except TypeError:
+        return dict(kwargs)
+
+
 def instrument_mcp_tool(fn: Callable[..., Any], *, tool_name: str) -> Callable[..., Any]:
     """Wrap a tool function: validate security, then run under an OTel span."""
     if inspect.iscoroutinefunction(fn):
@@ -23,7 +33,7 @@ def instrument_mcp_tool(fn: Callable[..., Any], *, tool_name: str) -> Callable[.
 
         @functools.wraps(fn_async)
         async def _async_impl(*args: Any, **kwargs: Any) -> Any:
-            is_valid, error_msg = validate_tool_call(tool_name, kwargs)
+            is_valid, error_msg = validate_tool_call(tool_name, _bind_arguments(fn_async, args, kwargs))
             if not is_valid:
                 _logger.warning("Security validation failed for %s: %s", tool_name, error_msg)
                 raise ValueError(f"Security validation failed: {error_msg}")
@@ -39,7 +49,7 @@ def instrument_mcp_tool(fn: Callable[..., Any], *, tool_name: str) -> Callable[.
 
     @functools.wraps(fn_sync)
     def _sync_impl(*args: Any, **kwargs: Any) -> Any:
-        is_valid, error_msg = validate_tool_call(tool_name, kwargs)
+        is_valid, error_msg = validate_tool_call(tool_name, _bind_arguments(fn_sync, args, kwargs))
         if not is_valid:
             _logger.warning("Security validation failed for %s: %s", tool_name, error_msg)
             raise ValueError(f"Security validation failed: {error_msg}")

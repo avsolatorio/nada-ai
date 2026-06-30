@@ -514,7 +514,7 @@ def _linear_regression(xs: list[float], ys: list[float]) -> tuple[float, float, 
         return (0.0, y_mean, 0.0)
     slope = ss_xy / ss_xx
     intercept = y_mean - slope * x_mean
-    r_squared = (ss_xy ** 2 / (ss_xx * ss_yy)) if ss_yy > 0 else 1.0
+    r_squared = (ss_xy ** 2 / (ss_xx * ss_yy)) if ss_yy > 0 else 0.0
     return (slope, intercept, r_squared)
 
 
