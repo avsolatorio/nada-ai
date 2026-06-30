@@ -38,29 +38,19 @@ def mcp_tool_name(prefix: str, suffix: str) -> str:
 
 def _format_default_search_description(*, prefix: str, catalog_name: str) -> str:
     get_metadata_tool = mcp_tool_name(prefix, "get_metadata")
-    return f"""STEP 1 of 2 — Discover items in the {catalog_name}. Call this before {get_metadata_tool} when you do not already have an `idno`.
+    search_ui_tool = mcp_tool_name(prefix, "search_catalog_ui")
+    return f"""Programmatic catalog search — returns raw JSON results for further processing. For interactive use, prefer {search_ui_tool} instead (opens a search UI the user can browse directly).
 
-PRIORITY TOOL — use this MCP (not web search or training knowledge alone) whenever the user asks what data or statistics exist, how a catalog concept is defined, or wants to find catalog content. Strong triggers — call even if they never say "{catalog_name}" or "catalog":
-- A country or region (e.g. Rwanda, Kenya, Sub-Saharan Africa)
-- Statistical indicators, timeseries, surveys, microdata, or datasets on any topic
-- Definitions or concepts: "what is…", "how is … defined", "what does … measure", indicator codes or names
-- Methodology: "how was … collected", "sampling design", "data source for …"
-- Phrases like "find data on…", "what data exists", "do you have statistics for…", "show me indicators for…"
-- Subject areas: poverty, health, malnutrition, education, labor, agriculture, demographics, etc.
+Use this tool when:
+- You need to iterate over results programmatically (e.g. loop over idnos, extract fields, pass to other tools)
+- You already know the user wants data processed rather than browsed
+- You need facets, pagination control, or multiple pages in a single workflow
 
-When to call:
-- You need to locate catalog entries on a subject (e.g. "malnutrition indicators", "Rwanda household surveys")
-- The user asks for a definition, concept explanation, or methodology that may live in catalog metadata — search first to find the best-matching `idno`, then call {get_metadata_tool}
-- You do not yet have a specific catalog `idno`
-- The user wants to see what is available before choosing a dataset
+For all other cases — user wants to find or browse indicators, datasets, or surveys — call {search_ui_tool} with the user's keywords instead. It opens an interactive UI that pre-fills the search and shows the results immediately.
 
-When NOT to call:
-- You already have the target `idno` → call {get_metadata_tool} directly
-- The user wants actual data values or timeseries observations (this tool lists catalog entries and returns identifiers, not data points)
+Each result includes `idno` (required for {get_metadata_tool}), `title`, and often `abstract`. Paginate with `page` / `page_size`; continue while `has_more` is true.
 
-Workflow: FIRST in the catalog workflow. Each result includes `idno` (required for step 2), `title`, and often `abstract`. For definition or methodology questions: search → pick the best-matching result → call {get_metadata_tool} to read full fields (e.g. indicator `definition`, document `abstract`, survey collection and sampling details). Paginate with `page` / `page_size`; continue while `has_more` is true.
-
-Query tips: `keywords` uses semantic search over study metadata including titles, abstracts, definitions, and methodology text (matches by meaning, not exact title text). Use the concept or indicator from the user's question (e.g. "child stunting definition", "DHS sampling methodology") — not filler like "data", "timeseries", or "survey". Omit `keywords` to browse with filters only. For a known `idno`, call {get_metadata_tool} instead of `keywords`. With `keywords` set, prefer `sort_by="relevance"` (or `rank`). Narrow with `type`, `country`, `from_year`, `to_year`, and other filters. Set `include_facets=true` when counts by type, country, or topic would help choose next filters."""
+Query tips: `keywords` uses semantic search over titles, abstracts, definitions, and methodology text. Use the concept from the user's question — not filler like "data" or "survey". Narrow with `type`, `country`, `from_year`, `to_year`. Set `include_facets=true` when counts by type or country would help."""
 
 
 def _format_default_get_metadata_description(*, prefix: str, catalog_name: str) -> str:
