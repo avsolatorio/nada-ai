@@ -44,6 +44,7 @@ dev = [
     "sentence-transformers>=5.4.1",
     "fastembed>=0.4.0,<0.7",
     "qdrant-client>=1.18.0,<2",
+    "pytest-asyncio>=1.4.0",
 ]
 
 [tool.hatch.build.targets.wheel]
