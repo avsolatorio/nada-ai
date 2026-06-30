@@ -7,7 +7,7 @@ from metadataschemas.geospatial_schema import GeospatialSchema
 from metadataschemas.indicator_schema import TimeseriesSchema
 from metadataschemas.microdata_schema import MicrodataSchema
 from metadataschemas.table_schema import Model as TableSchema
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 class MCPPagedResponse(BaseModel):
@@ -193,6 +193,7 @@ class CatalogSearchResponse(MCPPagedResponse):
     """Response model for NADA catalog search."""
 
     items: list[CatalogStudyRow] = Field(default_factory=list)
+    total_pages: int | None = Field(default=None, description="Total number of pages")
     search_counts_by_type: dict[str, str] | None = None
     facets: dict[str, Any] | None = None
     params: dict[str, Any] | None = None
@@ -530,9 +531,9 @@ class RankResponse(BaseModel):
     period: str
     n: int
     ascending: bool
-    geo_column: str
-    time_column: str
-    obs_column: str
+    geo_column: str | None
+    time_column: str | None
+    obs_column: str | None
     dimensions_applied: dict[str, str] = Field(default_factory=dict)
     rows: list[RankRow] = Field(default_factory=list)
     total_ref_areas: int = Field(default=0, description="Total ref areas with data for this period")
@@ -553,9 +554,9 @@ class ExtremesResponse(BaseModel):
 
     idno: str
     indicator_name: str | None = None
-    geo_column: str
-    time_column: str
-    obs_column: str
+    geo_column: str | None
+    time_column: str | None
+    obs_column: str | None
     dimensions_applied: dict[str, str] = Field(default_factory=dict)
     maximum: ExtremePoint | None = None
     minimum: ExtremePoint | None = None
@@ -577,12 +578,31 @@ class CompareResponse(BaseModel):
     indicator_name: str | None = None
     ref_areas: list[str] = Field(default_factory=list)
     ref_area_labels: dict[str, str] = Field(default_factory=dict)
-    geo_column: str
-    time_column: str
-    obs_column: str
+    geo_column: str | None
+    time_column: str | None
+    obs_column: str | None
     dimensions_applied: dict[str, str] = Field(default_factory=dict)
     rows: list[CompareRow] = Field(default_factory=list)
     error: str | None = None
+
+    @computed_field
+    @property
+    def rows_flat(self) -> list[dict[str, Any]]:
+        """Pivot rows as flat dicts: {period, ref_area_1: val, ref_area_2: val, ...}."""
+        return [
+            {"period": row.period, **{k: v for k, v in row.values.items()}}
+            for row in self.rows
+        ]
+
+    @computed_field
+    @property
+    def rows_unpivoted(self) -> list[dict[str, Any]]:
+        """Unpivoted rows: one dict per (period, ref_area) pair with keys period/ref_area/value."""
+        result = []
+        for row in self.rows:
+            for ref_area, value in row.values.items():
+                result.append({"period": row.period, "ref_area": ref_area, "value": value})
+        return result
 
 
 class SummaryStats(BaseModel):
@@ -604,8 +624,8 @@ class SummarizeResponse(BaseModel):
     idno: str
     indicator_name: str | None = None
     period: str
-    geo_column: str
-    obs_column: str
+    geo_column: str | None
+    obs_column: str | None
     dimensions_applied: dict[str, str] = Field(default_factory=dict)
     stats: SummaryStats = Field(default_factory=SummaryStats)
     error: str | None = None
@@ -629,8 +649,8 @@ class GrowthResponse(BaseModel):
     indicator_name: str | None = None
     base_period: str
     end_period: str
-    geo_column: str
-    obs_column: str
+    geo_column: str | None
+    obs_column: str | None
     dimensions_applied: dict[str, str] = Field(default_factory=dict)
     rows: list[GrowthRow] = Field(default_factory=list)
     error: str | None = None

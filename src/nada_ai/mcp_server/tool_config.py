@@ -124,6 +124,11 @@ def get_mcp_tool_texts() -> MCPToolTexts:
     return resolve_mcp_tool_texts()
 
 
+def clear_tool_texts_cache() -> None:
+    """Clear cached MCPToolTexts. Call after changing MCP_TOOL_PREFIX in tests."""
+    get_mcp_tool_texts.cache_clear()
+
+
 def is_allowed_mcp_tool_name(tool_name: str, *, prefix: str | None = None) -> bool:
     active_prefix = normalize_tool_prefix(prefix or get_mcp_server_settings().tool_prefix)
     return tool_name.startswith(f"{active_prefix}_")

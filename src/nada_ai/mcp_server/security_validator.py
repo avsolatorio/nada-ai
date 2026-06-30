@@ -28,11 +28,10 @@ PROMPT_INJECTION_PATTERNS = [
     r"pretend\s+to\s+be",
     r"you\s+are\s+(a\s+)?developer",
     r"you\s+are\s+(a\s+)?admin",
-    # Multi-tool chaining attempts
-    r"\bthen\s+(call|execute|run)\b",
-    r"after\s+that,?\s+(call|execute|run)",
-    r"next,?\s+(call|execute|run)",
-    r"and\s+then\s+(call|execute|run)",
+    # Explicit tool invocation chaining (not generic analytical English)
+    r"\bthen\s+(call|execute|run)\s+(the\s+)?(tool|function|api|endpoint)\b",
+    r"after\s+that,?\s+(call|execute|run)\s+(the\s+)?(tool|function|api|endpoint)",
+    r"next,?\s+(call|execute|run)\s+(the\s+)?(tool|function|api|endpoint)",
     # System/internal method access
     r"__\w+__",  # Dunder methods
     r"(?:^|[^\w])\.system\b",

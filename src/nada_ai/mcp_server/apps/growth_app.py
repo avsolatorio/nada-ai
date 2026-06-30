@@ -40,15 +40,17 @@ async def do_growth(
     schema_resp = await nada_api.get_indicator_schema(idno)
     if schema_resp.error or not schema_resp.schema_:
         return GrowthResponse(idno=idno, base_period=base_period, end_period=end_period,
-                              geo_column="", obs_column="",
+                              geo_column=None, obs_column=None,
                               error=schema_resp.error or "Schema unavailable")
     schema = schema_resp.schema_
     data = await nada_api.get_all_timeseries_data(
-        idno, country_codes=ref_areas, dimensions=dimensions
+        idno, country_codes=ref_areas,
+        geo_column=schema.geo_column or "COUNTRY_CODE",
+        dimensions=dimensions,
     )
     if data.error:
         return GrowthResponse(idno=idno, base_period=base_period, end_period=end_period,
-                              geo_column=schema.geo_column or "", obs_column=schema.obs_column or "",
+                              geo_column=schema.geo_column, obs_column=schema.obs_column,
                               error=data.error)
     return analytics.growth(data.data, schema, ref_areas=ref_areas,
                             base_period=base_period, end_period=end_period, dimensions=dimensions)

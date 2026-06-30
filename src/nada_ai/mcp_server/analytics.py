@@ -12,9 +12,12 @@ so they are straightforward to unit-test.
 
 from __future__ import annotations
 
+import logging
 import math
 import statistics
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 from nada_ai.nada.models import (
     CompareResponse,
@@ -100,13 +103,9 @@ def _label_map(
 def _indicator_name(rows: list[TimeseriesDataRow]) -> str | None:
     """Extract the indicator name from the first row that has it."""
     for row in rows:
-        # Standard WDI column; generalise via model_extra fallback
-        name = getattr(row, "INDICATOR_NAME", None)
+        name = row.INDICATOR_NAME or (row.model_extra or {}).get("INDICATOR_NAME")
         if name:
             return str(name)
-        extra_name = (row.model_extra or {}).get("INDICATOR_NAME")
-        if extra_name:
-            return str(extra_name)
     return None
 
 
@@ -166,12 +165,18 @@ def rank(
     label_col = _label_column_for(schema, geo_col)
     labels = _label_map(period_rows, geo_col, label_col)
 
+    # Deduplicate: for disaggregated indicators, multiple rows may share the same ref_area.
+    # Use the first value seen (caller should pass dimensions= to pre-filter).
     valued: list[tuple[str, float]] = []
+    seen_refs: set[str] = set()
     for row in period_rows:
         ref = _row_value(row, geo_col)
         val = _parse_obs(_row_value(row, obs_col))
         if ref is not None and val is not None:
-            valued.append((str(ref), val))
+            ref_str = str(ref)
+            if ref_str not in seen_refs:
+                seen_refs.add(ref_str)
+                valued.append((ref_str, val))
 
     valued.sort(key=lambda x: x[1], reverse=not ascending)
     total = len(valued)
@@ -287,12 +292,21 @@ def compare(
     relevant = [r for r in filtered if str(_row_value(r, geo_col) or "") in ref_set]
 
     # Pivot: {period: {ref_area: value}}
+    # For disaggregated indicators (no dimensions filter applied), the same ref_area
+    # may appear multiple times in a period. Log a warning and skip duplicates.
     pivot: dict[str, dict[str, float | None]] = {}
     for row in relevant:
         ref = str(_row_value(row, geo_col) or "")
         period = str(_row_value(row, time_col) or "")
         val = _parse_obs(_row_value(row, obs_col))
-        pivot.setdefault(period, {})[ref] = val
+        period_pivot = pivot.setdefault(period, {})
+        if ref in period_pivot:
+            _logger.debug(
+                "compare: duplicate ref_area '%s' for period '%s' — "
+                "pass dimensions= to filter disaggregated indicators", ref, period
+            )
+        else:
+            period_pivot[ref] = val
 
     compare_rows = [
         CompareRow(period=period, values={ra: pivot[period].get(ra) for ra in ref_areas})
@@ -425,7 +439,7 @@ def growth(
         base_val = index.get((ref, base_period))
         end_val = index.get((ref, end_period))
         abs_change = (end_val - base_val) if (end_val is not None and base_val is not None) else None
-        pct = (abs_change / abs(base_val) * 100) if (abs_change is not None and base_val and base_val != 0) else None
+        pct = (abs_change / abs(base_val) * 100) if (abs_change is not None and base_val) else None
         growth_rows.append(GrowthRow(
             ref_area=ref,
             ref_area_label=labels.get(ref),
