@@ -38,6 +38,8 @@ async def do_rank(
     period: str,
     n: int = 10,
     ascending: bool = False,
+    from_year: int | None = None,
+    to_year: int | None = None,
     dimensions: dict[str, str] | None = None,
 ) -> RankResponse:
     """Fetch schema + data and compute ranked ref areas."""
@@ -47,7 +49,7 @@ async def do_rank(
                             geo_column=None, time_column=None, obs_column=None,
                             error=schema_resp.error or "Schema unavailable")
     schema = schema_resp.schema_
-    data = await nada_api.get_all_timeseries_data(idno, dimensions=dimensions)
+    data = await nada_api.get_all_timeseries_data(idno, from_year=from_year, to_year=to_year, dimensions=dimensions)
     if data.error:
         return RankResponse(idno=idno, period=period, n=n, ascending=ascending,
                             geo_column=schema.geo_column, time_column=schema.time_column,

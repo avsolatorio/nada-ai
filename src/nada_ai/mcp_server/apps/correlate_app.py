@@ -36,6 +36,8 @@ async def do_correlate(
     idno1: str,
     idno2: str,
     period: str,
+    from_year: int | None = None,
+    to_year: int | None = None,
     dimensions1: dict[str, str] | None = None,
     dimensions2: dict[str, str] | None = None,
 ) -> CorrelateResponse:
@@ -52,8 +54,8 @@ async def do_correlate(
                                  error=schema2_resp.error or "Schema unavailable for idno2")
 
     data1, data2 = await asyncio.gather(
-        nada_api.get_all_timeseries_data(idno1, dimensions=dimensions1),
-        nada_api.get_all_timeseries_data(idno2, dimensions=dimensions2),
+        nada_api.get_all_timeseries_data(idno1, from_year=from_year, to_year=to_year, dimensions=dimensions1),
+        nada_api.get_all_timeseries_data(idno2, from_year=from_year, to_year=to_year, dimensions=dimensions2),
     )
     if data1.error:
         return CorrelateResponse(idno1=idno1, idno2=idno2, period=period, error=data1.error)
