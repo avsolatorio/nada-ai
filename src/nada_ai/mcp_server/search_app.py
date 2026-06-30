@@ -19,6 +19,7 @@ from prefab_ui.components import (
     CardHeader,
     CardTitle,
     Column,
+    Div,
     ForEach,
     H3,
     If,
@@ -94,7 +95,12 @@ async def do_search(
     title="Catalog Search",
 )
 def search_catalog_ui() -> PrefabApp:
-    """Render the interactive catalog search interface."""
+    """Open the interactive catalog search UI. Call this when the user wants to browse datasets.
+
+    No parameters — the UI provides keyword search, type filter, country filter,
+    and year range filters interactively. Use nada_search_catalog instead when you
+    need results programmatically.
+    """
 
     _TYPE_OPTIONS = [
         ("timeseries", "Timeseries"),
@@ -223,38 +229,39 @@ def search_catalog_ui() -> PrefabApp:
 
                 Separator()
 
-                # Result cards
-                with ForEach("results.items") as (idx, item):
-                    with Card(css_class="hover:bg-muted/30 transition-colors"):
-                        with CardContent(css_class="pt-3 pb-3"):
-                            with Column(gap=1):
-                                with Row(css_class="items-start justify-between gap-2"):
-                                    with Column(css_class="flex-1", gap=0):
-                                        with If(item.url):
-                                            Link(
-                                                item.title,
-                                                href=item.url,
-                                                css_class="font-medium text-sm hover:underline",
-                                            )
-                                        with If(~item.url):
-                                            Text(item.title, css_class="font-medium text-sm")
-                                    Badge(item.type, css_class="shrink-0 text-xs")
+                # Result cards — scrollable container capped at ~5 visible cards
+                with Div(css_class="overflow-y-auto max-h-[480px] flex flex-col gap-2 pr-1"):
+                    with ForEach("results.items") as (idx, item):
+                        with Card(css_class="hover:bg-muted/30 transition-colors shrink-0"):
+                            with CardContent(css_class="pt-3 pb-3"):
+                                with Column(gap=1):
+                                    with Row(css_class="items-start justify-between gap-2"):
+                                        with Column(css_class="flex-1", gap=0):
+                                            with If(item.url):
+                                                Link(
+                                                    item.title,
+                                                    href=item.url,
+                                                    css_class="font-medium text-sm hover:underline",
+                                                )
+                                            with If(~item.url):
+                                                Text(item.title, css_class="font-medium text-sm")
+                                        Badge(item.type, css_class="shrink-0 text-xs")
 
-                                with If(item.abstract):
-                                    Muted(
-                                        item.abstract,
-                                        css_class="text-xs line-clamp-2",
-                                    )
-
-                                with Row(gap=2, css_class="flex-wrap"):
-                                    with If(item.nation):
-                                        Small(item.nation, css_class="text-muted-foreground")
-                                    with If(item.year_start):
-                                        Small(
-                                            "{{ item.year_start }}–{{ item.year_end }}",
-                                            css_class="text-muted-foreground",
+                                    with If(item.abstract):
+                                        Muted(
+                                            item.abstract,
+                                            css_class="text-xs line-clamp-2",
                                         )
-                                    with If(item.idno):
-                                        Small(item.idno, css_class="text-muted-foreground font-mono")
+
+                                    with Row(gap=2, css_class="flex-wrap"):
+                                        with If(item.nation):
+                                            Small(item.nation, css_class="text-muted-foreground")
+                                        with If(item.year_start):
+                                            Small(
+                                                "{{ item.year_start }}–{{ item.year_end }}",
+                                                css_class="text-muted-foreground",
+                                            )
+                                        with If(item.idno):
+                                            Small(item.idno, css_class="text-muted-foreground font-mono")
 
     return app
