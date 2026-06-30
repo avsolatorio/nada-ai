@@ -360,3 +360,39 @@ class CatalogMetadataResponse(BaseModel):
         description="Catalog study payload when the request succeeds",
     )
     error: str | None = Field(default=None, description="Error message when the request fails")
+
+
+# ---------------------------------------------------------------------------
+# Timeseries data API  (/api/timeseries/data/{idno})
+# ---------------------------------------------------------------------------
+
+
+class TimeseriesDataRow(BaseModel):
+    """One observation row from the timeseries data API."""
+
+    model_config = ConfigDict(extra="allow")
+
+    DATASET: str | None = None
+    INDICATOR: str | None = None
+    INDICATOR_NAME: str | None = None
+    COUNTRY_CODE: str | None = None
+    COUNTRY_NAME: str | None = None
+    ISO3C: str | None = None
+    FREQ: str | None = None
+    TIME_PERIOD: str | None = None
+    OBS_VALUE: str | float | None = None
+    CELL_NOTE: str | None = None
+    reporting_year: int | None = None
+
+
+class TimeseriesDataResponse(BaseModel):
+    """Response model for the timeseries data API."""
+
+    idno: str = Field(description="Indicator idno that was queried")
+    data: list[TimeseriesDataRow] = Field(default_factory=list)
+    total: int = Field(default=0, description="Total matching observations")
+    found: int = Field(default=0, description="Observations returned in this page")
+    limit: int = Field(default=0, description="Requested page size")
+    offset: int = Field(default=0, description="Pagination offset used")
+    has_more: bool = Field(default=False, description="Whether more rows are available")
+    error: str | None = Field(default=None, description="Error message if the request failed")
