@@ -654,3 +654,220 @@ class GrowthResponse(BaseModel):
     dimensions_applied: dict[str, str] = Field(default_factory=dict)
     rows: list[GrowthRow] = Field(default_factory=list)
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Correlation
+# ---------------------------------------------------------------------------
+
+
+class CorrelatePoint(BaseModel):
+    """One ref area in a cross-indicator correlation scatter."""
+
+    ref_area: str
+    ref_area_label: str | None = None
+    value1: float | None = None
+    value2: float | None = None
+
+
+class CorrelateResponse(BaseModel):
+    """Result of nada_correlate — Pearson r between two indicators for a period."""
+
+    idno1: str
+    idno2: str
+    indicator_name1: str | None = None
+    indicator_name2: str | None = None
+    period: str
+    geo_column: str | None = None
+    n: int = 0
+    pearson_r: float | None = None
+    rows: list[CorrelatePoint] = Field(default_factory=list)
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Outliers
+# ---------------------------------------------------------------------------
+
+
+class OutlierRow(BaseModel):
+    """One ref area with its Z-score and outlier flag."""
+
+    ref_area: str
+    ref_area_label: str | None = None
+    value: float
+    z_score: float
+    is_outlier: bool
+
+
+class OutliersResponse(BaseModel):
+    """Result of nada_outliers — Z-score outlier detection for a period."""
+
+    idno: str
+    indicator_name: str | None = None
+    period: str
+    geo_column: str | None = None
+    obs_column: str | None = None
+    threshold: float = 2.0
+    peer_mean: float | None = None
+    peer_std: float | None = None
+    n_outliers: int = 0
+    dimensions_applied: dict[str, str] = Field(default_factory=dict)
+    rows: list[OutlierRow] = Field(default_factory=list)
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Trend
+# ---------------------------------------------------------------------------
+
+
+class TrendRow(BaseModel):
+    """Linear trend for one ref area over a time window."""
+
+    ref_area: str
+    ref_area_label: str | None = None
+    slope: float | None = None
+    intercept: float | None = None
+    r_squared: float | None = None
+    n_periods: int = 0
+    first_period: str | None = None
+    last_period: str | None = None
+    direction: str | None = None  # "improving", "declining", "stable"
+
+
+class TrendResponse(BaseModel):
+    """Result of nada_trend — linear regression per ref area."""
+
+    idno: str
+    indicator_name: str | None = None
+    geo_column: str | None = None
+    obs_column: str | None = None
+    dimensions_applied: dict[str, str] = Field(default_factory=dict)
+    rows: list[TrendRow] = Field(default_factory=list)
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Benchmark
+# ---------------------------------------------------------------------------
+
+
+class BenchmarkRow(BaseModel):
+    """Benchmark result for one ref area against a peer group."""
+
+    ref_area: str
+    ref_area_label: str | None = None
+    value: float | None = None
+    percentile_rank: float | None = None
+    z_score: float | None = None
+    vs_mean: float | None = None
+    vs_median: float | None = None
+
+
+class BenchmarkResponse(BaseModel):
+    """Result of nada_benchmark — ref area(s) vs peer group for a period."""
+
+    idno: str
+    indicator_name: str | None = None
+    period: str
+    geo_column: str | None = None
+    obs_column: str | None = None
+    peer_count: int = 0
+    peer_mean: float | None = None
+    peer_median: float | None = None
+    peer_std: float | None = None
+    dimensions_applied: dict[str, str] = Field(default_factory=dict)
+    rows: list[BenchmarkRow] = Field(default_factory=list)
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+
+
+class CoverageSummary(BaseModel):
+    """Data coverage summary for one ref area."""
+
+    ref_area: str
+    ref_area_label: str | None = None
+    n_periods: int = 0
+    first_period: str | None = None
+    last_period: str | None = None
+    coverage_pct: float | None = None
+
+
+class CoverageResponse(BaseModel):
+    """Result of nada_coverage — data availability per ref area."""
+
+    idno: str
+    indicator_name: str | None = None
+    geo_column: str | None = None
+    time_column: str | None = None
+    total_periods: int = 0
+    total_ref_areas: int = 0
+    dimensions_applied: dict[str, str] = Field(default_factory=dict)
+    rows: list[CoverageSummary] = Field(default_factory=list)
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Join (cross-indicator)
+# ---------------------------------------------------------------------------
+
+
+class JoinRow(BaseModel):
+    """One aligned observation from two indicators."""
+
+    ref_area: str
+    ref_area_label: str | None = None
+    period: str
+    value1: float | None = None
+    value2: float | None = None
+
+
+class JoinResponse(BaseModel):
+    """Result of nada_join — row-aligned merge of two indicators."""
+
+    idno1: str
+    idno2: str
+    indicator_name1: str | None = None
+    indicator_name2: str | None = None
+    geo_column: str | None = None
+    n_matched: int = 0
+    dimensions_applied1: dict[str, str] = Field(default_factory=dict)
+    dimensions_applied2: dict[str, str] = Field(default_factory=dict)
+    rows: list[JoinRow] = Field(default_factory=list)
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Aggregate (group aggregation)
+# ---------------------------------------------------------------------------
+
+
+class AggregateRow(BaseModel):
+    """Aggregate statistics across a group of ref areas for one period."""
+
+    period: str
+    n_ref_areas: int = 0
+    mean: float | None = None
+    median: float | None = None
+    total: float | None = None
+    min_value: float | None = None
+    max_value: float | None = None
+    std: float | None = None
+
+
+class AggregateResponse(BaseModel):
+    """Result of nada_aggregate — group-level statistics per period."""
+
+    idno: str
+    indicator_name: str | None = None
+    ref_areas: list[str] = Field(default_factory=list)
+    geo_column: str | None = None
+    obs_column: str | None = None
+    dimensions_applied: dict[str, str] = Field(default_factory=dict)
+    rows: list[AggregateRow] = Field(default_factory=list)
+    error: str | None = None
