@@ -12,6 +12,7 @@ from nada_ai.nada.models import (
     CatalogSearchResponse,
     CatalogSortBy,
     CatalogSortOrder,
+    TimeseriesDataResponse,
 )
 
 from ._server_definition import mcp
@@ -120,6 +121,45 @@ def _get_metadata(idno: str) -> CatalogMetadataResponse:
     return nada_api.get_metadata(idno)
 
 
+async def _get_timeseries_data(
+    idno: str,
+    limit: int = 100,
+    offset: int = 0,
+    from_year: int | None = None,
+    to_year: int | None = None,
+    country_codes: list[str] | None = None,
+    sort_by: str | None = None,
+    sort: str | None = None,
+) -> TimeseriesDataResponse:
+    """Fetch observation rows for a timeseries indicator (step 3 of the catalog workflow).
+
+    Use after get_metadata to retrieve actual data values for a known indicator idno.
+    Returns paged observation rows with country, year, and numeric value columns.
+
+    Args:
+        idno: Indicator idno from a prior search or metadata result (e.g. ``VC.IHR.PSRC.P5``). Required.
+        limit: Maximum rows to return per request (default 100, server may cap lower).
+        offset: Pagination offset for subsequent pages.
+        from_year: Filter to observations from this reporting year (inclusive).
+        to_year: Filter to observations up to this reporting year (inclusive).
+        country_codes: ISO3 country codes to filter on (e.g. ``["KEN", "UGA", "TZA"]``).
+        sort_by: Column to sort by (e.g. ``OBS_VALUE``, ``TIME_PERIOD``, ``COUNTRY_CODE``).
+        sort: Sort direction — ``asc`` or ``desc``.
+    """
+    return await nada_api.get_timeseries_data(
+        idno,
+        limit=limit,
+        offset=offset,
+        from_year=from_year,
+        to_year=to_year,
+        country_codes=country_codes,
+        sort_by=sort_by,
+        sort=sort,
+    )
+
+
+_get_data_tool_name = _TOOL_TEXTS.prefix + "_get_data"
+
 search_catalog = mcp.tool(
     instrument_mcp_tool(_search_catalog, tool_name=_TOOL_TEXTS.search_tool_name),
     name=_TOOL_TEXTS.search_tool_name,
@@ -130,4 +170,19 @@ get_metadata = mcp.tool(
     instrument_mcp_tool(_get_metadata, tool_name=_TOOL_TEXTS.get_metadata_tool_name),
     name=_TOOL_TEXTS.get_metadata_tool_name,
     description=_TOOL_TEXTS.get_metadata_description,
+)
+
+get_data = mcp.tool(
+    instrument_mcp_tool(_get_timeseries_data, tool_name=_get_data_tool_name),
+    name=_get_data_tool_name,
+    description=(
+        f"STEP 3 — Fetch actual observation data for a timeseries indicator. "
+        f"Requires an `idno` from a prior {_TOOL_TEXTS.search_tool_name} or "
+        f"{_TOOL_TEXTS.get_metadata_tool_name} result.\n\n"
+        "Returns paged rows, each with COUNTRY_CODE, COUNTRY_NAME, TIME_PERIOD, and OBS_VALUE. "
+        "Use `from_year`/`to_year` to narrow the time range, `country_codes` for specific countries, "
+        "and `sort_by`/`sort` to order results (e.g. sort_by='OBS_VALUE', sort='desc' for top values). "
+        "Paginate with `limit`/`offset` when `has_more` is true. "
+        "Call this only for timeseries-type indicators; it will error for surveys, documents, or geospatial entries."
+    ),
 )
