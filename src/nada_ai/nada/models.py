@@ -691,35 +691,39 @@ class CorrelateResponse(BaseModel):
 
 
 class OutlierRow(BaseModel):
-    """One observation with its Z-score and outlier flag.
+    """One observation with its score and outlier flag.
 
     In cross-section mode ``ref_area`` is set and ``period`` is None.
     In longitudinal mode ``period`` is set and ``ref_area`` is None.
+    ``trend_value`` is only set in ``trend_residual`` method (LOWESS fitted value).
     """
 
     ref_area: str | None = None
     ref_area_label: str | None = None
     period: str | None = None
     value: float
+    trend_value: float | None = None
+    residual: float | None = None
     z_score: float
     is_outlier: bool
 
 
 class OutliersResponse(BaseModel):
-    """Result of nada_outliers — Z-score outlier detection.
+    """Result of nada_outliers — outlier detection.
 
-    ``mode`` is ``"cross_section"`` (outliers across ref areas for a fixed period)
-    or ``"longitudinal"`` (outliers across time for a fixed ref area).
+    ``mode``: ``"cross_section"`` or ``"longitudinal"``.
+    ``method``: ``"modified_zscore"``, ``"iqr"``, or ``"trend_residual"``.
     """
 
     idno: str
     indicator_name: str | None = None
     mode: str = "cross_section"
+    method: str = "modified_zscore"
     period: str | None = None
     ref_area: str | None = None
     geo_column: str | None = None
     obs_column: str | None = None
-    threshold: float = 2.0
+    threshold: float = 3.5
     peer_mean: float | None = None
     peer_std: float | None = None
     n_outliers: int = 0

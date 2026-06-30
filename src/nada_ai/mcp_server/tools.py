@@ -637,38 +637,50 @@ async def _nada_outliers(
     idno: str,
     period: str | None = None,
     ref_area: str | None = None,
-    threshold: float = 2.0,
+    method: str = "modified_zscore",
+    threshold: float | None = None,
     from_year: int | None = None,
     to_year: int | None = None,
     dimensions: dict[str, str] | None = None,
 ) -> OutliersResponse:
-    """Detect Z-score outliers for a timeseries indicator.
+    """Detect outliers for a timeseries indicator using robust statistical methods.
 
-    Two modes — supply exactly one of ``period`` or ``ref_area``:
+    Supply exactly one of ``period`` or ``ref_area`` to choose the analysis mode:
 
-    - **Cross-section** (``period`` supplied): ranks all ref areas by how far
-      they deviate from the peer group in that one time period.
-    - **Longitudinal** (``ref_area`` supplied): ranks all time periods for that
-      single ref area to detect unusual years in its own history.
+    - **Cross-section** (``period``): ranks all ref areas by deviation from peers in
+      that period.
+    - **Longitudinal** (``ref_area``): ranks all time periods for that ref area to
+      detect unusual years in its own history.
+
+    **Methods**:
+
+    - ``"modified_zscore"`` *(default)*: MAD-based modified Z-score — more robust than
+      plain Z-score because outliers don't inflate the spread. Default threshold 3.5.
+    - ``"iqr"``: Tukey fences — flags anything beyond Q1 − 1.5·IQR or Q3 + 1.5·IQR.
+      Default threshold 0 (any point outside the fence).
+    - ``"trend_residual"`` *(longitudinal only)*: fits a LOWESS smooth trend and applies
+      modified Z-score on residuals. Detects years unusual *relative to the trend*
+      rather than the overall level. Falls back to ``modified_zscore`` for cross-section.
 
     Args:
         idno: Indicator idno. Required.
-        period: Time period to analyse in cross-section mode (e.g. ``"2022"``).
-        ref_area: Ref area code to analyse in longitudinal mode (e.g. ``"KEN"``).
-        threshold: Z-score magnitude above which a point is flagged (default 2.0).
+        period: Time period for cross-section mode (e.g. ``"2022"``).
+        ref_area: Ref area code for longitudinal mode (e.g. ``"KEN"``).
+        method: ``"modified_zscore"``, ``"iqr"``, or ``"trend_residual"``.
+        threshold: Flagging threshold (method-specific default if omitted).
         from_year: Optional year filter for data fetch.
         to_year: Optional year filter for data fetch.
         dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
     """
     if (period is None) == (ref_area is None):
         return OutliersResponse(
-            idno=idno, threshold=threshold,
+            idno=idno,
             error="Provide exactly one of 'period' (cross-section) or 'ref_area' (longitudinal).",
         )
 
     schema_resp = await nada_api.get_indicator_schema(idno)
     if schema_resp.error or not schema_resp.schema_:
-        return OutliersResponse(idno=idno, period=period, ref_area=ref_area, threshold=threshold,
+        return OutliersResponse(idno=idno, period=period, ref_area=ref_area,
                                 error=schema_resp.error or "Schema unavailable")
     schema = schema_resp.schema_
 
@@ -676,15 +688,17 @@ async def _nada_outliers(
         idno, from_year=from_year, to_year=to_year, dimensions=dimensions
     )
     if data.error:
-        return OutliersResponse(idno=idno, period=period, ref_area=ref_area, threshold=threshold,
+        return OutliersResponse(idno=idno, period=period, ref_area=ref_area,
                                 geo_column=schema.geo_column, obs_column=schema.obs_column,
                                 error=data.error)
 
     try:
-        return analytics.detect_outliers(data.data, schema, period=period, ref_area=ref_area,
-                                         threshold=threshold, dimensions=dimensions)
+        return analytics.detect_outliers(
+            data.data, schema, period=period, ref_area=ref_area,
+            method=method, threshold=threshold, dimensions=dimensions,
+        )
     except ValueError as exc:
-        return OutliersResponse(idno=idno, period=period, ref_area=ref_area, threshold=threshold,
+        return OutliersResponse(idno=idno, period=period, ref_area=ref_area,
                                 geo_column=schema.geo_column, obs_column=schema.obs_column,
                                 error=str(exc))
 

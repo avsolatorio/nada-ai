@@ -1,8 +1,7 @@
-"""OutliersApp — Z-score outlier detection for a timeseries indicator.
+"""OutliersApp — robust outlier detection for a timeseries indicator.
 
-Supports two modes:
-- Cross-section: outliers across ref areas for a given period.
-- Longitudinal: outliers across time for a given ref area.
+Supports two modes (cross-section / longitudinal) and three methods
+(modified_zscore, iqr, trend_residual).
 """
 
 from __future__ import annotations
@@ -24,6 +23,7 @@ from prefab_ui.components import (
     Select,
     SelectOption,
     Small,
+    Text,
 )
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
@@ -35,36 +35,41 @@ from nada_ai.mcp_server.apps._ui_result import ui_result
 
 outliers_app = FastMCPApp("Outliers")
 
+_DEFAULT_THRESHOLDS = {"modified_zscore": 3.5, "iqr": 0.0, "trend_residual": 3.5}
+
 
 @outliers_app.tool()
 async def do_outliers(
     idno: str,
     period: str | None = None,
     ref_area: str | None = None,
-    threshold: float = 2.0,
+    method: str = "modified_zscore",
+    threshold: float | None = None,
     dimensions: dict[str, str] | None = None,
 ) -> OutliersResponse:
-    """Fetch schema + data and detect Z-score outliers (cross-section or longitudinal)."""
+    """Fetch schema + data and detect outliers using the chosen method."""
     if (period is None) == (ref_area is None):
         return OutliersResponse(
-            idno=idno, threshold=threshold,
+            idno=idno,
             error="Provide exactly one of 'period' or 'ref_area'.",
         )
     schema_resp = await nada_api.get_indicator_schema(idno)
     if schema_resp.error or not schema_resp.schema_:
-        return OutliersResponse(idno=idno, period=period, ref_area=ref_area, threshold=threshold,
+        return OutliersResponse(idno=idno, period=period, ref_area=ref_area,
                                 error=schema_resp.error or "Schema unavailable")
     schema = schema_resp.schema_
     data = await nada_api.get_all_timeseries_data(idno, dimensions=dimensions)
     if data.error:
-        return OutliersResponse(idno=idno, period=period, ref_area=ref_area, threshold=threshold,
+        return OutliersResponse(idno=idno, period=period, ref_area=ref_area,
                                 geo_column=schema.geo_column, obs_column=schema.obs_column,
                                 error=data.error)
     try:
-        return analytics.detect_outliers(data.data, schema, period=period, ref_area=ref_area,
-                                         threshold=threshold, dimensions=dimensions)
+        return analytics.detect_outliers(
+            data.data, schema, period=period, ref_area=ref_area,
+            method=method, threshold=threshold, dimensions=dimensions,
+        )
     except ValueError as exc:
-        return OutliersResponse(idno=idno, period=period, ref_area=ref_area, threshold=threshold,
+        return OutliersResponse(idno=idno, period=period, ref_area=ref_area,
                                 geo_column=schema.geo_column, obs_column=schema.obs_column,
                                 error=str(exc))
 
@@ -73,7 +78,8 @@ async def do_outliers(
     description=(
         "Open an interactive outlier detection UI for a timeseries indicator. "
         "Cross-section mode: flags ref areas that deviate from peers in a given period. "
-        "Longitudinal mode: flags unusual years in a single ref area's own history."
+        "Longitudinal mode: flags unusual years in a single ref area's own history. "
+        "Supports modified Z-score (MAD-based), IQR fences, and LOWESS trend residuals."
     ),
     title="Detect Outliers",
 )
@@ -81,51 +87,49 @@ async def show_outliers(
     idno: str = "",
     period: str = "",
     ref_area: str = "",
-    threshold: float = 2.0,
+    method: str = "modified_zscore",
+    threshold: float | None = None,
 ) -> PrefabApp:
-    """Open the outlier detection UI, pre-loaded when idno and one of period/ref_area are supplied.
+    """Open the outlier detection UI, pre-loaded when idno and one of period/ref_area are given.
 
     Args:
         idno: Indicator idno to analyse (e.g. SP.POP.TOTL). Pre-fills the form.
         period: Time period for cross-section mode (e.g. 2022). Pre-fills the form.
         ref_area: Ref area code for longitudinal mode (e.g. KEN). Pre-fills the form.
-        threshold: Z-score magnitude above which a point is flagged (default 2.0).
+        method: Detection method — modified_zscore (default), iqr, or trend_residual.
+        threshold: Flagging threshold (method-specific default if omitted).
     """
-    # Infer mode from which param is provided; period takes precedence if both
     mode = "cross_section" if period else ("longitudinal" if ref_area else "cross_section")
+    eff_threshold = threshold if threshold is not None else _DEFAULT_THRESHOLDS.get(method, 3.5)
 
     result = None
-    if idno and (period or ref_area):
-        p = period if period else None
-        r = ref_area if ref_area else None
-        if (p is None) == (r is None):
-            p = period or None  # at least one must differ; skip pre-fetch
-        else:
-            result = await do_outliers(idno=idno, period=p, ref_area=r, threshold=threshold)
+    p = period if period else None
+    r = ref_area if ref_area else None
+    if idno and (p is None) != (r is None):
+        result = await do_outliers(idno=idno, period=p, ref_area=r,
+                                   method=method, threshold=threshold)
 
-    _cross_action = [
-        SetState("loading", True),
-        SetState("result", None),
-        SetState("error", None),
-        CallTool(
-            do_outliers,
-            arguments={"idno": "{{ idno }}", "period": "{{ period }}", "threshold": "{{ threshold }}"},
-            on_success=[SetState("result", "{{ $result }}"), SetState("loading", False)],
-            on_error=[SetState("error", "Outlier detection failed."), SetState("loading", False)],
-        ),
-    ]
+    def _action(period_expr, ref_area_expr):
+        return [
+            SetState("loading", True),
+            SetState("result", None),
+            SetState("error", None),
+            CallTool(
+                do_outliers,
+                arguments={
+                    "idno": "{{ idno }}",
+                    "period": period_expr,
+                    "ref_area": ref_area_expr,
+                    "method": "{{ method }}",
+                    "threshold": "{{ threshold }}",
+                },
+                on_success=[SetState("result", "{{ $result }}"), SetState("loading", False)],
+                on_error=[SetState("error", "Outlier detection failed."), SetState("loading", False)],
+            ),
+        ]
 
-    _long_action = [
-        SetState("loading", True),
-        SetState("result", None),
-        SetState("error", None),
-        CallTool(
-            do_outliers,
-            arguments={"idno": "{{ idno }}", "ref_area": "{{ ref_area }}", "threshold": "{{ threshold }}"},
-            on_success=[SetState("result", "{{ $result }}"), SetState("loading", False)],
-            on_error=[SetState("error", "Outlier detection failed."), SetState("loading", False)],
-        ),
-    ]
+    _cross_action = _action("{{ period }}", None)
+    _long_action = _action(None, "{{ ref_area }}")
 
     with PrefabApp(
         title="Detect Outliers",
@@ -134,7 +138,8 @@ async def show_outliers(
             "period": period,
             "ref_area": ref_area,
             "mode": mode,
-            "threshold": threshold,
+            "method": method,
+            "threshold": eff_threshold,
             "loading": False,
             "result": result.model_dump() if result and not result.error else None,
             "error": result.error if result else None,
@@ -144,43 +149,55 @@ async def show_outliers(
 
         H3("Detect Outliers", css_class="mb-4 text-xl font-semibold")
 
-        # Mode selector
-        with Row(gap=2, css_class="mb-3 items-center"):
-            Small("Mode:", css_class="text-muted-foreground shrink-0")
-            with Select(name="mode", value="{{ mode }}", css_class="w-48"):
-                SelectOption(value="cross_section", label="Cross-section (by period)")
-                SelectOption(value="longitudinal", label="Longitudinal (by ref area)")
+        # Mode + method selectors
+        with Row(gap=3, css_class="mb-3 flex-wrap items-center"):
+            with Column(gap=1):
+                Small("Mode")
+                with Select(name="mode", value="{{ mode }}", css_class="w-52"):
+                    SelectOption(value="cross_section", label="Cross-section (by period)")
+                    SelectOption(value="longitudinal", label="Longitudinal (by ref area)")
+            with Column(gap=1):
+                Small("Method")
+                with Select(name="method", value="{{ method }}", css_class="w-56"):
+                    SelectOption(value="modified_zscore", label="Modified Z-score (MAD)")
+                    SelectOption(value="iqr", label="IQR fences (Tukey)")
+                    SelectOption(value="trend_residual", label="Trend residuals (LOWESS)")
 
-        # Shared: idno + threshold
+        # Inputs
         with Row(gap=2, css_class="mb-4 flex-wrap items-end"):
             with Column(css_class="min-w-40", gap=1):
                 Small("Indicator idno")
                 Input(placeholder="e.g. SP.POP.TOTL", name="idno", value="{{ idno }}")
 
-            # Cross-section param
             with If(STATE.mode == "cross_section"):
                 with Column(css_class="min-w-28", gap=1):
                     Small("Period")
                     Input(placeholder="e.g. 2022", name="period", value="{{ period }}")
 
-            # Longitudinal param
             with If(STATE.mode == "longitudinal"):
                 with Column(css_class="min-w-28", gap=1):
                     Small("Ref area")
                     Input(placeholder="e.g. KEN", name="ref_area", value="{{ ref_area }}")
 
-            with Column(css_class="min-w-32", gap=1):
-                Small("Z-score threshold")
-                with Select(name="threshold", value="{{ threshold }}"):
-                    SelectOption(value="1.5", label="1.5")
-                    SelectOption(value="2.0", label="2.0 (default)")
-                    SelectOption(value="2.5", label="2.5")
-                    SelectOption(value="3.0", label="3.0")
+            with Column(css_class="min-w-28", gap=1):
+                Small("Threshold")
+                Input(placeholder="e.g. 3.5", name="threshold", value="{{ threshold }}")
 
             with If(STATE.mode == "cross_section"):
                 Button("Detect", on_click=_cross_action, css_class="shrink-0")
             with If(STATE.mode == "longitudinal"):
                 Button("Detect", on_click=_long_action, css_class="shrink-0")
+
+        # Method hint
+        with If(STATE.method == "modified_zscore"):
+            Muted("Modified Z-score: score = 0.6745·(x − median)/MAD. Threshold flags |score| ≥ value.",
+                  css_class="text-xs mb-3")
+        with If(STATE.method == "iqr"):
+            Muted("IQR fences: flags values outside Q1 − 1.5·IQR or Q3 + 1.5·IQR. Score = IQR-widths outside fence.",
+                  css_class="text-xs mb-3")
+        with If(STATE.method == "trend_residual"):
+            Muted("LOWESS trend residuals (longitudinal only): fits a smooth trend, then scores residuals by modified Z-score.",
+                  css_class="text-xs mb-3")
 
         with If(STATE.loading):
             with Row(css_class="justify-center py-6"):
@@ -198,12 +215,13 @@ async def show_outliers(
                         Badge("{{ result.period }}")
                     with If(STATE.result.ref_area):
                         Badge("{{ result.ref_area }}")
+                    Badge("{{ result.method }}", css_class="font-mono text-xs")
                     Badge("{{ result.n_outliers }} outliers")
                 with Row(css_class="gap-4 mb-2"):
-                    Small("Mean: {{ result.peer_mean }}", css_class="text-muted-foreground")
-                    Small("Std: {{ result.peer_std }}", css_class="text-muted-foreground")
+                    Small("Center: {{ result.peer_mean }}", css_class="text-muted-foreground")
+                    Small("Spread: {{ result.peer_std }}", css_class="text-muted-foreground")
 
-                # Cross-section table: ref areas as rows
+                # Cross-section table
                 with If(STATE.result.mode == "cross_section"):
                     DataTable(
                         columns=[
@@ -211,7 +229,7 @@ async def show_outliers(
                             DataTableColumn(key="ref_area_label", header="Name", sortable=True),
                             DataTableColumn(key="value", header="Value",
                                             sortable=True, format="number:2", align="right"),
-                            DataTableColumn(key="z_score", header="Z-score",
+                            DataTableColumn(key="z_score", header="Score",
                                             sortable=True, format="number:3", align="right"),
                             DataTableColumn(key="is_outlier", header="Outlier", sortable=True),
                         ],
@@ -219,21 +237,43 @@ async def show_outliers(
                         paginated=True, page_size=15, search=True,
                     )
 
-                # Longitudinal table: periods as rows
+                # Longitudinal table — modified_zscore / iqr
                 with If(STATE.result.mode == "longitudinal"):
-                    DataTable(
-                        columns=[
-                            DataTableColumn(key="period", header="Period", sortable=True),
-                            DataTableColumn(key="value", header="Value",
-                                            sortable=True, format="number:2", align="right"),
-                            DataTableColumn(key="z_score", header="Z-score",
-                                            sortable=True, format="number:3", align="right"),
-                            DataTableColumn(key="is_outlier", header="Outlier", sortable=True),
-                        ],
-                        rows="{{ result.rows }}",
-                        paginated=True, page_size=15, search=True,
-                    )
+                    with If(STATE.result.method != "trend_residual"):
+                        DataTable(
+                            columns=[
+                                DataTableColumn(key="period", header="Period", sortable=True),
+                                DataTableColumn(key="value", header="Value",
+                                                sortable=True, format="number:2", align="right"),
+                                DataTableColumn(key="z_score", header="Score",
+                                                sortable=True, format="number:3", align="right"),
+                                DataTableColumn(key="is_outlier", header="Outlier", sortable=True),
+                            ],
+                            rows="{{ result.rows }}",
+                            paginated=True, page_size=15, search=True,
+                        )
+
+                # Longitudinal trend_residual table — extra trend/residual columns
+                with If(STATE.result.mode == "longitudinal"):
+                    with If(STATE.result.method == "trend_residual"):
+                        DataTable(
+                            columns=[
+                                DataTableColumn(key="period", header="Period", sortable=True),
+                                DataTableColumn(key="value", header="Value",
+                                                sortable=True, format="number:2", align="right"),
+                                DataTableColumn(key="trend_value", header="Trend",
+                                                sortable=True, format="number:2", align="right"),
+                                DataTableColumn(key="residual", header="Residual",
+                                                sortable=True, format="number:2", align="right"),
+                                DataTableColumn(key="z_score", header="Score",
+                                                sortable=True, format="number:3", align="right"),
+                                DataTableColumn(key="is_outlier", header="Outlier", sortable=True),
+                            ],
+                            rows="{{ result.rows }}",
+                            paginated=True, page_size=15, search=True,
+                        )
 
     return ui_result(app, app_name="Outliers", result=result,
                      params={"idno": idno, "period": period or None,
-                             "ref_area": ref_area or None, "threshold": threshold})
+                             "ref_area": ref_area or None,
+                             "method": method, "threshold": threshold})

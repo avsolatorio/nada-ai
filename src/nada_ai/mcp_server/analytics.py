@@ -17,6 +17,9 @@ import math
 import statistics
 from typing import Any
 
+import numpy as np
+from scipy.stats import median_abs_deviation
+
 _logger = logging.getLogger(__name__)
 
 from nada_ai.nada.models import (
@@ -611,38 +614,122 @@ def correlate(
 # ---------------------------------------------------------------------------
 
 
+def _modified_zscores(vals: list[float]) -> tuple[list[float], float, float]:
+    """Return (modified_z_scores, median, MAD).
+
+    Modified Z-score = 0.6745 * (x - median) / MAD.
+    Robust to outliers because it uses median and MAD rather than mean and std.
+    When MAD == 0 (all values identical or constant), falls back to plain Z-score.
+    """
+    arr = np.array(vals, dtype=float)
+    med = float(np.median(arr))
+    mad = float(median_abs_deviation(arr, scale=1.0))
+    if mad > 0:
+        zs = [0.6745 * (v - med) / mad for v in vals]
+    else:
+        # Fall back to mean/std when MAD is 0
+        std = float(np.std(arr))
+        zs = [(v - med) / std if std > 0 else 0.0 for v in vals]
+    return zs, med, mad
+
+
+def _iqr_scores(vals: list[float]) -> tuple[list[float], float, float, float, float]:
+    """Return (scores, Q1, Q3, lower_fence, upper_fence).
+
+    Score is signed distance outside the fence normalised by IQR (0 if inside).
+    IQR fences: [Q1 - 1.5*IQR, Q3 + 1.5*IQR].  Threshold of 1.0 flags anything
+    beyond 1 IQR-width outside the fence (i.e. beyond 3.0 IQR from Q1/Q3).
+    """
+    arr = np.array(vals, dtype=float)
+    q1, q3 = float(np.percentile(arr, 25)), float(np.percentile(arr, 75))
+    iqr = q3 - q1
+    if iqr > 0:
+        lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        scores = [
+            (v - hi) / iqr if v > hi else (lo - v) / iqr if v < lo else 0.0
+            for v in vals
+        ]
+    else:
+        lo, hi = q1, q3
+        scores = [0.0] * len(vals)
+    return scores, q1, q3, lo, hi
+
+
+def _lowess_trend_residuals(
+    xs: list[float], ys: list[float], frac: float = 0.4
+) -> list[float]:
+    """Fit a LOWESS trend and return residuals (observed - fitted)."""
+    from statsmodels.nonparametric.smoothers_lowess import lowess
+    arr_x = np.array(xs, dtype=float)
+    arr_y = np.array(ys, dtype=float)
+    # lowess returns (x_sorted, y_fitted) sorted by x
+    fitted_sorted = lowess(arr_y, arr_x, frac=frac, return_sorted=True)
+    # Build a lookup from x -> fitted_y
+    fit_map = {float(fx): float(fy) for fx, fy in fitted_sorted}
+    return [y - fit_map.get(x, y) for x, y in zip(xs, ys)]
+
+
 def detect_outliers(
     rows: list[TimeseriesDataRow],
     schema: IndicatorSchema,
     *,
     period: str | None = None,
     ref_area: str | None = None,
-    threshold: float = 2.0,
+    method: str = "modified_zscore",
+    threshold: float | None = None,
     dimensions: dict[str, str] | None = None,
 ) -> OutliersResponse:
-    """Detect Z-score outliers in two modes.
+    """Detect outliers in two modes using three methods.
 
-    Cross-section (``period`` supplied): compare all ref areas for that period.
-    Longitudinal (``ref_area`` supplied): compare all time periods for that ref area.
-    Exactly one of ``period`` / ``ref_area`` must be provided.
+    **Modes** — supply exactly one of ``period`` / ``ref_area``:
+
+    - *cross_section*: compares all ref areas for a fixed period.
+    - *longitudinal*: compares all time periods for a fixed ref area.
+
+    **Methods**:
+
+    - ``"modified_zscore"`` *(default)*: MAD-based modified Z-score.
+      More robust than plain Z-score because outliers don't inflate the spread.
+      Default threshold 3.5.
+    - ``"iqr"``: Tukey fences (Q1 − 1.5·IQR, Q3 + 1.5·IQR).
+      Score is how many IQR-widths outside the fence a point sits (0 = inside).
+      Default threshold 0 (any point outside the fence is flagged).
+    - ``"trend_residual"`` *(longitudinal only)*: fits a LOWESS trend to the
+      time series and applies modified Z-score on the residuals. Correctly
+      distinguishes "unusual given the trend" from "high overall level".
+      Falls back to ``modified_zscore`` for cross-section mode.
+      Default threshold 3.5.
 
     Args:
         rows: Pre-fetched observation rows.
         schema: DSD schema for the indicator.
         period: Time period to analyse (cross-section mode).
         ref_area: Ref area code to analyse across time (longitudinal mode).
-        threshold: Z-score magnitude above which a point is flagged (default 2.0).
+        method: Detection method — ``"modified_zscore"``, ``"iqr"``, or ``"trend_residual"``.
+        threshold: Flagging threshold (method-dependent default if None).
         dimensions: Optional dimension filters.
     """
     if (period is None) == (ref_area is None):
         raise ValueError("Exactly one of 'period' or 'ref_area' must be provided.")
 
+    _method = method if method in ("modified_zscore", "iqr", "trend_residual") else "modified_zscore"
+    # Default thresholds per method
+    if threshold is None:
+        _threshold = 0.0 if _method == "iqr" else 3.5
+    else:
+        _threshold = threshold
+
     geo_col, time_col, obs_col = _require_columns(schema)
     dims = dimensions or {}
     filtered = _apply_dimension_filter(rows, schema, dims)
 
+    # ------------------------------------------------------------------
+    # Cross-section
+    # ------------------------------------------------------------------
     if period is not None:
-        # Cross-section: one period, all ref areas
+        if _method == "trend_residual":
+            _method = "modified_zscore"  # no trend in cross-section
+
         slice_rows = [r for r in filtered if str(_row_value(r, time_col) or "") == str(period)]
         label_col = _label_column_for(schema, geo_col)
         labels = _label_map(slice_rows, geo_col, label_col)
@@ -661,82 +748,139 @@ def detect_outliers(
         if not valued:
             return OutliersResponse(
                 idno=schema.idno, indicator_name=_indicator_name(rows),
-                mode="cross_section", period=period,
+                mode="cross_section", method=_method, period=period,
                 geo_column=geo_col, obs_column=obs_col,
-                threshold=threshold, dimensions_applied=dims,
+                threshold=_threshold, dimensions_applied=dims,
                 error=f"No data found for period '{period}'.",
             )
 
         vals = [v for _, v in valued]
-        mean = statistics.mean(vals)
-        std = statistics.stdev(vals) if len(vals) > 1 else 0.0
 
-        outlier_rows: list[OutlierRow] = []
-        for ref, val in sorted(valued, key=lambda x: abs((x[1] - mean) / std) if std > 0 else 0, reverse=True):
-            z = (val - mean) / std if std > 0 else 0.0
-            outlier_rows.append(OutlierRow(
-                ref_area=ref, ref_area_label=labels.get(ref),
-                value=val, z_score=round(z, 4), is_outlier=abs(z) >= threshold,
-            ))
+        if _method == "iqr":
+            scores, q1, q3, lo, hi = _iqr_scores(vals)
+            peer_mean, peer_std = float(np.mean(vals)), float(np.std(vals))
+            outlier_rows: list[OutlierRow] = []
+            for (ref, val), score in sorted(
+                zip(valued, scores), key=lambda x: x[1], reverse=True
+            ):
+                outlier_rows.append(OutlierRow(
+                    ref_area=ref, ref_area_label=labels.get(ref),
+                    value=val, z_score=round(score, 4),
+                    is_outlier=score > _threshold,
+                ))
+        else:  # modified_zscore
+            zscores, med, mad = _modified_zscores(vals)
+            peer_mean, peer_std = med, mad
+            outlier_rows = []
+            for (ref, val), z in sorted(
+                zip(valued, zscores), key=lambda x: abs(x[1]), reverse=True
+            ):
+                outlier_rows.append(OutlierRow(
+                    ref_area=ref, ref_area_label=labels.get(ref),
+                    value=val, z_score=round(z, 4),
+                    is_outlier=abs(z) >= _threshold,
+                ))
 
         return OutliersResponse(
             idno=schema.idno, indicator_name=_indicator_name(rows),
-            mode="cross_section", period=period,
+            mode="cross_section", method=_method, period=period,
             geo_column=geo_col, obs_column=obs_col,
-            threshold=threshold, peer_mean=mean, peer_std=std,
+            threshold=_threshold, peer_mean=peer_mean, peer_std=peer_std,
             n_outliers=sum(1 for r in outlier_rows if r.is_outlier),
             dimensions_applied=dims, rows=outlier_rows,
         )
 
-    else:
-        # Longitudinal: one ref area, all time periods
-        ref_area_str = str(ref_area)
-        slice_rows = [
-            r for r in filtered
-            if str(_row_value(r, geo_col) or "") == ref_area_str
-        ]
+    # ------------------------------------------------------------------
+    # Longitudinal
+    # ------------------------------------------------------------------
+    ref_area_str = str(ref_area)
+    slice_rows = [
+        r for r in filtered
+        if str(_row_value(r, geo_col) or "") == ref_area_str
+    ]
 
-        valued_t: list[tuple[str, float]] = []
-        seen_t: set[str] = set()
-        for row in slice_rows:
-            t = _row_value(row, time_col)
-            val = _parse_obs(_row_value(row, obs_col))
-            if t is not None and val is not None:
-                t_str = str(t)
-                if t_str not in seen_t:
-                    seen_t.add(t_str)
-                    valued_t.append((t_str, val))
+    valued_t: list[tuple[str, float]] = []
+    seen_t: set[str] = set()
+    for row in slice_rows:
+        t = _row_value(row, time_col)
+        val = _parse_obs(_row_value(row, obs_col))
+        if t is not None and val is not None:
+            t_str = str(t)
+            if t_str not in seen_t:
+                seen_t.add(t_str)
+                valued_t.append((t_str, val))
 
-        if not valued_t:
-            return OutliersResponse(
-                idno=schema.idno, indicator_name=_indicator_name(rows),
-                mode="longitudinal", ref_area=ref_area_str,
-                geo_column=geo_col, obs_column=obs_col,
-                threshold=threshold, dimensions_applied=dims,
-                error=f"No data found for ref area '{ref_area_str}'.",
-            )
+    if not valued_t:
+        return OutliersResponse(
+            idno=schema.idno, indicator_name=_indicator_name(rows),
+            mode="longitudinal", method=_method, ref_area=ref_area_str,
+            geo_column=geo_col, obs_column=obs_col,
+            threshold=_threshold, dimensions_applied=dims,
+            error=f"No data found for ref area '{ref_area_str}'.",
+        )
 
-        valued_t.sort(key=lambda x: x[0])
-        vals_t = [v for _, v in valued_t]
-        mean = statistics.mean(vals_t)
-        std = statistics.stdev(vals_t) if len(vals_t) > 1 else 0.0
+    valued_t.sort(key=lambda x: x[0])
+    ts = [t for t, _ in valued_t]
+    vals_t = [v for _, v in valued_t]
 
-        outlier_rows = []
-        for t_str, val in sorted(valued_t, key=lambda x: abs((x[1] - mean) / std) if std > 0 else 0, reverse=True):
-            z = (val - mean) / std if std > 0 else 0.0
-            outlier_rows.append(OutlierRow(
+    if _method == "trend_residual":
+        # Convert period labels to numeric x-axis for LOWESS
+        xs = [_period_to_numeric(t) or float(i) for i, t in enumerate(ts)]
+        # LOWESS needs at least a few points; fall back gracefully
+        frac = max(0.3, min(0.6, 5.0 / len(vals_t))) if len(vals_t) >= 4 else 1.0
+        try:
+            residuals = _lowess_trend_residuals(xs, vals_t, frac=frac)
+        except Exception:
+            residuals = [v - statistics.mean(vals_t) for v in vals_t]
+        # Fit map: period -> fitted value
+        fit_vals = [v - r for v, r in zip(vals_t, residuals)]
+        zscores, med, mad = _modified_zscores(residuals)
+        peer_mean, peer_std = med, mad
+        outlier_rows_t: list[OutlierRow] = []
+        for (t_str, val), resid, fit, z in sorted(
+            zip(valued_t, residuals, fit_vals, zscores),
+            key=lambda x: abs(x[3]), reverse=True,
+        ):
+            outlier_rows_t.append(OutlierRow(
                 period=t_str, value=val,
-                z_score=round(z, 4), is_outlier=abs(z) >= threshold,
+                trend_value=round(fit, 6),
+                residual=round(resid, 6),
+                z_score=round(z, 4),
+                is_outlier=abs(z) >= _threshold,
             ))
 
-        return OutliersResponse(
-            idno=schema.idno, indicator_name=_indicator_name(rows),
-            mode="longitudinal", ref_area=ref_area_str,
-            geo_column=geo_col, obs_column=obs_col,
-            threshold=threshold, peer_mean=mean, peer_std=std,
-            n_outliers=sum(1 for r in outlier_rows if r.is_outlier),
-            dimensions_applied=dims, rows=outlier_rows,
-        )
+    elif _method == "iqr":
+        scores, q1, q3, lo, hi = _iqr_scores(vals_t)
+        peer_mean, peer_std = float(np.mean(vals_t)), float(np.std(vals_t))
+        outlier_rows_t = []
+        for (t_str, val), score in sorted(
+            zip(valued_t, scores), key=lambda x: x[1], reverse=True
+        ):
+            outlier_rows_t.append(OutlierRow(
+                period=t_str, value=val,
+                z_score=round(score, 4), is_outlier=score > _threshold,
+            ))
+
+    else:  # modified_zscore
+        zscores, med, mad = _modified_zscores(vals_t)
+        peer_mean, peer_std = med, mad
+        outlier_rows_t = []
+        for (t_str, val), z in sorted(
+            zip(valued_t, zscores), key=lambda x: abs(x[1]), reverse=True
+        ):
+            outlier_rows_t.append(OutlierRow(
+                period=t_str, value=val,
+                z_score=round(z, 4), is_outlier=abs(z) >= _threshold,
+            ))
+
+    return OutliersResponse(
+        idno=schema.idno, indicator_name=_indicator_name(rows),
+        mode="longitudinal", method=_method, ref_area=ref_area_str,
+        geo_column=geo_col, obs_column=obs_col,
+        threshold=_threshold, peer_mean=peer_mean, peer_std=peer_std,
+        n_outliers=sum(1 for r in outlier_rows_t if r.is_outlier),
+        dimensions_applied=dims, rows=outlier_rows_t,
+    )
 
 
 # ---------------------------------------------------------------------------
