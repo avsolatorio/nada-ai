@@ -396,3 +396,241 @@ class TimeseriesDataResponse(BaseModel):
     offset: int = Field(default=0, description="Pagination offset used")
     has_more: bool = Field(default=False, description="Whether more rows are available")
     error: str | None = Field(default=None, description="Error message if the request failed")
+
+
+# ---------------------------------------------------------------------------
+# DSD schema  (/api/timeseries/data/{idno}/schema)
+# ---------------------------------------------------------------------------
+
+# Column types that are not analytical dimensions — they are metadata / roles
+_NON_DIMENSION_COLUMN_TYPES: frozenset[str] = frozenset({
+    "attribute",
+    "indicator_id",
+    "geography",
+    "periodicity",
+    "time_period",
+    "observation_value",
+})
+
+
+class DSComponent(BaseModel):
+    """One component (column) from a DSD."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(description="Column name in data rows")
+    label: str | None = Field(default=None, description="Human-readable label")
+    description: str | None = Field(default=None, description="Long description")
+    data_type: str | None = Field(default=None, description="Data type (string, double, …)")
+    column_type: str = Field(description="Structural role of the column")
+    codelist_id: str | None = Field(default=None, description="Codelist ID when present")
+    time_period_format: str | None = Field(default=None, description="Time format when column_type=time_period")
+
+
+class IndicatorSchema(BaseModel):
+    """Parsed DSD schema for a timeseries indicator."""
+
+    idno: str
+    sid: int | None = None
+    dsd_id: int | None = None
+    components: list[DSComponent] = Field(default_factory=list)
+
+    # Derived role columns — resolved at model construction
+    geo_column: str | None = Field(default=None, description="Name of the geography column")
+    time_column: str | None = Field(default=None, description="Name of the time_period column")
+    obs_column: str | None = Field(default=None, description="Name of the observation_value column")
+    freq_column: str | None = Field(default=None, description="Name of the periodicity column")
+    dimension_columns: list[str] = Field(default_factory=list, description="Free disaggregation dimension column names")
+
+    time_period_format: str | None = Field(default=None, description="Time period format string (e.g. YYYY)")
+    reporting_year_bounds: dict[str, int] | None = Field(default=None, description="Min/max reporting years")
+
+    @classmethod
+    def from_api_result(cls, idno: str, result: dict[str, Any]) -> "IndicatorSchema":
+        """Build from raw /api/timeseries/data/{idno}/schema result dict."""
+        raw_components = result.get("components") or []
+        components = [DSComponent.model_validate(c) for c in raw_components]
+
+        geo_column = next((c.name for c in components if c.column_type == "geography"), None)
+        time_column = next((c.name for c in components if c.column_type == "time_period"), None)
+        obs_column = next((c.name for c in components if c.column_type == "observation_value"), None)
+        freq_column = next((c.name for c in components if c.column_type == "periodicity"), None)
+        dimension_columns = [c.name for c in components if c.column_type not in _NON_DIMENSION_COLUMN_TYPES]
+
+        time_comp = next((c for c in components if c.column_type == "time_period"), None)
+        time_format = time_comp.time_period_format if time_comp else None
+
+        return cls(
+            idno=idno,
+            sid=result.get("sid"),
+            dsd_id=result.get("dsd_id"),
+            components=components,
+            geo_column=geo_column,
+            time_column=time_column,
+            obs_column=obs_column,
+            freq_column=freq_column,
+            dimension_columns=dimension_columns,
+            time_period_format=time_format,
+            reporting_year_bounds=result.get("reporting_year_bounds"),
+        )
+
+
+class IndicatorSchemaResponse(BaseModel):
+    """MCP response wrapping IndicatorSchema with error handling."""
+
+    schema_: IndicatorSchema | None = Field(default=None, alias="schema")
+    error: str | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+# ---------------------------------------------------------------------------
+# Codelist  (derived from data — no dedicated endpoint)
+# ---------------------------------------------------------------------------
+
+
+class CodelistEntry(BaseModel):
+    """One code/label pair from a dimension codelist."""
+
+    code: str
+    label: str | None = None
+
+
+class CodelistResponse(BaseModel):
+    """Distinct values for one DSD component, derived from data sampling."""
+
+    idno: str
+    component: str
+    label_column: str | None = Field(default=None, description="Companion label column used, if any")
+    entries: list[CodelistEntry] = Field(default_factory=list)
+    is_complete: bool = Field(default=False, description="True only if all distinct values were retrieved")
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Analytical response models
+# ---------------------------------------------------------------------------
+
+
+class RankRow(BaseModel):
+    """One row in a ranked result."""
+
+    rank: int
+    ref_area: str
+    ref_area_label: str | None = None
+    period: str
+    value: float
+
+
+class RankResponse(BaseModel):
+    """Result of nada_rank — top/bottom N ref areas for a period."""
+
+    idno: str
+    indicator_name: str | None = None
+    period: str
+    n: int
+    ascending: bool
+    geo_column: str
+    time_column: str
+    obs_column: str
+    dimensions_applied: dict[str, str] = Field(default_factory=dict)
+    rows: list[RankRow] = Field(default_factory=list)
+    total_ref_areas: int = Field(default=0, description="Total ref areas with data for this period")
+    error: str | None = None
+
+
+class ExtremePoint(BaseModel):
+    """A single max or min observation."""
+
+    ref_area: str
+    ref_area_label: str | None = None
+    period: str
+    value: float
+
+
+class ExtremesResponse(BaseModel):
+    """Result of nada_extremes — global max and min observation."""
+
+    idno: str
+    indicator_name: str | None = None
+    geo_column: str
+    time_column: str
+    obs_column: str
+    dimensions_applied: dict[str, str] = Field(default_factory=dict)
+    maximum: ExtremePoint | None = None
+    minimum: ExtremePoint | None = None
+    total_observations: int = 0
+    error: str | None = None
+
+
+class CompareRow(BaseModel):
+    """One time period row in a cross-ref-area comparison."""
+
+    period: str
+    values: dict[str, float | None] = Field(default_factory=dict, description="ref_area → value")
+
+
+class CompareResponse(BaseModel):
+    """Result of nada_compare — pivoted time series for multiple ref areas."""
+
+    idno: str
+    indicator_name: str | None = None
+    ref_areas: list[str] = Field(default_factory=list)
+    ref_area_labels: dict[str, str] = Field(default_factory=dict)
+    geo_column: str
+    time_column: str
+    obs_column: str
+    dimensions_applied: dict[str, str] = Field(default_factory=dict)
+    rows: list[CompareRow] = Field(default_factory=list)
+    error: str | None = None
+
+
+class SummaryStats(BaseModel):
+    """Descriptive statistics across ref areas for one period."""
+
+    count: int = 0
+    min_value: float | None = None
+    max_value: float | None = None
+    mean: float | None = None
+    median: float | None = None
+    std: float | None = None
+    min_ref_area: str | None = None
+    max_ref_area: str | None = None
+
+
+class SummarizeResponse(BaseModel):
+    """Result of nada_summarize — descriptive stats for a period."""
+
+    idno: str
+    indicator_name: str | None = None
+    period: str
+    geo_column: str
+    obs_column: str
+    dimensions_applied: dict[str, str] = Field(default_factory=dict)
+    stats: SummaryStats = Field(default_factory=SummaryStats)
+    error: str | None = None
+
+
+class GrowthRow(BaseModel):
+    """Period-over-period change for one ref area."""
+
+    ref_area: str
+    ref_area_label: str | None = None
+    base_value: float | None = None
+    end_value: float | None = None
+    absolute_change: float | None = None
+    pct_change: float | None = None
+
+
+class GrowthResponse(BaseModel):
+    """Result of nada_growth — period-over-period change per ref area."""
+
+    idno: str
+    indicator_name: str | None = None
+    base_period: str
+    end_period: str
+    geo_column: str
+    obs_column: str
+    dimensions_applied: dict[str, str] = Field(default_factory=dict)
+    rows: list[GrowthRow] = Field(default_factory=list)
+    error: str | None = None

@@ -13,6 +13,10 @@ from nada_ai.nada.models import (
     CatalogSearchRequest,
     CatalogSearchResponse,
     CatalogStudyRow,
+    CodelistEntry,
+    CodelistResponse,
+    IndicatorSchema,
+    IndicatorSchemaResponse,
     TimeseriesDataResponse,
     TimeseriesDataRow,
 )
@@ -33,6 +37,10 @@ def _catalog_metadata_url(idno: str) -> str:
 
 def _timeseries_data_url(idno: str) -> str:
     return f"{metadata_catalog.url.rstrip('/')}/api/timeseries/data/{idno}"
+
+
+def _timeseries_schema_url(idno: str) -> str:
+    return f"{metadata_catalog.url.rstrip('/')}/api/timeseries/data/{idno}/schema"
 
 
 def _parse_study_rows(rows: list[dict[str, Any]]) -> list[CatalogStudyRow]:
@@ -224,4 +232,166 @@ async def get_timeseries_data(
         limit=int(result.get("limit") or limit),
         offset=int(result.get("offset") or offset),
         has_more=(offset + found) < total,
+    )
+
+
+async def get_indicator_schema(idno: str) -> IndicatorSchemaResponse:
+    """Fetch the DSD schema for a timeseries indicator."""
+    url = _timeseries_schema_url(idno)
+    try:
+        async with httpx.AsyncClient(timeout=_TIMESERIES_DATA_TIMEOUT) as client:
+            response = await client.get(
+                url,
+                headers=get_catalog_auth_headers(),
+                cookies=get_catalog_cookies(),
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.HTTPStatusError as exc:
+        _logger.exception("Schema fetch HTTP error")
+        detail = exc.response.text[:500] if exc.response is not None else str(exc)
+        return IndicatorSchemaResponse(error=f"Schema fetch failed ({exc.response.status_code}): {detail}")
+    except httpx.HTTPError as exc:
+        _logger.exception("Schema fetch network error")
+        return IndicatorSchemaResponse(error=f"Schema fetch failed: {exc}")
+
+    status = str(payload.get("status") or "").lower()
+    if status not in {"", "success", "ok"}:
+        message = payload.get("message") or payload.get("error") or status
+        return IndicatorSchemaResponse(error=f"Schema API error: {message}")
+
+    result = payload.get("result") or {}
+    return IndicatorSchemaResponse(schema=IndicatorSchema.from_api_result(idno, result))
+
+
+async def get_codelist(
+    idno: str,
+    component_name: str,
+    *,
+    max_entries: int = 500,
+) -> CodelistResponse:
+    """Derive distinct code/label pairs for a DSD component from data sampling.
+
+    Fetches up to ``max_entries`` rows, extracts unique values for
+    ``component_name``, and pairs them with a companion label column when
+    one exists (e.g. COUNTRY_CODE → COUNTRY_NAME).
+    """
+    schema_resp = await get_indicator_schema(idno)
+    if schema_resp.error or schema_resp.schema_ is None:
+        return CodelistResponse(idno=idno, component=component_name, error=schema_resp.error or "Schema unavailable")
+
+    schema = schema_resp.schema_
+    component_names = {c.name for c in schema.components}
+    if component_name not in component_names:
+        return CodelistResponse(
+            idno=idno,
+            component=component_name,
+            error=f"Component '{component_name}' not found in schema. Available: {sorted(component_names)}",
+        )
+
+    # Find a companion label column — look for an attribute column that shares a name prefix
+    label_column: str | None = None
+    for c in schema.components:
+        if c.column_type == "attribute" and c.name != component_name:
+            # Heuristic: if the attribute name contains the component name minus a suffix like _CODE
+            base = component_name.replace("_CODE", "").replace("_ID", "")
+            if base in c.name and "NAME" in c.name:
+                label_column = c.name
+                break
+
+    data_resp = await get_timeseries_data(idno, limit=max_entries)
+    if data_resp.error:
+        return CodelistResponse(idno=idno, component=component_name, error=data_resp.error)
+
+    seen: dict[str, str | None] = {}
+    for row in data_resp.data:
+        row_dict = row.model_dump()
+        code = row_dict.get(component_name)
+        if code is None:
+            code = (row.model_extra or {}).get(component_name)
+        if code is None:
+            continue
+        code = str(code)
+        if code not in seen:
+            label = None
+            if label_column:
+                label = row_dict.get(label_column) or (row.model_extra or {}).get(label_column)
+                label = str(label) if label is not None else None
+            seen[code] = label
+
+    entries = [CodelistEntry(code=c, label=l) for c, l in sorted(seen.items())]
+    is_complete = data_resp.total <= max_entries
+
+    return CodelistResponse(
+        idno=idno,
+        component=component_name,
+        label_column=label_column,
+        entries=entries,
+        is_complete=is_complete,
+    )
+
+
+async def get_all_timeseries_data(
+    idno: str,
+    *,
+    max_rows: int = 10_000,
+    page_size: int = 1_000,
+    from_year: int | None = None,
+    to_year: int | None = None,
+    country_codes: list[str] | None = None,
+    sort_by: str | None = None,
+    sort: str | None = None,
+    dimensions: dict[str, str] | None = None,
+) -> TimeseriesDataResponse:
+    """Fetch all matching rows up to ``max_rows``, auto-paginating."""
+    all_rows: list[TimeseriesDataRow] = []
+    offset = 0
+
+    first = await get_timeseries_data(
+        idno,
+        limit=min(page_size, max_rows),
+        offset=0,
+        from_year=from_year,
+        to_year=to_year,
+        country_codes=country_codes,
+        sort_by=sort_by,
+        sort=sort,
+        dimensions=dimensions,
+    )
+    if first.error:
+        return first
+
+    all_rows.extend(first.data)
+    total = first.total
+    offset = len(all_rows)
+
+    while len(all_rows) < min(total, max_rows) and first.has_more:
+        page = await get_timeseries_data(
+            idno,
+            limit=min(page_size, max_rows - len(all_rows)),
+            offset=offset,
+            from_year=from_year,
+            to_year=to_year,
+            country_codes=country_codes,
+            sort_by=sort_by,
+            sort=sort,
+            dimensions=dimensions,
+        )
+        if page.error:
+            break
+        if not page.data:
+            break
+        all_rows.extend(page.data)
+        offset = len(all_rows)
+        first = page
+
+    capped = len(all_rows) >= max_rows
+    return TimeseriesDataResponse(
+        idno=idno,
+        data=all_rows,
+        total=total,
+        found=len(all_rows),
+        limit=max_rows,
+        offset=0,
+        has_more=capped and (len(all_rows) < total),
     )
