@@ -241,11 +241,12 @@ async def get_timeseries_data(
     total = int(result.get("total") or 0)
     found = int(result.get("found") or len(rows))
 
-    # When the server omits `total` (returns 0), fall back to found-vs-limit heuristic
+    # When the server omits `total` (returns 0), fall back to found-vs-limit heuristic:
+    # fewer rows returned than requested means the server is exhausted.
     if total > 0:
         has_more = (offset + found) < total
     else:
-        has_more = found >= limit
+        has_more = found == limit and found > 0
 
     return TimeseriesDataResponse(
         idno=idno,
