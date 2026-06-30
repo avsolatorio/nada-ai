@@ -635,25 +635,40 @@ correlate_tool = mcp.tool(
 
 async def _nada_outliers(
     idno: str,
-    period: str,
+    period: str | None = None,
+    ref_area: str | None = None,
     threshold: float = 2.0,
     from_year: int | None = None,
     to_year: int | None = None,
     dimensions: dict[str, str] | None = None,
 ) -> OutliersResponse:
-    """Detect Z-score outliers across all ref areas for a given period.
+    """Detect Z-score outliers for a timeseries indicator.
+
+    Two modes — supply exactly one of ``period`` or ``ref_area``:
+
+    - **Cross-section** (``period`` supplied): ranks all ref areas by how far
+      they deviate from the peer group in that one time period.
+    - **Longitudinal** (``ref_area`` supplied): ranks all time periods for that
+      single ref area to detect unusual years in its own history.
 
     Args:
         idno: Indicator idno. Required.
-        period: Time period to analyse (e.g. ``"2022"``). Required.
-        threshold: Z-score magnitude above which a ref area is flagged (default 2.0).
+        period: Time period to analyse in cross-section mode (e.g. ``"2022"``).
+        ref_area: Ref area code to analyse in longitudinal mode (e.g. ``"KEN"``).
+        threshold: Z-score magnitude above which a point is flagged (default 2.0).
         from_year: Optional year filter for data fetch.
         to_year: Optional year filter for data fetch.
         dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
     """
+    if (period is None) == (ref_area is None):
+        return OutliersResponse(
+            idno=idno, threshold=threshold,
+            error="Provide exactly one of 'period' (cross-section) or 'ref_area' (longitudinal).",
+        )
+
     schema_resp = await nada_api.get_indicator_schema(idno)
     if schema_resp.error or not schema_resp.schema_:
-        return OutliersResponse(idno=idno, period=period, threshold=threshold,
+        return OutliersResponse(idno=idno, period=period, ref_area=ref_area, threshold=threshold,
                                 error=schema_resp.error or "Schema unavailable")
     schema = schema_resp.schema_
 
@@ -661,15 +676,15 @@ async def _nada_outliers(
         idno, from_year=from_year, to_year=to_year, dimensions=dimensions
     )
     if data.error:
-        return OutliersResponse(idno=idno, period=period, threshold=threshold,
+        return OutliersResponse(idno=idno, period=period, ref_area=ref_area, threshold=threshold,
                                 geo_column=schema.geo_column, obs_column=schema.obs_column,
                                 error=data.error)
 
     try:
-        return analytics.detect_outliers(data.data, schema, period=period,
+        return analytics.detect_outliers(data.data, schema, period=period, ref_area=ref_area,
                                          threshold=threshold, dimensions=dimensions)
     except ValueError as exc:
-        return OutliersResponse(idno=idno, period=period, threshold=threshold,
+        return OutliersResponse(idno=idno, period=period, ref_area=ref_area, threshold=threshold,
                                 geo_column=schema.geo_column, obs_column=schema.obs_column,
                                 error=str(exc))
 

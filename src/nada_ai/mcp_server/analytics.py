@@ -615,78 +615,128 @@ def detect_outliers(
     rows: list[TimeseriesDataRow],
     schema: IndicatorSchema,
     *,
-    period: str,
+    period: str | None = None,
+    ref_area: str | None = None,
     threshold: float = 2.0,
     dimensions: dict[str, str] | None = None,
 ) -> OutliersResponse:
-    """Detect Z-score outliers across ref areas for a given period.
+    """Detect Z-score outliers in two modes.
+
+    Cross-section (``period`` supplied): compare all ref areas for that period.
+    Longitudinal (``ref_area`` supplied): compare all time periods for that ref area.
+    Exactly one of ``period`` / ``ref_area`` must be provided.
 
     Args:
         rows: Pre-fetched observation rows.
         schema: DSD schema for the indicator.
-        period: Time period to analyse.
-        threshold: Z-score magnitude above which a ref area is flagged (default 2.0).
+        period: Time period to analyse (cross-section mode).
+        ref_area: Ref area code to analyse across time (longitudinal mode).
+        threshold: Z-score magnitude above which a point is flagged (default 2.0).
         dimensions: Optional dimension filters.
     """
+    if (period is None) == (ref_area is None):
+        raise ValueError("Exactly one of 'period' or 'ref_area' must be provided.")
+
     geo_col, time_col, obs_col = _require_columns(schema)
     dims = dimensions or {}
     filtered = _apply_dimension_filter(rows, schema, dims)
-    period_rows = [r for r in filtered if str(_row_value(r, time_col) or "") == str(period)]
 
-    label_col = _label_column_for(schema, geo_col)
-    labels = _label_map(period_rows, geo_col, label_col)
+    if period is not None:
+        # Cross-section: one period, all ref areas
+        slice_rows = [r for r in filtered if str(_row_value(r, time_col) or "") == str(period)]
+        label_col = _label_column_for(schema, geo_col)
+        labels = _label_map(slice_rows, geo_col, label_col)
 
-    valued: list[tuple[str, float]] = []
-    seen: set[str] = set()
-    for row in period_rows:
-        ref = _row_value(row, geo_col)
-        val = _parse_obs(_row_value(row, obs_col))
-        if ref is not None and val is not None:
-            ref_str = str(ref)
-            if ref_str not in seen:
-                seen.add(ref_str)
-                valued.append((ref_str, val))
+        valued: list[tuple[str, float]] = []
+        seen: set[str] = set()
+        for row in slice_rows:
+            ref = _row_value(row, geo_col)
+            val = _parse_obs(_row_value(row, obs_col))
+            if ref is not None and val is not None:
+                ref_str = str(ref)
+                if ref_str not in seen:
+                    seen.add(ref_str)
+                    valued.append((ref_str, val))
 
-    if not valued:
+        if not valued:
+            return OutliersResponse(
+                idno=schema.idno, indicator_name=_indicator_name(rows),
+                mode="cross_section", period=period,
+                geo_column=geo_col, obs_column=obs_col,
+                threshold=threshold, dimensions_applied=dims,
+                error=f"No data found for period '{period}'.",
+            )
+
+        vals = [v for _, v in valued]
+        mean = statistics.mean(vals)
+        std = statistics.stdev(vals) if len(vals) > 1 else 0.0
+
+        outlier_rows: list[OutlierRow] = []
+        for ref, val in sorted(valued, key=lambda x: abs((x[1] - mean) / std) if std > 0 else 0, reverse=True):
+            z = (val - mean) / std if std > 0 else 0.0
+            outlier_rows.append(OutlierRow(
+                ref_area=ref, ref_area_label=labels.get(ref),
+                value=val, z_score=round(z, 4), is_outlier=abs(z) >= threshold,
+            ))
+
         return OutliersResponse(
-            idno=schema.idno,
-            indicator_name=_indicator_name(rows),
-            period=period,
-            geo_column=geo_col,
-            obs_column=obs_col,
-            threshold=threshold,
-            dimensions_applied=dims,
-            error=f"No data found for period '{period}'.",
+            idno=schema.idno, indicator_name=_indicator_name(rows),
+            mode="cross_section", period=period,
+            geo_column=geo_col, obs_column=obs_col,
+            threshold=threshold, peer_mean=mean, peer_std=std,
+            n_outliers=sum(1 for r in outlier_rows if r.is_outlier),
+            dimensions_applied=dims, rows=outlier_rows,
         )
 
-    vals = [v for _, v in valued]
-    mean = statistics.mean(vals)
-    std = statistics.stdev(vals) if len(vals) > 1 else 0.0
+    else:
+        # Longitudinal: one ref area, all time periods
+        ref_area_str = str(ref_area)
+        slice_rows = [
+            r for r in filtered
+            if str(_row_value(r, geo_col) or "") == ref_area_str
+        ]
 
-    outlier_rows: list[OutlierRow] = []
-    for ref, val in sorted(valued, key=lambda x: abs((x[1] - mean) / std) if std > 0 else 0, reverse=True):
-        z = (val - mean) / std if std > 0 else 0.0
-        outlier_rows.append(OutlierRow(
-            ref_area=ref,
-            ref_area_label=labels.get(ref),
-            value=val,
-            z_score=round(z, 4),
-            is_outlier=abs(z) >= threshold,
-        ))
+        valued_t: list[tuple[str, float]] = []
+        seen_t: set[str] = set()
+        for row in slice_rows:
+            t = _row_value(row, time_col)
+            val = _parse_obs(_row_value(row, obs_col))
+            if t is not None and val is not None:
+                t_str = str(t)
+                if t_str not in seen_t:
+                    seen_t.add(t_str)
+                    valued_t.append((t_str, val))
 
-    return OutliersResponse(
-        idno=schema.idno,
-        indicator_name=_indicator_name(rows),
-        period=period,
-        geo_column=geo_col,
-        obs_column=obs_col,
-        threshold=threshold,
-        peer_mean=mean,
-        peer_std=std,
-        n_outliers=sum(1 for r in outlier_rows if r.is_outlier),
-        dimensions_applied=dims,
-        rows=outlier_rows,
-    )
+        if not valued_t:
+            return OutliersResponse(
+                idno=schema.idno, indicator_name=_indicator_name(rows),
+                mode="longitudinal", ref_area=ref_area_str,
+                geo_column=geo_col, obs_column=obs_col,
+                threshold=threshold, dimensions_applied=dims,
+                error=f"No data found for ref area '{ref_area_str}'.",
+            )
+
+        valued_t.sort(key=lambda x: x[0])
+        vals_t = [v for _, v in valued_t]
+        mean = statistics.mean(vals_t)
+        std = statistics.stdev(vals_t) if len(vals_t) > 1 else 0.0
+
+        outlier_rows = []
+        for t_str, val in sorted(valued_t, key=lambda x: abs((x[1] - mean) / std) if std > 0 else 0, reverse=True):
+            z = (val - mean) / std if std > 0 else 0.0
+            outlier_rows.append(OutlierRow(
+                period=t_str, value=val,
+                z_score=round(z, 4), is_outlier=abs(z) >= threshold,
+            ))
+
+        return OutliersResponse(
+            idno=schema.idno, indicator_name=_indicator_name(rows),
+            mode="longitudinal", ref_area=ref_area_str,
+            geo_column=geo_col, obs_column=obs_col,
+            threshold=threshold, peer_mean=mean, peer_std=std,
+            n_outliers=sum(1 for r in outlier_rows if r.is_outlier),
+            dimensions_applied=dims, rows=outlier_rows,
+        )
 
 
 # ---------------------------------------------------------------------------

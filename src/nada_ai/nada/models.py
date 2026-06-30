@@ -691,21 +691,32 @@ class CorrelateResponse(BaseModel):
 
 
 class OutlierRow(BaseModel):
-    """One ref area with its Z-score and outlier flag."""
+    """One observation with its Z-score and outlier flag.
 
-    ref_area: str
+    In cross-section mode ``ref_area`` is set and ``period`` is None.
+    In longitudinal mode ``period`` is set and ``ref_area`` is None.
+    """
+
+    ref_area: str | None = None
     ref_area_label: str | None = None
+    period: str | None = None
     value: float
     z_score: float
     is_outlier: bool
 
 
 class OutliersResponse(BaseModel):
-    """Result of nada_outliers — Z-score outlier detection for a period."""
+    """Result of nada_outliers — Z-score outlier detection.
+
+    ``mode`` is ``"cross_section"`` (outliers across ref areas for a fixed period)
+    or ``"longitudinal"`` (outliers across time for a fixed ref area).
+    """
 
     idno: str
     indicator_name: str | None = None
-    period: str
+    mode: str = "cross_section"
+    period: str | None = None
+    ref_area: str | None = None
     geo_column: str | None = None
     obs_column: str | None = None
     threshold: float = 2.0
