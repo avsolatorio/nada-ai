@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from fastmcp import FastMCPApp
-from prefab_ui.actions import SetState
-from prefab_ui.actions.mcp import CallTool
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
     Badge,
@@ -22,9 +20,10 @@ from prefab_ui.components.charts import ChartSeries, LineChart
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
-from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import AggregateResponse
-from nada_ai.mcp_server import analytics
+from nada_ai.mcp_server.tools import _nada_aggregate
+from nada_ai.mcp_server.apps._actions import make_action
+from nada_ai.mcp_server.apps._ui_result import ui_result
 
 aggregate_app = FastMCPApp("Aggregate")
 
@@ -38,23 +37,8 @@ async def do_aggregate(
     dimensions: dict[str, str] | None = None,
 ) -> AggregateResponse:
     """Fetch schema + data and compute group-level statistics per period."""
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return AggregateResponse(idno=idno, error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-    data = await nada_api.get_all_timeseries_data(
-        idno, from_year=from_year, to_year=to_year,
-        country_codes=ref_areas, geo_column=schema.geo_column or "COUNTRY_CODE",
-        dimensions=dimensions,
-    )
-    if data.error:
-        return AggregateResponse(idno=idno, geo_column=schema.geo_column,
-                                 obs_column=schema.obs_column, error=data.error)
-    try:
-        return analytics.aggregate(data.data, schema, ref_areas=ref_areas, dimensions=dimensions)
-    except ValueError as exc:
-        return AggregateResponse(idno=idno, geo_column=schema.geo_column,
-                                 obs_column=schema.obs_column, error=str(exc))
+    return await _nada_aggregate(idno=idno, ref_areas=ref_areas,
+                                  from_year=from_year, to_year=to_year, dimensions=dimensions)
 
 
 @aggregate_app.ui(
@@ -64,39 +48,43 @@ async def do_aggregate(
     ),
     title="Aggregate",
 )
-def show_aggregate(
+async def show_aggregate(
     idno: str = "",
     ref_areas: str = "",
     from_year: str = "",
     to_year: str = "",
 ) -> PrefabApp:
-    """Render the aggregate time-series chart and stats table."""
+    """Open the aggregate UI, pre-loaded with data when idno is supplied.
 
-    _action = [
-        SetState("loading", True),
-        SetState("result", None),
-        SetState("error", None),
-        CallTool(
-            do_aggregate,
-            arguments={
-                "idno": "{{ idno }}",
-                "ref_areas": "{{ ref_areas_list }}",
-                "from_year": "{{ from_year }}",
-                "to_year": "{{ to_year }}",
-            },
-            on_success=[SetState("result", "{{ $result }}"), SetState("loading", False)],
-            on_error=[SetState("error", "Aggregation failed."), SetState("loading", False)],
-        ),
-    ]
-
+    Args:
+        idno: Indicator idno to aggregate (e.g. SP.POP.TOTL). Pre-fills the form.
+        ref_areas: Comma-separated ref area codes to aggregate (e.g. KEN,UGA). Optional; default is all.
+        from_year: Start year filter (e.g. 2000). Optional.
+        to_year: End year filter (e.g. 2022). Optional.
+    """
     parsed_refs = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else []
+    fy = int(from_year) if from_year and from_year.isdigit() else None
+    ty = int(to_year) if to_year and to_year.isdigit() else None
+    result = None
+    if idno:
+        result = await do_aggregate(idno=idno, ref_areas=parsed_refs or None,
+                                    from_year=fy, to_year=ty)
+
+    _action = make_action(
+        do_aggregate,
+        {"idno": "{{ idno }}", "ref_areas": "{{ ref_areas_list }}",
+         "from_year": "{{ from_year }}", "to_year": "{{ to_year }}"},
+        error_msg="Aggregation failed.",
+    )
 
     with PrefabApp(
         title="Aggregate",
         state={
             "idno": idno, "ref_areas": ref_areas, "ref_areas_list": parsed_refs,
             "from_year": from_year, "to_year": to_year,
-            "loading": False, "result": None, "error": None,
+            "loading": False,
+            "result": result.model_dump() if result and not result.error else None,
+            "error": result.error if result else None,
         },
         css_class="p-4 max-w-4xl mx-auto",
     ) as app:
@@ -169,4 +157,6 @@ def show_aggregate(
                     page_size=20,
                 )
 
-    return app
+    return ui_result(app, app_name="Aggregate", result=result,
+                     params={"idno": idno, "ref_areas": ref_areas or None,
+                             "from_year": from_year or None, "to_year": to_year or None})

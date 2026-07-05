@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from fastmcp import FastMCPApp
-from prefab_ui.actions import SetState
-from prefab_ui.actions.mcp import CallTool
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
     Badge,
@@ -21,9 +19,10 @@ from prefab_ui.components import (
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
-from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import GrowthResponse
-from nada_ai.mcp_server import analytics
+from nada_ai.mcp_server.tools import _nada_growth
+from nada_ai.mcp_server.apps._actions import make_action
+from nada_ai.mcp_server.apps._ui_result import ui_result
 
 growth_app = FastMCPApp("Growth")
 
@@ -37,23 +36,8 @@ async def do_growth(
     dimensions: dict[str, str] | None = None,
 ) -> GrowthResponse:
     """Fetch schema + data and compute period-over-period change."""
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return GrowthResponse(idno=idno, base_period=base_period, end_period=end_period,
-                              geo_column=None, obs_column=None,
-                              error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-    data = await nada_api.get_all_timeseries_data(
-        idno, country_codes=ref_areas,
-        geo_column=schema.geo_column or "COUNTRY_CODE",
-        dimensions=dimensions,
-    )
-    if data.error:
-        return GrowthResponse(idno=idno, base_period=base_period, end_period=end_period,
-                              geo_column=schema.geo_column, obs_column=schema.obs_column,
-                              error=data.error)
-    return analytics.growth(data.data, schema, ref_areas=ref_areas,
-                            base_period=base_period, end_period=end_period, dimensions=dimensions)
+    return await _nada_growth(idno=idno, base_period=base_period, end_period=end_period,
+                               ref_areas=ref_areas, dimensions=dimensions)
 
 
 @growth_app.ui(
@@ -63,38 +47,32 @@ async def do_growth(
     ),
     title="Growth / Change",
 )
-def show_growth(
+async def show_growth(
     idno: str = "",
     base_period: str = "",
     end_period: str = "",
     ref_areas: str = "",
 ) -> PrefabApp:
-    """Render the growth table."""
+    """Open the growth UI, pre-loaded with data when idno, base and end periods are supplied.
 
-    _growth_action = [
-        SetState("loading", True),
-        SetState("result", None),
-        SetState("error", None),
-        CallTool(
-            do_growth,
-            arguments={
-                "idno": "{{ idno }}",
-                "base_period": "{{ base_period }}",
-                "end_period": "{{ end_period }}",
-                "ref_areas": "{{ ref_areas_list }}",
-            },
-            on_success=[
-                SetState("result", "{{ $result }}"),
-                SetState("loading", False),
-            ],
-            on_error=[
-                SetState("error", "Growth calculation failed."),
-                SetState("loading", False),
-            ],
-        ),
-    ]
-
+    Args:
+        idno: Indicator idno (e.g. SP.POP.TOTL). Pre-fills the form.
+        base_period: Starting period for comparison (e.g. 2010). Pre-fills the form.
+        end_period: Ending period for comparison (e.g. 2022). Pre-fills the form.
+        ref_areas: Comma-separated ref area codes to include (e.g. KEN,UGA). Optional.
+    """
     parsed_refs = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else []
+    result = None
+    if idno and base_period and end_period:
+        result = await do_growth(idno=idno, base_period=base_period, end_period=end_period,
+                                 ref_areas=parsed_refs or None)
+
+    _growth_action = make_action(
+        do_growth,
+        {"idno": "{{ idno }}", "base_period": "{{ base_period }}",
+         "end_period": "{{ end_period }}", "ref_areas": "{{ ref_areas_list }}"},
+        error_msg="Growth calculation failed.",
+    )
 
     with PrefabApp(
         title="Growth / Change",
@@ -105,8 +83,8 @@ def show_growth(
             "ref_areas": ref_areas,
             "ref_areas_list": parsed_refs,
             "loading": False,
-            "result": None,
-            "error": None,
+            "result": result.model_dump() if result and not result.error else None,
+            "error": result.error if result else None,
         },
         css_class="p-4 max-w-3xl mx-auto",
     ) as app:
@@ -161,4 +139,6 @@ def show_growth(
                     search=True,
                 )
 
-    return app
+    return ui_result(app, app_name="Growth", result=result,
+                     params={"idno": idno, "base_period": base_period,
+                             "end_period": end_period, "ref_areas": ref_areas or None})

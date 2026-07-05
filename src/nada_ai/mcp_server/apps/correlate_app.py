@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from fastmcp import FastMCPApp
-from prefab_ui.actions import SetState
-from prefab_ui.actions.mcp import CallTool
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
     Badge,
@@ -24,9 +20,10 @@ from prefab_ui.components import (
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
-from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import CorrelateResponse
-from nada_ai.mcp_server import analytics
+from nada_ai.mcp_server.tools import _nada_correlate
+from nada_ai.mcp_server.apps._actions import make_action
+from nada_ai.mcp_server.apps._ui_result import ui_result
 
 correlate_app = FastMCPApp("Correlate")
 
@@ -42,33 +39,9 @@ async def do_correlate(
     dimensions2: dict[str, str] | None = None,
 ) -> CorrelateResponse:
     """Fetch both indicators and compute Pearson correlation across ref areas."""
-    schema1_resp, schema2_resp = await asyncio.gather(
-        nada_api.get_indicator_schema(idno1),
-        nada_api.get_indicator_schema(idno2),
-    )
-    if schema1_resp.error or not schema1_resp.schema_:
-        return CorrelateResponse(idno1=idno1, idno2=idno2, period=period,
-                                 error=schema1_resp.error or "Schema unavailable for idno1")
-    if schema2_resp.error or not schema2_resp.schema_:
-        return CorrelateResponse(idno1=idno1, idno2=idno2, period=period,
-                                 error=schema2_resp.error or "Schema unavailable for idno2")
-
-    data1, data2 = await asyncio.gather(
-        nada_api.get_all_timeseries_data(idno1, from_year=from_year, to_year=to_year, dimensions=dimensions1),
-        nada_api.get_all_timeseries_data(idno2, from_year=from_year, to_year=to_year, dimensions=dimensions2),
-    )
-    if data1.error:
-        return CorrelateResponse(idno1=idno1, idno2=idno2, period=period, error=data1.error)
-    if data2.error:
-        return CorrelateResponse(idno1=idno1, idno2=idno2, period=period, error=data2.error)
-
-    try:
-        return analytics.correlate(
-            data1.data, schema1_resp.schema_, data2.data, schema2_resp.schema_,
-            period=period, dimensions1=dimensions1, dimensions2=dimensions2,
-        )
-    except ValueError as exc:
-        return CorrelateResponse(idno1=idno1, idno2=idno2, period=period, error=str(exc))
+    return await _nada_correlate(idno1=idno1, idno2=idno2, period=period,
+                                  from_year=from_year, to_year=to_year,
+                                  dimensions1=dimensions1, dimensions2=dimensions2)
 
 
 @correlate_app.ui(
@@ -78,34 +51,37 @@ async def do_correlate(
     ),
     title="Correlate Indicators",
 )
-def show_correlate(
+async def show_correlate(
     idno1: str = "",
     idno2: str = "",
     period: str = "",
 ) -> PrefabApp:
-    """Render the correlation scatter table."""
+    """Open the correlation UI, pre-loaded with data when both idnos and period are supplied.
 
-    _action = [
-        SetState("loading", True),
-        SetState("result", None),
-        SetState("error", None),
-        CallTool(
-            do_correlate,
-            arguments={
-                "idno1": "{{ idno1 }}",
-                "idno2": "{{ idno2 }}",
-                "period": "{{ period }}",
-            },
-            on_success=[SetState("result", "{{ $result }}"), SetState("loading", False)],
-            on_error=[SetState("error", "Correlation failed."), SetState("loading", False)],
-        ),
-    ]
+    Args:
+        idno1: First indicator idno (e.g. SP.POP.TOTL). Pre-fills the form.
+        idno2: Second indicator idno (e.g. NY.GDP.PCAP.CD). Pre-fills the form.
+        period: Time period to correlate within (e.g. 2022). Pre-fills the form.
+    """
+    result = None
+    if idno1 and idno2 and period:
+        result = await do_correlate(idno1=idno1, idno2=idno2, period=period,
+                                    from_year=int(period) if period.isdigit() else None,
+                                    to_year=int(period) if period.isdigit() else None)
+
+    _action = make_action(
+        do_correlate,
+        {"idno1": "{{ idno1 }}", "idno2": "{{ idno2 }}", "period": "{{ period }}"},
+        error_msg="Correlation failed.",
+    )
 
     with PrefabApp(
         title="Correlate Indicators",
         state={
             "idno1": idno1, "idno2": idno2, "period": str(period),
-            "loading": False, "result": None, "error": None,
+            "loading": False,
+            "result": result.model_dump() if result and not result.error else None,
+            "error": result.error if result else None,
         },
         css_class="p-4 max-w-3xl mx-auto",
     ) as app:
@@ -159,4 +135,5 @@ def show_correlate(
                     search=True,
                 )
 
-    return app
+    return ui_result(app, app_name="Correlate", result=result,
+                     params={"idno1": idno1, "idno2": idno2, "period": period})

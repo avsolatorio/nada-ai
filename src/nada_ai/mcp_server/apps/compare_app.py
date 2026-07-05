@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from fastmcp import FastMCPApp
-from prefab_ui.actions import SetState
-from prefab_ui.actions.mcp import CallTool
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
     Badge,
@@ -22,9 +20,10 @@ from prefab_ui.components import (
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
-from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import CompareResponse
-from nada_ai.mcp_server import analytics
+from nada_ai.mcp_server.tools import _nada_compare
+from nada_ai.mcp_server.apps._actions import make_action
+from nada_ai.mcp_server.apps._ui_result import ui_result
 
 compare_app = FastMCPApp("Compare")
 
@@ -38,21 +37,8 @@ async def do_compare(
     dimensions: dict[str, str] | None = None,
 ) -> CompareResponse:
     """Fetch schema + data and build a pivoted comparison."""
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return CompareResponse(idno=idno, geo_column=None, time_column=None, obs_column=None,
-                               error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-    data = await nada_api.get_all_timeseries_data(
-        idno, from_year=from_year, to_year=to_year,
-        country_codes=ref_areas, geo_column=schema.geo_column or "COUNTRY_CODE",
-        dimensions=dimensions,
-    )
-    if data.error:
-        return CompareResponse(idno=idno, geo_column=schema.geo_column,
-                               time_column=schema.time_column,
-                               obs_column=schema.obs_column, error=data.error)
-    return analytics.compare(data.data, schema, ref_areas=ref_areas, dimensions=dimensions)
+    return await _nada_compare(idno=idno, ref_areas=ref_areas,
+                               from_year=from_year, to_year=to_year, dimensions=dimensions)
 
 
 @compare_app.ui(
@@ -63,38 +49,33 @@ async def do_compare(
     ),
     title="Compare Ref Areas",
 )
-def compare_ref_areas(
+async def compare_ref_areas(
     idno: str = "",
     ref_areas: str = "",
     from_year: str = "",
     to_year: str = "",
 ) -> PrefabApp:
-    """Render the interactive comparison line chart + table."""
+    """Open the comparison UI, pre-loaded with data when idno and ref areas are supplied.
 
-    _compare_action = [
-        SetState("loading", True),
-        SetState("result", None),
-        SetState("error", None),
-        CallTool(
-            do_compare,
-            arguments={
-                "idno": "{{ idno }}",
-                "ref_areas": "{{ ref_areas_list }}",
-                "from_year": "{{ from_year }}",
-                "to_year": "{{ to_year }}",
-            },
-            on_success=[
-                SetState("result", "{{ $result }}"),
-                SetState("loading", False),
-            ],
-            on_error=[
-                SetState("error", "Comparison failed. Check the idno and ref area codes."),
-                SetState("loading", False),
-            ],
-        ),
-    ]
-
+    Args:
+        idno: Indicator idno to compare (e.g. SP.POP.TOTL). Pre-fills the form.
+        ref_areas: Comma-separated ref area codes to compare (e.g. KEN,UGA,TZA). Pre-fills the form.
+        from_year: Start year filter (e.g. 2000). Optional.
+        to_year: End year filter (e.g. 2022). Optional.
+    """
     parsed_refs = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else []
+    fy = int(from_year) if from_year and from_year.isdigit() else None
+    ty = int(to_year) if to_year and to_year.isdigit() else None
+    result = None
+    if idno and parsed_refs:
+        result = await do_compare(idno=idno, ref_areas=parsed_refs, from_year=fy, to_year=ty)
+
+    _compare_action = make_action(
+        do_compare,
+        {"idno": "{{ idno }}", "ref_areas": "{{ ref_areas_list }}",
+         "from_year": "{{ from_year }}", "to_year": "{{ to_year }}"},
+        error_msg="Comparison failed. Check the idno and ref area codes.",
+    )
 
     with PrefabApp(
         title="Compare Ref Areas",
@@ -105,8 +86,8 @@ def compare_ref_areas(
             "from_year": from_year,
             "to_year": to_year,
             "loading": False,
-            "result": None,
-            "error": None,
+            "result": result.model_dump() if result and not result.error else None,
+            "error": result.error if result else None,
         },
         css_class="p-4 max-w-4xl mx-auto",
     ) as app:
@@ -159,4 +140,6 @@ def compare_ref_areas(
                     search=True,
                 )
 
-    return app
+    return ui_result(app, app_name="Compare", result=result,
+                     params={"idno": idno, "ref_areas": ref_areas or None,
+                             "from_year": from_year or None, "to_year": to_year or None})

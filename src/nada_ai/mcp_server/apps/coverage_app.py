@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from fastmcp import FastMCPApp
-from prefab_ui.actions import SetState
-from prefab_ui.actions.mcp import CallTool
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
     Badge,
@@ -21,9 +19,10 @@ from prefab_ui.components import (
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
-from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import CoverageResponse
-from nada_ai.mcp_server import analytics
+from nada_ai.mcp_server.tools import _nada_coverage
+from nada_ai.mcp_server.apps._actions import make_action
+from nada_ai.mcp_server.apps._ui_result import ui_result
 
 coverage_app = FastMCPApp("Coverage")
 
@@ -34,19 +33,7 @@ async def do_coverage(
     dimensions: dict[str, str] | None = None,
 ) -> CoverageResponse:
     """Fetch schema + data and compute coverage summary per ref area."""
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return CoverageResponse(idno=idno, error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-    data = await nada_api.get_all_timeseries_data(idno, dimensions=dimensions)
-    if data.error:
-        return CoverageResponse(idno=idno, geo_column=schema.geo_column,
-                                time_column=schema.time_column, error=data.error)
-    try:
-        return analytics.coverage(data.data, schema, dimensions=dimensions)
-    except ValueError as exc:
-        return CoverageResponse(idno=idno, geo_column=schema.geo_column,
-                                time_column=schema.time_column, error=str(exc))
+    return await _nada_coverage(idno=idno, dimensions=dimensions)
 
 
 @coverage_app.ui(
@@ -56,24 +43,29 @@ async def do_coverage(
     ),
     title="Data Coverage",
 )
-def show_coverage(idno: str = "") -> PrefabApp:
-    """Render the coverage summary table."""
+async def show_coverage(idno: str = "") -> PrefabApp:
+    """Open the data coverage UI, pre-loaded with data when idno is supplied.
 
-    _action = [
-        SetState("loading", True),
-        SetState("result", None),
-        SetState("error", None),
-        CallTool(
-            do_coverage,
-            arguments={"idno": "{{ idno }}"},
-            on_success=[SetState("result", "{{ $result }}"), SetState("loading", False)],
-            on_error=[SetState("error", "Coverage check failed."), SetState("loading", False)],
-        ),
-    ]
+    Args:
+        idno: Indicator idno to check coverage for (e.g. SP.POP.TOTL). Pre-fills the form.
+    """
+    result = None
+    if idno:
+        result = await do_coverage(idno=idno)
+
+    _action = make_action(
+        do_coverage,
+        {"idno": "{{ idno }}"},
+        error_msg="Coverage check failed.",
+    )
 
     with PrefabApp(
         title="Data Coverage",
-        state={"idno": idno, "loading": False, "result": None, "error": None},
+        state={
+            "idno": idno, "loading": False,
+            "result": result.model_dump() if result and not result.error else None,
+            "error": result.error if result else None,
+        },
         css_class="p-4 max-w-3xl mx-auto",
     ) as app:
 
@@ -117,4 +109,4 @@ def show_coverage(idno: str = "") -> PrefabApp:
                     search=True,
                 )
 
-    return app
+    return ui_result(app, app_name="Coverage", result=result, params={"idno": idno})

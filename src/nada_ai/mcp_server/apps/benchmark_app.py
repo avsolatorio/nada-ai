@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from fastmcp import FastMCPApp
-from prefab_ui.actions import SetState
-from prefab_ui.actions.mcp import CallTool
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
     Badge,
@@ -21,9 +19,10 @@ from prefab_ui.components import (
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
-from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import BenchmarkResponse
-from nada_ai.mcp_server import analytics
+from nada_ai.mcp_server.tools import _nada_benchmark
+from nada_ai.mcp_server.apps._actions import make_action
+from nada_ai.mcp_server.apps._ui_result import ui_result
 
 benchmark_app = FastMCPApp("Benchmark")
 
@@ -36,23 +35,8 @@ async def do_benchmark(
     dimensions: dict[str, str] | None = None,
 ) -> BenchmarkResponse:
     """Fetch schema + data and benchmark ref areas against all peers."""
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return BenchmarkResponse(idno=idno, period=period,
-                                 error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-    data = await nada_api.get_all_timeseries_data(idno, dimensions=dimensions)
-    if data.error:
-        return BenchmarkResponse(idno=idno, period=period,
-                                 geo_column=schema.geo_column, obs_column=schema.obs_column,
-                                 error=data.error)
-    try:
-        return analytics.benchmark(data.data, schema, ref_areas=ref_areas,
-                                   period=period, dimensions=dimensions)
-    except ValueError as exc:
-        return BenchmarkResponse(idno=idno, period=period,
-                                 geo_column=schema.geo_column, obs_column=schema.obs_column,
-                                 error=str(exc))
+    return await _nada_benchmark(idno=idno, period=period, ref_areas=ref_areas,
+                                  dimensions=dimensions)
 
 
 @benchmark_app.ui(
@@ -63,37 +47,37 @@ async def do_benchmark(
     ),
     title="Benchmark",
 )
-def show_benchmark(
+async def show_benchmark(
     idno: str = "",
     period: str = "",
     ref_areas: str = "",
 ) -> PrefabApp:
-    """Render the benchmark comparison table."""
+    """Open the benchmark UI, pre-loaded with data when idno, period and ref areas are supplied.
 
-    _action = [
-        SetState("loading", True),
-        SetState("result", None),
-        SetState("error", None),
-        CallTool(
-            do_benchmark,
-            arguments={
-                "idno": "{{ idno }}",
-                "period": "{{ period }}",
-                "ref_areas": "{{ ref_areas_list }}",
-            },
-            on_success=[SetState("result", "{{ $result }}"), SetState("loading", False)],
-            on_error=[SetState("error", "Benchmark failed."), SetState("loading", False)],
-        ),
-    ]
-
+    Args:
+        idno: Indicator idno to benchmark (e.g. SP.POP.TOTL). Pre-fills the form.
+        period: Time period to benchmark in (e.g. 2022). Pre-fills the form.
+        ref_areas: Comma-separated ref area codes to benchmark (e.g. KEN,UGA). Pre-fills the form.
+    """
     parsed_refs = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else []
+    result = None
+    if idno and period and parsed_refs:
+        result = await do_benchmark(idno=idno, period=period, ref_areas=parsed_refs)
+
+    _action = make_action(
+        do_benchmark,
+        {"idno": "{{ idno }}", "period": "{{ period }}", "ref_areas": "{{ ref_areas_list }}"},
+        error_msg="Benchmark failed.",
+    )
 
     with PrefabApp(
         title="Benchmark",
         state={
             "idno": idno, "period": str(period),
             "ref_areas": ref_areas, "ref_areas_list": parsed_refs,
-            "loading": False, "result": None, "error": None,
+            "loading": False,
+            "result": result.model_dump() if result and not result.error else None,
+            "error": result.error if result else None,
         },
         css_class="p-4 max-w-3xl mx-auto",
     ) as app:
@@ -150,4 +134,5 @@ def show_benchmark(
                     paginated=False,
                 )
 
-    return app
+    return ui_result(app, app_name="Benchmark", result=result,
+                     params={"idno": idno, "period": period, "ref_areas": ref_areas or None})
