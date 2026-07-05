@@ -31,6 +31,7 @@ from nada_ai.nada.models import (
     TrendResponse,
 )
 from nada_ai.mcp_server import analytics
+from nada_ai.mcp_server._fetch import fetch_schema_and_data
 
 from ._server_definition import mcp
 from .tool_config import get_mcp_tool_texts
@@ -321,23 +322,18 @@ async def _nada_rank(
             columns beyond geography and time (e.g. ``{"SEX": "F"}``). Call
             ``get_schema`` and ``get_codelist`` first to find valid values.
     """
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return RankResponse(idno=idno, period=period, n=n, ascending=ascending,
-                            geo_column=None, time_column=None, obs_column=None,
-                            error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-
-    data = await nada_api.get_all_timeseries_data(
+    schema, rows, error = await fetch_schema_and_data(
         idno, from_year=from_year, to_year=to_year, dimensions=dimensions
     )
-    if data.error:
+    if error:
         return RankResponse(idno=idno, period=period, n=n, ascending=ascending,
-                            geo_column=schema.geo_column, time_column=schema.time_column,
-                            obs_column=schema.obs_column, error=data.error)
+                            geo_column=schema.geo_column if schema else None,
+                            time_column=schema.time_column if schema else None,
+                            obs_column=schema.obs_column if schema else None,
+                            error=error)
 
     try:
-        return analytics.rank(data.data, schema, period=period, n=n, ascending=ascending, dimensions=dimensions)
+        return analytics.rank(rows, schema, period=period, n=n, ascending=ascending, dimensions=dimensions)
     except ValueError as exc:
         return RankResponse(idno=idno, period=period, n=n, ascending=ascending,
                             geo_column=schema.geo_column, time_column=schema.time_column,
@@ -358,22 +354,18 @@ async def _nada_extremes(
         to_year: Narrow to observations up to this year (inclusive).
         dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
     """
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return ExtremesResponse(idno=idno, geo_column=None, time_column=None, obs_column=None,
-                                error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-
-    data = await nada_api.get_all_timeseries_data(
+    schema, rows, error = await fetch_schema_and_data(
         idno, from_year=from_year, to_year=to_year, dimensions=dimensions
     )
-    if data.error:
-        return ExtremesResponse(idno=idno, geo_column=schema.geo_column,
-                                time_column=schema.time_column,
-                                obs_column=schema.obs_column, error=data.error)
+    if error:
+        return ExtremesResponse(idno=idno,
+                                geo_column=schema.geo_column if schema else None,
+                                time_column=schema.time_column if schema else None,
+                                obs_column=schema.obs_column if schema else None,
+                                error=error)
 
     try:
-        return analytics.get_extremes(data.data, schema, dimensions=dimensions)
+        return analytics.get_extremes(rows, schema, dimensions=dimensions)
     except ValueError as exc:
         return ExtremesResponse(idno=idno, geo_column=schema.geo_column,
                                 time_column=schema.time_column,
@@ -399,27 +391,18 @@ async def _nada_compare(
         to_year: Filter to observations up to this year (inclusive).
         dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
     """
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return CompareResponse(idno=idno, geo_column=None, time_column=None, obs_column=None,
-                               error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-
-    data = await nada_api.get_all_timeseries_data(
-        idno,
-        from_year=from_year,
-        to_year=to_year,
-        country_codes=ref_areas,
-        geo_column=schema.geo_column or "COUNTRY_CODE",
-        dimensions=dimensions,
+    schema, rows, error = await fetch_schema_and_data(
+        idno, from_year=from_year, to_year=to_year, country_codes=ref_areas, dimensions=dimensions
     )
-    if data.error:
-        return CompareResponse(idno=idno, geo_column=schema.geo_column,
-                               time_column=schema.time_column,
-                               obs_column=schema.obs_column, error=data.error)
+    if error:
+        return CompareResponse(idno=idno,
+                               geo_column=schema.geo_column if schema else None,
+                               time_column=schema.time_column if schema else None,
+                               obs_column=schema.obs_column if schema else None,
+                               error=error)
 
     try:
-        return analytics.compare(data.data, schema, ref_areas=ref_areas, dimensions=dimensions)
+        return analytics.compare(rows, schema, ref_areas=ref_areas, dimensions=dimensions)
     except ValueError as exc:
         return CompareResponse(idno=idno, geo_column=schema.geo_column,
                                time_column=schema.time_column,
@@ -442,21 +425,17 @@ async def _nada_summarize(
         to_year: Optional year filter for data fetch.
         dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
     """
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return SummarizeResponse(idno=idno, period=period, geo_column=None, obs_column=None,
-                                 error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-
-    data = await nada_api.get_all_timeseries_data(
+    schema, rows, error = await fetch_schema_and_data(
         idno, from_year=from_year, to_year=to_year, dimensions=dimensions
     )
-    if data.error:
-        return SummarizeResponse(idno=idno, period=period, geo_column=schema.geo_column,
-                                 obs_column=schema.obs_column, error=data.error)
+    if error:
+        return SummarizeResponse(idno=idno, period=period,
+                                 geo_column=schema.geo_column if schema else None,
+                                 obs_column=schema.obs_column if schema else None,
+                                 error=error)
 
     try:
-        return analytics.summarize(data.data, schema, period=period, dimensions=dimensions)
+        return analytics.summarize(rows, schema, period=period, dimensions=dimensions)
     except ValueError as exc:
         return SummarizeResponse(idno=idno, period=period, geo_column=schema.geo_column,
                                  obs_column=schema.obs_column, error=str(exc))
@@ -478,26 +457,17 @@ async def _nada_growth(
         ref_areas: Specific geography codes to include. If None, all are returned.
         dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
     """
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return GrowthResponse(idno=idno, base_period=base_period, end_period=end_period,
-                              geo_column=None, obs_column=None,
-                              error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-
-    data = await nada_api.get_all_timeseries_data(
-        idno,
-        country_codes=ref_areas,
-        geo_column=schema.geo_column or "COUNTRY_CODE",
-        dimensions=dimensions,
+    schema, rows, error = await fetch_schema_and_data(
+        idno, country_codes=ref_areas, dimensions=dimensions
     )
-    if data.error:
+    if error:
         return GrowthResponse(idno=idno, base_period=base_period, end_period=end_period,
-                              geo_column=schema.geo_column, obs_column=schema.obs_column,
-                              error=data.error)
+                              geo_column=schema.geo_column if schema else None,
+                              obs_column=schema.obs_column if schema else None,
+                              error=error)
 
     try:
-        return analytics.growth(data.data, schema, ref_areas=ref_areas,
+        return analytics.growth(rows, schema, ref_areas=ref_areas,
                                 base_period=base_period, end_period=end_period, dimensions=dimensions)
     except ValueError as exc:
         return GrowthResponse(idno=idno, base_period=base_period, end_period=end_period,
@@ -678,23 +648,18 @@ async def _nada_outliers(
             error="Provide exactly one of 'period' (cross-section) or 'ref_area' (longitudinal).",
         )
 
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return OutliersResponse(idno=idno, period=period, ref_area=ref_area,
-                                error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-
-    data = await nada_api.get_all_timeseries_data(
+    schema, rows, error = await fetch_schema_and_data(
         idno, from_year=from_year, to_year=to_year, dimensions=dimensions
     )
-    if data.error:
+    if error:
         return OutliersResponse(idno=idno, period=period, ref_area=ref_area,
-                                geo_column=schema.geo_column, obs_column=schema.obs_column,
-                                error=data.error)
+                                geo_column=schema.geo_column if schema else None,
+                                obs_column=schema.obs_column if schema else None,
+                                error=error)
 
     try:
         return analytics.detect_outliers(
-            data.data, schema, period=period, ref_area=ref_area,
+            rows, schema, period=period, ref_area=ref_area,
             method=method, threshold=threshold, dimensions=dimensions,
         )
     except ValueError as exc:
@@ -738,25 +703,17 @@ async def _nada_trend(
         to_year: Filter to observations up to this year.
         dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
     """
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return TrendResponse(idno=idno, error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-
-    data = await nada_api.get_all_timeseries_data(
-        idno,
-        from_year=from_year,
-        to_year=to_year,
-        country_codes=ref_areas,
-        geo_column=schema.geo_column or "COUNTRY_CODE",
-        dimensions=dimensions,
+    schema, rows, error = await fetch_schema_and_data(
+        idno, from_year=from_year, to_year=to_year, country_codes=ref_areas, dimensions=dimensions
     )
-    if data.error:
-        return TrendResponse(idno=idno, geo_column=schema.geo_column,
-                             obs_column=schema.obs_column, error=data.error)
+    if error:
+        return TrendResponse(idno=idno,
+                             geo_column=schema.geo_column if schema else None,
+                             obs_column=schema.obs_column if schema else None,
+                             error=error)
 
     try:
-        return analytics.trend(data.data, schema, ref_areas=ref_areas, dimensions=dimensions)
+        return analytics.trend(rows, schema, ref_areas=ref_areas, dimensions=dimensions)
     except ValueError as exc:
         return TrendResponse(idno=idno, geo_column=schema.geo_column,
                              obs_column=schema.obs_column, error=str(exc))
@@ -799,22 +756,17 @@ async def _nada_benchmark(
         to_year: Optional year filter for data fetch.
         dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
     """
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return BenchmarkResponse(idno=idno, period=period,
-                                 error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-
-    data = await nada_api.get_all_timeseries_data(
+    schema, rows, error = await fetch_schema_and_data(
         idno, from_year=from_year, to_year=to_year, dimensions=dimensions
     )
-    if data.error:
+    if error:
         return BenchmarkResponse(idno=idno, period=period,
-                                 geo_column=schema.geo_column, obs_column=schema.obs_column,
-                                 error=data.error)
+                                 geo_column=schema.geo_column if schema else None,
+                                 obs_column=schema.obs_column if schema else None,
+                                 error=error)
 
     try:
-        return analytics.benchmark(data.data, schema, ref_areas=ref_areas,
+        return analytics.benchmark(rows, schema, ref_areas=ref_areas,
                                    period=period, dimensions=dimensions)
     except ValueError as exc:
         return BenchmarkResponse(idno=idno, period=period,
@@ -849,18 +801,15 @@ async def _nada_coverage(
         idno: Indicator idno. Required.
         dimensions: Optional dimension filters.
     """
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return CoverageResponse(idno=idno, error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-
-    data = await nada_api.get_all_timeseries_data(idno, dimensions=dimensions)
-    if data.error:
-        return CoverageResponse(idno=idno, geo_column=schema.geo_column,
-                                time_column=schema.time_column, error=data.error)
+    schema, rows, error = await fetch_schema_and_data(idno, dimensions=dimensions)
+    if error:
+        return CoverageResponse(idno=idno,
+                                geo_column=schema.geo_column if schema else None,
+                                time_column=schema.time_column if schema else None,
+                                error=error)
 
     try:
-        return analytics.coverage(data.data, schema, dimensions=dimensions)
+        return analytics.coverage(rows, schema, dimensions=dimensions)
     except ValueError as exc:
         return CoverageResponse(idno=idno, geo_column=schema.geo_column,
                                 time_column=schema.time_column, error=str(exc))
@@ -978,25 +927,17 @@ async def _nada_aggregate(
         to_year: Filter to observations up to this year.
         dimensions: Disaggregation filters (e.g. ``{"SEX": "F"}``).
     """
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return AggregateResponse(idno=idno, error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-
-    data = await nada_api.get_all_timeseries_data(
-        idno,
-        from_year=from_year,
-        to_year=to_year,
-        country_codes=ref_areas,
-        geo_column=schema.geo_column or "COUNTRY_CODE",
-        dimensions=dimensions,
+    schema, rows, error = await fetch_schema_and_data(
+        idno, from_year=from_year, to_year=to_year, country_codes=ref_areas, dimensions=dimensions
     )
-    if data.error:
-        return AggregateResponse(idno=idno, geo_column=schema.geo_column,
-                                 obs_column=schema.obs_column, error=data.error)
+    if error:
+        return AggregateResponse(idno=idno,
+                                 geo_column=schema.geo_column if schema else None,
+                                 obs_column=schema.obs_column if schema else None,
+                                 error=error)
 
     try:
-        return analytics.aggregate(data.data, schema, ref_areas=ref_areas, dimensions=dimensions)
+        return analytics.aggregate(rows, schema, ref_areas=ref_areas, dimensions=dimensions)
     except ValueError as exc:
         return AggregateResponse(idno=idno, geo_column=schema.geo_column,
                                  obs_column=schema.obs_column, error=str(exc))

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from fastmcp import FastMCPApp
-from prefab_ui.actions import SetState
-from prefab_ui.actions.mcp import CallTool
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
     Badge,
@@ -25,9 +23,10 @@ from prefab_ui.components import (
 )
 from prefab_ui.rx import STATE
 
-from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import SummarizeResponse
-from nada_ai.mcp_server import analytics
+from nada_ai.mcp_server.tools import _nada_summarize
+from nada_ai.mcp_server.apps._actions import make_action
+from nada_ai.mcp_server.apps._ui_result import ui_result
 
 summarize_app = FastMCPApp("Summarize")
 
@@ -39,16 +38,7 @@ async def do_summarize(
     dimensions: dict[str, str] | None = None,
 ) -> SummarizeResponse:
     """Fetch schema + data and compute descriptive stats for a period."""
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return SummarizeResponse(idno=idno, period=period, geo_column="", obs_column="",
-                                 error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-    data = await nada_api.get_all_timeseries_data(idno, dimensions=dimensions)
-    if data.error:
-        return SummarizeResponse(idno=idno, period=period, geo_column=schema.geo_column or "",
-                                 obs_column=schema.obs_column or "", error=data.error)
-    return analytics.summarize(data.data, schema, period=period, dimensions=dimensions)
+    return await _nada_summarize(idno=idno, period=period, dimensions=dimensions)
 
 
 @summarize_app.ui(
@@ -58,26 +48,22 @@ async def do_summarize(
     ),
     title="Summarize Indicator",
 )
-def summarize_indicator(idno: str = "", period: str = "") -> PrefabApp:
-    """Render the summary stats cards."""
+async def summarize_indicator(idno: str = "", period: str = "") -> PrefabApp:
+    """Open the summary statistics UI, pre-loaded with data when params are supplied.
 
-    _summarize_action = [
-        SetState("loading", True),
-        SetState("result", None),
-        SetState("error", None),
-        CallTool(
-            do_summarize,
-            arguments={"idno": "{{ idno }}", "period": "{{ period }}"},
-            on_success=[
-                SetState("result", "{{ $result }}"),
-                SetState("loading", False),
-            ],
-            on_error=[
-                SetState("error", "Summary failed. Check the idno and period."),
-                SetState("loading", False),
-            ],
-        ),
-    ]
+    Args:
+        idno: Indicator idno to analyse (e.g. SP.POP.TOTL). Pre-fills the form.
+        period: Time period to summarize (e.g. 2022). Pre-fills the form.
+    """
+    result = None
+    if idno and period:
+        result = await do_summarize(idno=idno, period=period)
+
+    _summarize_action = make_action(
+        do_summarize,
+        {"idno": "{{ idno }}", "period": "{{ period }}"},
+        error_msg="Summary failed. Check the idno and period.",
+    )
 
     with PrefabApp(
         title="Summarize Indicator",
@@ -85,8 +71,8 @@ def summarize_indicator(idno: str = "", period: str = "") -> PrefabApp:
             "idno": idno,
             "period": str(period),
             "loading": False,
-            "result": None,
-            "error": None,
+            "result": result.model_dump() if result and not result.error else None,
+            "error": result.error if result else None,
         },
         css_class="p-4 max-w-3xl mx-auto",
     ) as app:
@@ -154,4 +140,4 @@ def summarize_indicator(idno: str = "", period: str = "") -> PrefabApp:
                             with CardContent(css_class="pt-4"):
                                 Metric(label="Count", value="{{ result.stats.count }}")
 
-    return app
+    return ui_result(app, app_name="Summarize", result=result, params={"idno": idno, "period": period})

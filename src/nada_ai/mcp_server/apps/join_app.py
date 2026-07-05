@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from fastmcp import FastMCPApp
-from prefab_ui.actions import SetState
-from prefab_ui.actions.mcp import CallTool
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
     Badge,
@@ -23,9 +19,10 @@ from prefab_ui.components import (
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
-from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import JoinResponse
-from nada_ai.mcp_server import analytics
+from nada_ai.mcp_server.tools import _nada_join
+from nada_ai.mcp_server.apps._actions import make_action
+from nada_ai.mcp_server.apps._ui_result import ui_result
 
 join_app = FastMCPApp("Join")
 
@@ -41,42 +38,8 @@ async def do_join(
     dimensions2: dict[str, str] | None = None,
 ) -> JoinResponse:
     """Fetch both indicators and align them by (ref_area, period)."""
-    schema1_resp, schema2_resp = await asyncio.gather(
-        nada_api.get_indicator_schema(idno1),
-        nada_api.get_indicator_schema(idno2),
-    )
-    if schema1_resp.error or not schema1_resp.schema_:
-        return JoinResponse(idno1=idno1, idno2=idno2,
-                            error=schema1_resp.error or "Schema unavailable for idno1")
-    if schema2_resp.error or not schema2_resp.schema_:
-        return JoinResponse(idno1=idno1, idno2=idno2,
-                            error=schema2_resp.error or "Schema unavailable for idno2")
-
-    schema1, schema2 = schema1_resp.schema_, schema2_resp.schema_
-    data1, data2 = await asyncio.gather(
-        nada_api.get_all_timeseries_data(
-            idno1, from_year=from_year, to_year=to_year,
-            country_codes=ref_areas, geo_column=schema1.geo_column or "COUNTRY_CODE",
-            dimensions=dimensions1,
-        ),
-        nada_api.get_all_timeseries_data(
-            idno2, from_year=from_year, to_year=to_year,
-            country_codes=ref_areas, geo_column=schema2.geo_column or "COUNTRY_CODE",
-            dimensions=dimensions2,
-        ),
-    )
-    if data1.error:
-        return JoinResponse(idno1=idno1, idno2=idno2, error=data1.error)
-    if data2.error:
-        return JoinResponse(idno1=idno1, idno2=idno2, error=data2.error)
-
-    try:
-        return analytics.join_indicators(
-            data1.data, schema1, data2.data, schema2,
-            dimensions1=dimensions1, dimensions2=dimensions2,
-        )
-    except ValueError as exc:
-        return JoinResponse(idno1=idno1, idno2=idno2, error=str(exc))
+    return await _nada_join(idno1=idno1, idno2=idno2, from_year=from_year, to_year=to_year,
+                             ref_areas=ref_areas, dimensions1=dimensions1, dimensions2=dimensions2)
 
 
 @join_app.ui(
@@ -86,34 +49,36 @@ async def do_join(
     ),
     title="Join Indicators",
 )
-def show_join(
+async def show_join(
     idno1: str = "",
     idno2: str = "",
     from_year: str = "",
     to_year: str = "",
     ref_areas: str = "",
 ) -> PrefabApp:
-    """Render the joined data table."""
+    """Open the join UI, pre-loaded with data when both idnos are supplied.
 
-    _action = [
-        SetState("loading", True),
-        SetState("result", None),
-        SetState("error", None),
-        CallTool(
-            do_join,
-            arguments={
-                "idno1": "{{ idno1 }}",
-                "idno2": "{{ idno2 }}",
-                "from_year": "{{ from_year }}",
-                "to_year": "{{ to_year }}",
-                "ref_areas": "{{ ref_areas_list }}",
-            },
-            on_success=[SetState("result", "{{ $result }}"), SetState("loading", False)],
-            on_error=[SetState("error", "Join failed."), SetState("loading", False)],
-        ),
-    ]
-
+    Args:
+        idno1: First indicator idno (e.g. SP.POP.TOTL). Pre-fills the form.
+        idno2: Second indicator idno (e.g. SP.POP.TOTL.FE.IN). Pre-fills the form.
+        from_year: Start year filter (e.g. 2010). Optional.
+        to_year: End year filter (e.g. 2022). Optional.
+        ref_areas: Comma-separated ref area codes to include (e.g. KEN,UGA). Optional.
+    """
     parsed_refs = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else []
+    fy = int(from_year) if from_year and from_year.isdigit() else None
+    ty = int(to_year) if to_year and to_year.isdigit() else None
+    result = None
+    if idno1 and idno2:
+        result = await do_join(idno1=idno1, idno2=idno2, from_year=fy, to_year=ty,
+                               ref_areas=parsed_refs or None)
+
+    _action = make_action(
+        do_join,
+        {"idno1": "{{ idno1 }}", "idno2": "{{ idno2 }}", "from_year": "{{ from_year }}",
+         "to_year": "{{ to_year }}", "ref_areas": "{{ ref_areas_list }}"},
+        error_msg="Join failed.",
+    )
 
     with PrefabApp(
         title="Join Indicators",
@@ -121,7 +86,9 @@ def show_join(
             "idno1": idno1, "idno2": idno2,
             "from_year": from_year, "to_year": to_year,
             "ref_areas": ref_areas, "ref_areas_list": parsed_refs,
-            "loading": False, "result": None, "error": None,
+            "loading": False,
+            "result": result.model_dump() if result and not result.error else None,
+            "error": result.error if result else None,
         },
         css_class="p-4 max-w-4xl mx-auto",
     ) as app:
@@ -178,4 +145,7 @@ def show_join(
                     search=True,
                 )
 
-    return app
+    return ui_result(app, app_name="Join", result=result,
+                     params={"idno1": idno1, "idno2": idno2,
+                             "from_year": from_year or None, "to_year": to_year or None,
+                             "ref_areas": ref_areas or None})

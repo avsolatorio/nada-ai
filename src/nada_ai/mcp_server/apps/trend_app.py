@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from fastmcp import FastMCPApp
-from prefab_ui.actions import SetState
-from prefab_ui.actions.mcp import CallTool
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
     Badge,
@@ -21,9 +19,10 @@ from prefab_ui.components import (
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
-from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import TrendResponse
-from nada_ai.mcp_server import analytics
+from nada_ai.mcp_server.tools import _nada_trend
+from nada_ai.mcp_server.apps._actions import make_action
+from nada_ai.mcp_server.apps._ui_result import ui_result
 
 trend_app = FastMCPApp("Trend")
 
@@ -37,23 +36,8 @@ async def do_trend(
     dimensions: dict[str, str] | None = None,
 ) -> TrendResponse:
     """Fetch schema + data and compute linear trend per ref area."""
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return TrendResponse(idno=idno, error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-    data = await nada_api.get_all_timeseries_data(
-        idno, from_year=from_year, to_year=to_year,
-        country_codes=ref_areas, geo_column=schema.geo_column or "COUNTRY_CODE",
-        dimensions=dimensions,
-    )
-    if data.error:
-        return TrendResponse(idno=idno, geo_column=schema.geo_column,
-                             obs_column=schema.obs_column, error=data.error)
-    try:
-        return analytics.trend(data.data, schema, ref_areas=ref_areas, dimensions=dimensions)
-    except ValueError as exc:
-        return TrendResponse(idno=idno, geo_column=schema.geo_column,
-                             obs_column=schema.obs_column, error=str(exc))
+    return await _nada_trend(idno=idno, ref_areas=ref_areas,
+                              from_year=from_year, to_year=to_year, dimensions=dimensions)
 
 
 @trend_app.ui(
@@ -63,39 +47,43 @@ async def do_trend(
     ),
     title="Trend Analysis",
 )
-def show_trend(
+async def show_trend(
     idno: str = "",
     ref_areas: str = "",
     from_year: str = "",
     to_year: str = "",
 ) -> PrefabApp:
-    """Render the trend analysis table."""
+    """Open the trend analysis UI, pre-loaded with data when idno is supplied.
 
-    _action = [
-        SetState("loading", True),
-        SetState("result", None),
-        SetState("error", None),
-        CallTool(
-            do_trend,
-            arguments={
-                "idno": "{{ idno }}",
-                "ref_areas": "{{ ref_areas_list }}",
-                "from_year": "{{ from_year }}",
-                "to_year": "{{ to_year }}",
-            },
-            on_success=[SetState("result", "{{ $result }}"), SetState("loading", False)],
-            on_error=[SetState("error", "Trend analysis failed."), SetState("loading", False)],
-        ),
-    ]
-
+    Args:
+        idno: Indicator idno to analyse (e.g. SP.POP.TOTL). Pre-fills the form.
+        ref_areas: Comma-separated ref area codes to include (e.g. KEN,UGA). Optional.
+        from_year: Start year to narrow the trend window (e.g. 2000). Optional.
+        to_year: End year to narrow the trend window (e.g. 2022). Optional.
+    """
     parsed_refs = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else []
+    fy = int(from_year) if from_year and from_year.isdigit() else None
+    ty = int(to_year) if to_year and to_year.isdigit() else None
+    result = None
+    if idno:
+        result = await do_trend(idno=idno, ref_areas=parsed_refs or None,
+                                from_year=fy, to_year=ty)
+
+    _action = make_action(
+        do_trend,
+        {"idno": "{{ idno }}", "ref_areas": "{{ ref_areas_list }}",
+         "from_year": "{{ from_year }}", "to_year": "{{ to_year }}"},
+        error_msg="Trend analysis failed.",
+    )
 
     with PrefabApp(
         title="Trend Analysis",
         state={
             "idno": idno, "ref_areas": ref_areas, "ref_areas_list": parsed_refs,
             "from_year": from_year, "to_year": to_year,
-            "loading": False, "result": None, "error": None,
+            "loading": False,
+            "result": result.model_dump() if result and not result.error else None,
+            "error": result.error if result else None,
         },
         css_class="p-4 max-w-3xl mx-auto",
     ) as app:
@@ -151,4 +139,6 @@ def show_trend(
                     search=True,
                 )
 
-    return app
+    return ui_result(app, app_name="Trend", result=result,
+                     params={"idno": idno, "ref_areas": ref_areas or None,
+                             "from_year": from_year or None, "to_year": to_year or None})

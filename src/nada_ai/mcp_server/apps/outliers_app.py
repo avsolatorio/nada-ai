@@ -7,8 +7,6 @@ Supports two modes (cross-section / longitudinal) and three methods
 from __future__ import annotations
 
 from fastmcp import FastMCPApp
-from prefab_ui.actions import SetState
-from prefab_ui.actions.mcp import CallTool
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
     Badge,
@@ -28,9 +26,9 @@ from prefab_ui.components import (
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
-from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import OutliersResponse
-from nada_ai.mcp_server import analytics
+from nada_ai.mcp_server.tools import _nada_outliers
+from nada_ai.mcp_server.apps._actions import make_action
 from nada_ai.mcp_server.apps._ui_result import ui_result
 
 outliers_app = FastMCPApp("Outliers")
@@ -48,30 +46,8 @@ async def do_outliers(
     dimensions: dict[str, str] | None = None,
 ) -> OutliersResponse:
     """Fetch schema + data and detect outliers using the chosen method."""
-    if (period is None) == (ref_area is None):
-        return OutliersResponse(
-            idno=idno,
-            error="Provide exactly one of 'period' or 'ref_area'.",
-        )
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return OutliersResponse(idno=idno, period=period, ref_area=ref_area,
-                                error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-    data = await nada_api.get_all_timeseries_data(idno, dimensions=dimensions)
-    if data.error:
-        return OutliersResponse(idno=idno, period=period, ref_area=ref_area,
-                                geo_column=schema.geo_column, obs_column=schema.obs_column,
-                                error=data.error)
-    try:
-        return analytics.detect_outliers(
-            data.data, schema, period=period, ref_area=ref_area,
-            method=method, threshold=threshold, dimensions=dimensions,
-        )
-    except ValueError as exc:
-        return OutliersResponse(idno=idno, period=period, ref_area=ref_area,
-                                geo_column=schema.geo_column, obs_column=schema.obs_column,
-                                error=str(exc))
+    return await _nada_outliers(idno=idno, period=period, ref_area=ref_area,
+                                method=method, threshold=threshold, dimensions=dimensions)
 
 
 @outliers_app.ui(
@@ -109,27 +85,18 @@ async def show_outliers(
         result = await do_outliers(idno=idno, period=p, ref_area=r,
                                    method=method, threshold=threshold)
 
-    def _action(period_expr, ref_area_expr):
-        return [
-            SetState("loading", True),
-            SetState("result", None),
-            SetState("error", None),
-            CallTool(
-                do_outliers,
-                arguments={
-                    "idno": "{{ idno }}",
-                    "period": period_expr,
-                    "ref_area": ref_area_expr,
-                    "method": "{{ method }}",
-                    "threshold": "{{ threshold }}",
-                },
-                on_success=[SetState("result", "{{ $result }}"), SetState("loading", False)],
-                on_error=[SetState("error", "Outlier detection failed."), SetState("loading", False)],
-            ),
-        ]
-
-    _cross_action = _action("{{ period }}", None)
-    _long_action = _action(None, "{{ ref_area }}")
+    _cross_action = make_action(
+        do_outliers,
+        {"idno": "{{ idno }}", "period": "{{ period }}", "ref_area": None,
+         "method": "{{ method }}", "threshold": "{{ threshold }}"},
+        error_msg="Outlier detection failed.",
+    )
+    _long_action = make_action(
+        do_outliers,
+        {"idno": "{{ idno }}", "period": None, "ref_area": "{{ ref_area }}",
+         "method": "{{ method }}", "threshold": "{{ threshold }}"},
+        error_msg="Outlier detection failed.",
+    )
 
     with PrefabApp(
         title="Detect Outliers",

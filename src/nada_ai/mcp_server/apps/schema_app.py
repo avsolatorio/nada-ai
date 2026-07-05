@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from fastmcp import FastMCPApp
-from prefab_ui.actions import SetState
-from prefab_ui.actions.mcp import CallTool, SendMessage
+from prefab_ui.actions.mcp import SendMessage
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
     Badge,
@@ -27,8 +26,10 @@ from prefab_ui.components import (
 )
 from prefab_ui.rx import STATE
 
-from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import IndicatorSchemaResponse
+from nada_ai.mcp_server.tools import _nada_get_schema
+from nada_ai.mcp_server.apps._actions import make_action
+from nada_ai.mcp_server.apps._ui_result import ui_result
 
 schema_app = FastMCPApp("SchemaExplorer")
 
@@ -45,7 +46,7 @@ _COLUMN_TYPE_VARIANT: dict[str, str] = {
 @schema_app.tool()
 async def do_get_schema(idno: str) -> IndicatorSchemaResponse:
     """Fetch and return the DSD schema for an indicator."""
-    return await nada_api.get_indicator_schema(idno)
+    return await _nada_get_schema(idno)
 
 
 @schema_app.ui(
@@ -57,34 +58,30 @@ async def do_get_schema(idno: str) -> IndicatorSchemaResponse:
     ),
     title="Schema Explorer",
 )
-def explore_indicator_schema(idno: str = "") -> PrefabApp:
-    """Render the interactive schema explorer."""
+async def explore_indicator_schema(idno: str = "") -> PrefabApp:
+    """Open the DSD schema explorer, pre-loaded with schema data when idno is supplied.
 
-    _load_action = [
-        SetState("loading", True),
-        SetState("schema_data", None),
-        SetState("error", None),
-        CallTool(
-            do_get_schema,
-            arguments={"idno": "{{ idno }}"},
-            on_success=[
-                SetState("schema_data", "{{ $result }}"),
-                SetState("loading", False),
-            ],
-            on_error=[
-                SetState("error", "Failed to load schema."),
-                SetState("loading", False),
-            ],
-        ),
-    ]
+    Args:
+        idno: Indicator idno to explore (e.g. SP.POP.TOTL). Pre-fills the form and loads the schema.
+    """
+    result = None
+    if idno:
+        result = await do_get_schema(idno=idno)
+
+    _load_action = make_action(
+        do_get_schema,
+        {"idno": "{{ idno }}"},
+        result_key="schema_data",
+        error_msg="Failed to load schema.",
+    )
 
     with PrefabApp(
         title="DSD Schema Explorer",
         state={
             "idno": idno,
             "loading": False,
-            "schema_data": None,
-            "error": None,
+            "schema_data": result.model_dump() if result and not result.error else None,
+            "error": result.error if result else None,
         },
         css_class="p-4 max-w-3xl mx-auto",
     ) as app:
@@ -172,4 +169,4 @@ def explore_indicator_schema(idno: str = "") -> PrefabApp:
                     css_class="w-full mt-2",
                 )
 
-    return app
+    return ui_result(app, app_name="SchemaExplorer", result=result, params={"idno": idno})

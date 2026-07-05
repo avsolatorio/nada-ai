@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from fastmcp import FastMCPApp
-from prefab_ui.actions import SetState
-from prefab_ui.actions.mcp import CallTool
 from prefab_ui.app import PrefabApp
 from prefab_ui.components import (
     Badge,
@@ -25,9 +23,10 @@ from prefab_ui.components.charts import BarChart, ChartSeries
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
-from nada_ai.nada import api as nada_api
 from nada_ai.nada.models import RankResponse
-from nada_ai.mcp_server import analytics
+from nada_ai.mcp_server.tools import _nada_rank
+from nada_ai.mcp_server.apps._actions import make_action
+from nada_ai.mcp_server.apps._ui_result import ui_result
 
 rank_app = FastMCPApp("Rank")
 
@@ -43,18 +42,8 @@ async def do_rank(
     dimensions: dict[str, str] | None = None,
 ) -> RankResponse:
     """Fetch schema + data and compute ranked ref areas."""
-    schema_resp = await nada_api.get_indicator_schema(idno)
-    if schema_resp.error or not schema_resp.schema_:
-        return RankResponse(idno=idno, period=period, n=n, ascending=ascending,
-                            geo_column=None, time_column=None, obs_column=None,
-                            error=schema_resp.error or "Schema unavailable")
-    schema = schema_resp.schema_
-    data = await nada_api.get_all_timeseries_data(idno, from_year=from_year, to_year=to_year, dimensions=dimensions)
-    if data.error:
-        return RankResponse(idno=idno, period=period, n=n, ascending=ascending,
-                            geo_column=schema.geo_column, time_column=schema.time_column,
-                            obs_column=schema.obs_column, error=data.error)
-    return analytics.rank(data.data, schema, period=period, n=n, ascending=ascending, dimensions=dimensions)
+    return await _nada_rank(idno=idno, period=period, n=n, ascending=ascending,
+                            from_year=from_year, to_year=to_year, dimensions=dimensions)
 
 
 @rank_app.ui(
@@ -65,36 +54,31 @@ async def do_rank(
     ),
     title="Rank Ref Areas",
 )
-def rank_ref_areas(
+async def rank_ref_areas(
     idno: str = "",
     period: str = "",
     n: int = 10,
     ascending: bool = False,
 ) -> PrefabApp:
-    """Render the interactive rank chart + table."""
+    """Open the ranking UI, pre-loaded with data when idno and period are supplied.
 
-    _search_action = [
-        SetState("loading", True),
-        SetState("result", None),
-        SetState("error", None),
-        CallTool(
-            do_rank,
-            arguments={
-                "idno": "{{ idno }}",
-                "period": "{{ period }}",
-                "n": "{{ n }}",
-                "ascending": "{{ ascending }}",
-            },
-            on_success=[
-                SetState("result", "{{ $result }}"),
-                SetState("loading", False),
-            ],
-            on_error=[
-                SetState("error", "Ranking failed. Please check the idno and period."),
-                SetState("loading", False),
-            ],
-        ),
-    ]
+    Args:
+        idno: Indicator idno to rank (e.g. SP.POP.TOTL). Pre-fills the form.
+        period: Time period to rank within (e.g. 2022). Pre-fills the form.
+        n: Number of top/bottom ref areas to show (default 10).
+        ascending: If True show bottom-N (lowest first). Default False (top-N).
+    """
+    result = None
+    if idno and period:
+        result = await do_rank(idno=idno, period=period, n=n, ascending=ascending,
+                               from_year=int(period) if period.isdigit() else None,
+                               to_year=int(period) if period.isdigit() else None)
+
+    _search_action = make_action(
+        do_rank,
+        {"idno": "{{ idno }}", "period": "{{ period }}", "n": "{{ n }}", "ascending": "{{ ascending }}"},
+        error_msg="Ranking failed. Please check the idno and period.",
+    )
 
     with PrefabApp(
         title="Rank Ref Areas",
@@ -104,8 +88,8 @@ def rank_ref_areas(
             "n": n,
             "ascending": ascending,
             "loading": False,
-            "result": None,
-            "error": None,
+            "result": result.model_dump() if result and not result.error else None,
+            "error": result.error if result else None,
         },
         css_class="p-4 max-w-3xl mx-auto",
     ) as app:
@@ -172,4 +156,5 @@ def rank_ref_areas(
                     page_size=10,
                 )
 
-    return app
+    return ui_result(app, app_name="Rank", result=result,
+                     params={"idno": idno, "period": period, "n": n, "ascending": ascending})
