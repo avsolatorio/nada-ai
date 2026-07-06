@@ -166,8 +166,12 @@ def index_ids_op(
     recreate_index: bool = False,
     show_progress_bar: bool = True,
     buffer_size: int = 1000,
+    embedding: EmbeddingService | None = None,
 ) -> dict[str, Any]:
     """Bulk-index the given idnos for a single metadata_type.
+
+    ``embedding`` — pass the app's shared :class:`EmbeddingService` to avoid
+    reloading the model for every job.  ``None`` (default) self-loads.
 
     Returns ``{"indexed", "errors", "requested", "metadata_type", "index"}``.
     """
@@ -179,6 +183,7 @@ def index_ids_op(
         recreate_index=recreate_index,
         show_progress_bar=show_progress_bar,
         buffer_size=buffer_size,
+        embedding=embedding,
     )
     idx = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
     return {
@@ -199,6 +204,7 @@ def index_from_catalog_op(
     recreate_index: bool = False,
     show_progress_bar: bool = True,
     buffer_size: int = 1000,
+    embedding: EmbeddingService | None = None,
 ) -> dict[str, Any]:
     """Fetch ids from Data Compass search API and bulk-index them.
 
@@ -233,6 +239,7 @@ def index_from_catalog_op(
         recreate_index=recreate_index,
         show_progress_bar=show_progress_bar,
         buffer_size=buffer_size,
+        embedding=embedding,
     )
     idx = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
     return {

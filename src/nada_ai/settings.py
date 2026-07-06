@@ -102,6 +102,11 @@ class Settings(BaseSettings):
     #: Optional path to JSON registry of facetable dynamic filter keys (see ``config/dynamic_filter_facets.json``).
     dynamic_filter_facets_path: str | None = Field(default=None)
 
+    #: Maximum number of indexing jobs that may run embedding compute simultaneously.
+    #: Set to 1 for GPU deployments (single-threaded model inference avoids OOM).
+    #: Raise to 2–4 for CPU-only deployments with plentiful cores.
+    max_concurrent_ingest_jobs: int = Field(default=1, ge=1, le=16)
+
     #: IHSN search-metadata-extract API base URL (no trailing slash).
     ihsn_metadata_extract_base_url: str | None = Field(default=None)
     #: Optional API key sent as ``X-API-KEY`` (if the deployment requires it).

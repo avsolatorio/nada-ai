@@ -115,10 +115,11 @@ class QdrantIngestWriter(IngestWriterPort):
         recreate_target: bool = False,
         show_progress_bar: bool = True,
         buffer_size: int = 1000,
+        embedding: EmbeddingService | None = None,
     ) -> tuple[int, list[Any] | None]:
         if self._settings.embedding_backend != "local":
             raise ValueError("Qdrant ingest requires embedding_backend=local.")
-        embedding = EmbeddingService(self._settings)
+        embedding = embedding or EmbeddingService(self._settings)
         dim = embedding.embedding_dimension()
         self.ensure_target(dim, recreate=recreate_target)
 

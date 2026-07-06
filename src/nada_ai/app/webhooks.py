@@ -16,7 +16,8 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from nada_ai.app.admin import admin_auth, _submit_or_409
+from nada_ai.app._ingest import guarded_ingest
+from nada_ai.app.admin import _submit_or_409, admin_auth
 from nada_ai.app.state import AppState, get_state
 from nada_ai.filters.service import sync_filter_for_idno_op
 from nada_ai.ingest.service import delete_by_idno_op, index_ids_op
@@ -69,7 +70,7 @@ async def webhook_catalog(body: CatalogWebhookPayload, s: AppState = Depends(get
 
     async def factory() -> dict[str, Any]:
         delete_result = await asyncio.to_thread(delete_by_idno_op, settings, idno)
-        index_result = await asyncio.to_thread(index_ids_op, settings, [idno], metadata_type, True)
+        index_result = await guarded_ingest(s, index_ids_op, settings, [idno], metadata_type, True)
         result: dict[str, Any] = {"event": event, "delete": delete_result, "index": index_result}
         if filters:
             filter_result = await asyncio.to_thread(sync_filter_for_idno_op, settings, idno, filters)

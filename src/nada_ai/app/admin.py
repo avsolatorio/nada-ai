@@ -35,6 +35,7 @@ from nada_ai.app.admin_schemas import (
     SyncFiltersRequest,
     SyncFiltersResponse,
 )
+from nada_ai.app._ingest import guarded_ingest
 from nada_ai.app.jobs import Job, JobStatus
 from nada_ai.app.state import AppState, ensure_embedding_initialized, get_state
 from nada_ai.ingest.service import (
@@ -161,7 +162,8 @@ async def admin_ingest_by_ids(body: IndexByIdsRequest, s: AppState = Depends(get
     buffer_size = body.buffer_size
 
     async def factory() -> dict[str, Any]:
-        return await asyncio.to_thread(
+        return await guarded_ingest(
+            s,
             index_ids_op,
             settings,
             idnos,
@@ -203,7 +205,8 @@ async def admin_ingest_from_catalog(
     buffer_size = body.buffer_size
 
     async def factory() -> dict[str, Any]:
-        return await asyncio.to_thread(
+        return await guarded_ingest(
+            s,
             index_from_catalog_op,
             settings,
             catalog_type,
