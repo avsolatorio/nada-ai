@@ -111,11 +111,15 @@ async def facets_put(body: FacetsSetRequest, s: AppState = Depends(get_state)) -
     included in the response if any supplied key overlaps with the fixed filter
     key set (those keys are searchable via a separate static path and do not
     benefit from being listed here).
+
+    Concurrent writes are serialised by an asyncio lock so the file is always
+    consistent regardless of how many admin requests arrive simultaneously.
     """
-    try:
-        return await asyncio.to_thread(set_facets_config, s.settings, body.keys)
-    except OSError as e:
-        raise HTTPException(status_code=503, detail=f"Could not write facets config: {e}") from e
+    async with s.facets_config_lock:
+        try:
+            return await asyncio.to_thread(set_facets_config, s.settings, body.keys)
+        except OSError as e:
+            raise HTTPException(status_code=503, detail=f"Could not write facets config: {e}") from e
 
 
 @facets_router.post(
@@ -128,12 +132,15 @@ async def facets_add(body: FacetsAddRequest, s: AppState = Depends(get_state)) -
     """Add one or more keys to the facetable list.
 
     Idempotent — keys that are already present are reported in
-    ``already_present`` but cause no error.
+    ``already_present`` but cause no error.  The lock ensures that two
+    concurrent ``POST /admin/facets`` requests cannot lose each other's keys
+    through a read-modify-write race.
     """
-    try:
-        return await asyncio.to_thread(add_facet_keys, s.settings, body.keys)
-    except OSError as e:
-        raise HTTPException(status_code=503, detail=f"Could not write facets config: {e}") from e
+    async with s.facets_config_lock:
+        try:
+            return await asyncio.to_thread(add_facet_keys, s.settings, body.keys)
+        except OSError as e:
+            raise HTTPException(status_code=503, detail=f"Could not write facets config: {e}") from e
 
 
 @facets_router.delete(
@@ -151,10 +158,11 @@ async def facets_delete_key(
     Idempotent — deleting a key that is not present returns ``"removed": []``
     and ``"not_found": [key]`` without an error.
     """
-    try:
-        return await asyncio.to_thread(remove_facet_key, s.settings, key)
-    except OSError as e:
-        raise HTTPException(status_code=503, detail=f"Could not write facets config: {e}") from e
+    async with s.facets_config_lock:
+        try:
+            return await asyncio.to_thread(remove_facet_key, s.settings, key)
+        except OSError as e:
+            raise HTTPException(status_code=503, detail=f"Could not write facets config: {e}") from e
 
 
 @facets_router.post(
@@ -167,10 +175,11 @@ async def facets_bulk_remove(
     body: FacetsBulkRemoveRequest, s: AppState = Depends(get_state)
 ) -> dict[str, Any]:
     """Remove a set of keys from the facetable list in a single atomic write."""
-    try:
-        return await asyncio.to_thread(remove_facet_keys, s.settings, body.keys)
-    except OSError as e:
-        raise HTTPException(status_code=503, detail=f"Could not write facets config: {e}") from e
+    async with s.facets_config_lock:
+        try:
+            return await asyncio.to_thread(remove_facet_keys, s.settings, body.keys)
+        except OSError as e:
+            raise HTTPException(status_code=503, detail=f"Could not write facets config: {e}") from e
 
 
 @facets_router.post(
