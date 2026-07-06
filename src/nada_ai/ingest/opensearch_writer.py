@@ -55,13 +55,14 @@ class OpenSearchIngestWriter(IngestWriterPort):
         recreate_target: bool = False,
         show_progress_bar: bool = True,
         buffer_size: int = 1000,
+        embedding: EmbeddingService | None = None,
     ) -> tuple[int, list[Any] | None]:
         if self._settings.embedding_backend == "opensearch_ml":
-            embedding: EmbeddingService | None = None
+            _embedding: EmbeddingService | None = None
             dim = int(self._settings.opensearch_ml_embedding_dimension or 0)
         else:
-            embedding = EmbeddingService(self._settings)
-            dim = embedding.embedding_dimension()
+            _embedding = embedding or EmbeddingService(self._settings)
+            dim = _embedding.embedding_dimension()
 
         client = build_client(self._settings)
         try:
@@ -77,7 +78,7 @@ class OpenSearchIngestWriter(IngestWriterPort):
 
             actions = iter_bulk_actions(
                 self._settings,
-                embedding,
+                _embedding,
                 pairs,
                 force=force,
                 show_progress_bar=show_progress_bar,

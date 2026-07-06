@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI):
     state.embedding_init_error = None
     state.jobs = JobRegistry()
     state.facets_config_lock = asyncio.Lock()
+    state.ingest_semaphore = asyncio.Semaphore(state.settings.max_concurrent_ingest_jobs)
 
     async with mcp_app.router.lifespan_context(mcp_app):
         yield

@@ -4,6 +4,11 @@ Per-idno index/reindex/delete and filter CRUD — designed for webhook-triggered
 updates and programmatic catalog management. All write operations that may take
 time are non-blocking (202 Accepted + job_id) so callers can return immediately
 and poll /jobs/{job_id} for completion.
+
+Ingest jobs go through :func:`~nada_ai.app._ingest.guarded_ingest` which:
+- warms the shared EmbeddingService once (no duplicate model loads)
+- acquires the ingest semaphore (bounded by ``settings.max_concurrent_ingest_jobs``)
+before dispatching compute to a thread.
 """
 
 from __future__ import annotations
@@ -14,7 +19,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
-from nada_ai.app.admin import admin_auth, _idnos_key, _submit_or_409
+from nada_ai.app._ingest import guarded_ingest
+from nada_ai.app.admin import _idnos_key, _submit_or_409, admin_auth
 from nada_ai.app.admin_schemas import (
     CatalogBatchIndexRequest,
     CatalogFiltersRequest,
@@ -46,13 +52,18 @@ async def catalog_idno_status(idno: str, s: AppState = Depends(get_state)) -> Ca
 async def catalog_idno_index(
     idno: str, body: CatalogIndexRequest, s: AppState = Depends(get_state)
 ) -> JSONResponse:
-    """Queue a non-blocking job to index a single idno."""
+    """Queue a non-blocking job to index a single idno.
+
+    The job waits for the ingest semaphore before loading the embedding model,
+    so concurrent requests are serialised on compute rather than multiplying
+    memory/GPU usage.
+    """
     settings = s.settings
     metadata_type = body.metadata_type
     force = body.force
 
     async def factory() -> dict[str, Any]:
-        return await asyncio.to_thread(index_ids_op, settings, [idno], metadata_type, force)
+        return await guarded_ingest(s, index_ids_op, settings, [idno], metadata_type, force)
 
     return await _submit_or_409(
         s,
@@ -73,8 +84,9 @@ async def catalog_idno_reindex(
     force = body.force
 
     async def factory() -> dict[str, Any]:
+        # Delete is fast (no embedding) — do it outside the semaphore.
         delete_result = await asyncio.to_thread(delete_by_idno_op, settings, idno)
-        index_result = await asyncio.to_thread(index_ids_op, settings, [idno], metadata_type, force)
+        index_result = await guarded_ingest(s, index_ids_op, settings, [idno], metadata_type, force)
         return {"delete": delete_result, "index": index_result}
 
     return await _submit_or_409(
@@ -177,7 +189,7 @@ async def catalog_batch_index(body: CatalogBatchIndexRequest, s: AppState = Depe
     force = body.force
 
     async def factory() -> dict[str, Any]:
-        return await asyncio.to_thread(index_ids_op, settings, idnos, metadata_type, force)
+        return await guarded_ingest(s, index_ids_op, settings, idnos, metadata_type, force)
 
     return await _submit_or_409(
         s,

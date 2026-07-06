@@ -30,6 +30,9 @@ class AppState:
     jobs: JobRegistry
     #: Serialises concurrent load→mutate→save cycles for the facets config file.
     facets_config_lock: asyncio.Lock
+    #: Bounds the number of jobs that may run embedding compute simultaneously.
+    #: Sized from ``settings.max_concurrent_ingest_jobs`` at startup.
+    ingest_semaphore: asyncio.Semaphore
 
 
 state = AppState()
