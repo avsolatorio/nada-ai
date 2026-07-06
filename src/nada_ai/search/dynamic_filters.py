@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -78,21 +80,28 @@ def save_dynamic_facet_keys(
 ) -> Path:
     """Atomically persist ``keys`` to the facets config file.
 
-    Creates parent directories if needed.  Uses a rename-based atomic swap so
-    concurrent readers never see a partial write.  Returns the path written.
+    Creates parent directories if needed.  Uses ``tempfile.mkstemp`` for a
+    unique per-call temp file (so concurrent callers never clobber each other's
+    in-flight write) then renames atomically into place.  Returns the path
+    written.
     """
     path, _ = _resolve_facets_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"facetable": sorted(str(k) for k in keys if str(k).strip())}
-    tmp = path.with_suffix(".json.tmp")
+    content = (
+        json.dumps({"facetable": sorted(str(k) for k in keys if str(k).strip())}, indent=2, ensure_ascii=False)
+        + "\n"
+    ).encode("utf-8")
+    fd, tmp_str = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}.", suffix=".tmp")
+    tmp = Path(tmp_str)
     try:
-        tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        tmp.replace(path)  # atomic on POSIX; near-atomic on Windows
-    finally:
         try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+            os.write(fd, content)
+        finally:
+            os.close(fd)  # always release the OS file descriptor
+        tmp.replace(path)  # atomic on POSIX; near-atomic on Windows
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
 
 

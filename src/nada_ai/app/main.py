@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI):
     state.embedding_init_lock = asyncio.Lock()
     state.embedding_init_error = None
     state.jobs = JobRegistry()
+    state.facets_config_lock = asyncio.Lock()
 
     async with mcp_app.router.lifespan_context(mcp_app):
         yield

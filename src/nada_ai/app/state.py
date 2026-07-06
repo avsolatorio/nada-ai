@@ -28,6 +28,8 @@ class AppState:
     embedding_init_lock: asyncio.Lock
     embedding_init_error: str | None
     jobs: JobRegistry
+    #: Serialises concurrent load→mutate→save cycles for the facets config file.
+    facets_config_lock: asyncio.Lock
 
 
 state = AppState()
