@@ -150,7 +150,6 @@ async def admin_setup_ingest_pipeline(s: AppState = Depends(get_state)) -> JSONR
 
 @admin_router.post("/admin/ingest/by-ids", dependencies=[Depends(admin_auth)])
 async def admin_ingest_by_ids(body: IndexByIdsRequest, s: AppState = Depends(get_state)) -> JSONResponse:
-    _require_opensearch(s)
     settings = s.settings
     idnos = [i.strip() for i in body.idnos if i.strip()]
     if not idnos:
@@ -505,4 +504,6 @@ __all__ = [
     "admin_router",
     "ADMIN_API_KEY_ENV",
     "jobs_router",
+    "_idnos_key",
+    "_submit_or_409",
 ]

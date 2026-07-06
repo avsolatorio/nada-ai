@@ -96,3 +96,26 @@ class GetFiltersResponse(BaseModel):
     found: bool
     point_count: int
     filter_fields: list[dict[str, Any]] | None = None
+
+
+class CatalogIndexRequest(BaseModel):
+    metadata_type: str = Field(default="indicator", description="indicator | document | microdata | geospatial")
+    force: bool = Field(default=False, description="Bypass MetadataLoader cache.")
+
+
+class CatalogBatchIndexRequest(BaseModel):
+    idnos: list[str] = Field(..., min_length=1)
+    metadata_type: str = Field(default="indicator")
+    force: bool = Field(default=False)
+
+
+class CatalogFiltersRequest(BaseModel):
+    filters: dict[str, Any] = Field(default_factory=dict)
+
+
+class CatalogStatusResponse(BaseModel):
+    idno: str
+    backend: str
+    indexed: bool
+    doc_count: int
+    filter_fields: list[dict[str, Any]] | None = None

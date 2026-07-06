@@ -30,6 +30,57 @@ def _close_quiet(client: Any) -> None:
         pass
 
 
+def delete_by_idno_op(settings: Settings, idno: str) -> dict[str, Any]:
+    """Delete all indexed documents/points for an idno. Works with both backends."""
+    if settings.search_backend == "qdrant":
+        return _delete_qdrant(settings, idno)
+    return _delete_opensearch(settings, idno)
+
+
+def _delete_qdrant(settings: Settings, idno: str) -> dict[str, Any]:
+    from qdrant_client.http import models as qm
+    from nada_ai.ingest.qdrant_writer import _client as make_client
+    from nada_ai.search.backend.opensearch.mapping import metadata_field
+
+    client = make_client(settings)
+    coll = settings.qdrant_collection
+    try:
+        result = client.delete(
+            collection_name=coll,
+            points_selector=qm.FilterSelector(
+                filter=qm.Filter(must=[
+                    qm.FieldCondition(key=metadata_field("idno"), match=qm.MatchValue(value=idno))
+                ])
+            ),
+        )
+        return {
+            "backend": "qdrant",
+            "collection": coll,
+            "idno": idno,
+            "operation": result.status.value if result else "unknown",
+        }
+    finally:
+        client.close()
+
+
+def _delete_opensearch(settings: Settings, idno: str) -> dict[str, Any]:
+    from nada_ai.search.backend.opensearch.mapping import metadata_field
+
+    client = build_client(settings)
+    try:
+        body = {"query": {"term": {metadata_field("idno"): idno}}}
+        resp = client.delete_by_query(index=settings.index_name, body=body, refresh=True)
+        return {
+            "backend": "opensearch",
+            "index": settings.index_name,
+            "idno": idno,
+            "deleted": int(resp.get("deleted") or 0),
+            "total": resp.get("total"),
+        }
+    finally:
+        _close_quiet(client)
+
+
 def put_index_template_op(settings: Settings) -> dict[str, Any]:
     """Install composable index template (and optional cluster auto-create setting) for OpenSearch only."""
     if settings.search_backend == "qdrant":

@@ -12,6 +12,9 @@ from opensearchpy.exceptions import NotFoundError, RequestError
 
 from nada_ai import __version__
 from nada_ai.app.admin import admin_router, jobs_router
+from nada_ai.app.catalog_admin import catalog_router
+from nada_ai.app.facets_admin import facets_router
+from nada_ai.app.webhooks import webhooks_router
 from nada_ai.app.demo_preview import render_pdf_page_png, resolve_document_pdf_path
 from nada_ai.app.jobs import JobRegistry
 from nada_ai.app.schemas import (
@@ -70,6 +73,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="NADA AI Search", version=__version__, lifespan=lifespan)
 app.include_router(admin_router)
 app.include_router(jobs_router)
+app.include_router(catalog_router)
+app.include_router(facets_router)
+app.include_router(webhooks_router)
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
