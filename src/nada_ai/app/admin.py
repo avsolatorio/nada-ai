@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import logging
 import os
 from typing import Any
@@ -70,10 +71,27 @@ jobs_router = APIRouter(tags=["jobs"])
 
 ADMIN_API_KEY_ENV = "NADA_ADMIN_API_KEY"
 
+_ADMIN_AUTH_WARNED = False
+
+
+def _warn_no_admin_key() -> None:
+    global _ADMIN_AUTH_WARNED
+    if not _ADMIN_AUTH_WARNED:
+        logger.warning(
+            "SECURITY: %s is not set — all admin and webhook endpoints are "
+            "unauthenticated. Set this variable before exposing the server on "
+            "any network.",
+            ADMIN_API_KEY_ENV,
+        )
+        _ADMIN_AUTH_WARNED = True
+
 
 def admin_auth(x_admin_key: str | None = Header(default=None, alias="X-NADA-Admin-Key")) -> None:
     expected = os.getenv(ADMIN_API_KEY_ENV)
-    if expected and x_admin_key != expected:
+    if not expected:
+        _warn_no_admin_key()
+        return
+    if not hmac.compare_digest(x_admin_key or "", expected):
         raise HTTPException(status_code=401, detail="invalid or missing X-NADA-Admin-Key")
 
 
@@ -87,7 +105,7 @@ def _job_envelope(job: Job) -> dict[str, Any]:
 
 def _idnos_key(idnos: list[str]) -> str:
     canonical = ",".join(sorted({i.strip() for i in idnos if i.strip()}))
-    return hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 async def _submit_or_409(
@@ -243,7 +261,8 @@ async def admin_index_stats(s: AppState = Depends(get_state)) -> IndexStatsRespo
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=f"index {name} not found") from e
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        logger.error("index stats failed: %s", e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
 
     indices = stats.get("indices") or {}
     info = indices.get(name) or {}
@@ -268,7 +287,8 @@ async def admin_index_mapping(s: AppState = Depends(get_state)) -> dict[str, Any
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=f"index {name} not found") from e
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        logger.error("get mapping failed: %s", e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
 
 
 @admin_router.post("/admin/index/refresh", dependencies=[Depends(admin_auth)])
@@ -281,7 +301,8 @@ async def admin_index_refresh(s: AppState = Depends(get_state)) -> dict[str, Any
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=f"index {name} not found") from e
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        logger.error("index refresh failed: %s", e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
 
 
 @admin_router.delete("/admin/index", dependencies=[Depends(admin_auth)])
@@ -299,7 +320,8 @@ async def admin_index_delete(
     except NotFoundError:
         return {"index": name, "deleted": False, "detail": "index did not exist"}
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        logger.error("index delete failed: %s", e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
 
 
 @admin_router.get("/admin/docs/{idno}", dependencies=[Depends(admin_auth)])
@@ -315,7 +337,8 @@ async def admin_doc_get(idno: str, s: AppState = Depends(get_state)) -> dict[str
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=f"index {name} not found") from e
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        logger.error("doc search failed for %s: %s", idno, e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
     hits = resp.get("hits", {}).get("hits", []) or []
     return {
         "index": name,
@@ -341,7 +364,8 @@ async def admin_doc_delete(idno: str, s: AppState = Depends(get_state)) -> Delet
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=f"index {name} not found") from e
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        logger.error("delete_by_query failed for %s: %s", idno, e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
     return DeleteDocsResponse(
         index=name,
         deleted=int(resp.get("deleted") or 0),
@@ -424,7 +448,8 @@ async def admin_qdrant_collection(s: AppState = Depends(get_state)) -> dict[str,
     try:
         info = await client.get_collection(collection_name=coll)
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        logger.error("qdrant get_collection failed: %s", e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
     payload = info.model_dump() if hasattr(info, "model_dump") else {"repr": repr(info)}
     return {"collection": coll, "info": payload}
 
@@ -470,7 +495,7 @@ async def admin_filters_get(idno: str, s: AppState = Depends(get_state)) -> GetF
     return GetFiltersResponse(**out)
 
 
-@jobs_router.get("/jobs", response_model=JobListResponse)
+@jobs_router.get("/jobs", response_model=JobListResponse, dependencies=[Depends(admin_auth)])
 async def jobs_list(
     status: str | None = Query(default=None, description="Filter by status: pending|running|succeeded|failed|cancelled"),
     limit: int = Query(default=50, ge=1, le=500),
@@ -486,7 +511,7 @@ async def jobs_list(
     return JobListResponse(jobs=[_job_to_response(j) for j in jobs])
 
 
-@jobs_router.get("/jobs/{job_id}", response_model=JobResponse)
+@jobs_router.get("/jobs/{job_id}", response_model=JobResponse, dependencies=[Depends(admin_auth)])
 async def job_get(job_id: str, s: AppState = Depends(get_state)) -> JobResponse:
     job = s.jobs.get(job_id)
     if job is None:
@@ -494,7 +519,7 @@ async def job_get(job_id: str, s: AppState = Depends(get_state)) -> JobResponse:
     return _job_to_response(job)
 
 
-@jobs_router.delete("/jobs/{job_id}", response_model=JobResponse)
+@jobs_router.delete("/jobs/{job_id}", response_model=JobResponse, dependencies=[Depends(admin_auth)])
 async def job_cancel(job_id: str, s: AppState = Depends(get_state)) -> JobResponse:
     job = await s.jobs.cancel(job_id)
     if job is None:

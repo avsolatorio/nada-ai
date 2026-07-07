@@ -14,9 +14,12 @@ before dispatching compute to a thread.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+
+logger = logging.getLogger(__name__)
 from fastapi.responses import JSONResponse
 
 from nada_ai.app._ingest import guarded_ingest
@@ -104,7 +107,8 @@ async def catalog_idno_delete(idno: str, s: AppState = Depends(get_state)) -> JS
     try:
         result = await asyncio.to_thread(delete_by_idno_op, s.settings, idno)
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        logger.error("delete failed for %s: %s", idno, e)
+        raise HTTPException(status_code=503, detail="delete operation failed") from e
     return JSONResponse(status_code=200, content=result)
 
 

@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
+import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+logger = logging.getLogger(__name__)
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 from opensearchpy.exceptions import NotFoundError, RequestError
 
 from nada_ai import __version__
-from nada_ai.app.admin import admin_router, jobs_router
+from nada_ai.app.admin import admin_auth, admin_router, jobs_router
 from nada_ai.app.catalog_admin import catalog_router
 from nada_ai.app.facets_admin import facets_router
 from nada_ai.app.webhooks import webhooks_router
@@ -52,6 +57,13 @@ async def lifespan(app: FastAPI):
     state.jobs = JobRegistry()
     state.facets_config_lock = asyncio.Lock()
     state.ingest_semaphore = asyncio.Semaphore(state.settings.max_concurrent_ingest_jobs)
+
+    if not os.getenv("NADA_ADMIN_API_KEY"):
+        logger.warning(
+            "SECURITY: NADA_ADMIN_API_KEY is not set — admin, webhook, and "
+            "warmup endpoints are unauthenticated. Set this variable before "
+            "exposing the server on any network."
+        )
 
     async with mcp_app.router.lifespan_context(mcp_app):
         yield
@@ -119,7 +131,8 @@ async def demo_document_page_preview(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Failed to render PDF page: {e}") from e
+        logger.error("PDF render failed for %s page %d: %s", idno, page, e)
+        raise HTTPException(status_code=503, detail="Failed to render PDF page") from e
     return Response(
         content=png,
         media_type="image/png",
@@ -136,7 +149,8 @@ async def health(s: AppState = Depends(get_state)) -> dict[str, Any]:
         ok = await s.client.cluster.health()
         return {"status": "ok", "cluster": ok.get("status"), "index": s.settings.index_name}
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        logger.error("health check failed: %s", e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
 
 
 def _embedding_status_extras(s: AppState) -> dict[str, Any]:
@@ -187,7 +201,7 @@ async def embedding_health(s: AppState = Depends(get_state)) -> dict[str, Any]:
     }
 
 
-@app.post("/health/embeddings/warmup")
+@app.post("/health/embeddings/warmup", dependencies=[Depends(admin_auth)])
 async def embedding_warmup(s: AppState = Depends(get_state)) -> dict[str, Any]:
     if s.settings.embedding_backend != "local":
         return {
@@ -213,7 +227,11 @@ async def embedding_warmup(s: AppState = Depends(get_state)) -> dict[str, Any]:
 
 
 @app.post("/search", response_model=SearchResponse)
-async def search(body: SearchRequest, s: AppState = Depends(get_state)) -> SearchResponse:
+async def search(
+    body: SearchRequest,
+    s: AppState = Depends(get_state),
+    x_admin_key: str | None = Header(default=None, alias="X-NADA-Admin-Key"),
+) -> SearchResponse:
     filters = body.filters.as_dict() if body.filters else None
     query_vector = None
     if body.mode in ("vector", "hybrid") and s.settings.embedding_backend == "local":
@@ -266,7 +284,9 @@ async def search(body: SearchRequest, s: AppState = Depends(get_state)) -> Searc
     except Exception as e:
         raise _search_backend_http_exception(e, s) from e
 
-    dbg = outcome.debug_request if body.include_debug_request else None
+    _expected_key = os.getenv("NADA_ADMIN_API_KEY")
+    _is_admin = bool(_expected_key and hmac.compare_digest(x_admin_key or "", _expected_key))
+    dbg = outcome.debug_request if (body.include_debug_request and _is_admin) else None
     return SearchResponse(
         total=outcome.total,
         hits=outcome.hits,
@@ -277,6 +297,7 @@ async def search(body: SearchRequest, s: AppState = Depends(get_state)) -> Searc
 
 
 def _search_backend_http_exception(e: Exception, s: AppState) -> HTTPException:
+    import logging as _log
     if isinstance(e, ValueError):
         return HTTPException(status_code=400, detail=str(e))
     if isinstance(e, NotFoundError):
@@ -295,7 +316,8 @@ def _search_backend_http_exception(e: Exception, s: AppState) -> HTTPException:
             )
             return HTTPException(status_code=400, detail=detail)
         return HTTPException(status_code=400, detail=str(e))
-    return HTTPException(status_code=503, detail=str(e))
+    logger.error("search backend error: %s", e)
+    return HTTPException(status_code=503, detail="search backend error")
 
 
 @app.post("/recommendations", response_model=SearchResponse)
