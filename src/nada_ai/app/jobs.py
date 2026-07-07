@@ -64,7 +64,21 @@ class Job:
     """Set on the snapshot returned by :meth:`JobRegistry.submit` when the
     submitter hit an existing in-flight job (single-flight rejection)."""
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, include_sensitive: bool = False) -> dict[str, Any]:
+        """Serialise to a dict safe for external API consumers.
+
+        ``error`` is redacted by default to avoid leaking backend details
+        (connection strings, hostnames, credentials) in exception messages.
+        Pass ``include_sensitive=True`` only for internal server-side logging.
+        """
+        error: str | None
+        if self.error is None:
+            error = None
+        elif include_sensitive:
+            error = self.error
+        else:
+            # Expose the exception type but not the potentially sensitive message.
+            error = self.error.split(":")[0] if ":" in self.error else self.error
         return {
             "id": self.id,
             "kind": self.kind,
@@ -75,7 +89,7 @@ class Job:
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "result": self.result,
-            "error": self.error,
+            "error": error,
             "progress": self.progress,
         }
 

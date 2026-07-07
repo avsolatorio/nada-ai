@@ -65,10 +65,20 @@ def _request_kwargs(settings: Settings) -> dict[str, Any]:
     }
 
 
-def _wrap_extract_error(exc: Exception) -> IhsnExtractError:
-    if isinstance(exc, catalog_extract.CatalogExtractError):
-        return IhsnExtractError(str(exc))
-    return IhsnExtractError(str(exc))
+def _scrub_credentials(msg: str, settings: Settings) -> str:
+    """Remove known credential values from an exception message string."""
+    for secret in filter(None, [
+        settings.ihsn_api_key,
+        settings.ihsn_auth_bearer,
+        settings.ihsn_auth_cookie,
+    ]):
+        msg = msg.replace(secret, "[REDACTED]")
+    return msg
+
+
+def _wrap_extract_error(exc: Exception, settings: Settings | None = None) -> IhsnExtractError:
+    msg = _scrub_credentials(str(exc), settings) if settings is not None else str(exc)
+    return IhsnExtractError(msg)
 
 
 def study_idno(study: dict[str, Any]) -> str | None:
@@ -121,7 +131,7 @@ def fetch_study_records(
             **_request_kwargs(settings),
         )
     except Exception as e:
-        raise _wrap_extract_error(e) from e
+        raise _wrap_extract_error(e, settings) from e
 
     records = parse_extract_response(data)
     if not records:
@@ -153,7 +163,7 @@ def iter_study_records(
                     **request_kwargs,
                 )
             except Exception as e:
-                raise _wrap_extract_error(e) from e
+                raise _wrap_extract_error(e, settings) from e
 
             batch = parse_extract_response(data)
             if not batch:

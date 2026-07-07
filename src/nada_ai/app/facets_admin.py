@@ -207,6 +207,10 @@ async def facets_backfill(s: AppState = Depends(get_state)) -> JSONResponse:
     settings = s.settings
 
     async def factory() -> dict[str, Any]:
+        # The backfill reads filter_fields stored in each Qdrant point; it does
+        # not depend on the facets config file, so concurrent config writes do
+        # not corrupt the backfill — at worst the next search picks up the new
+        # config before the backfill completes (acceptable eventual consistency).
         return await asyncio.to_thread(backfill_facets_op, settings)
 
     return await _submit_or_409(
