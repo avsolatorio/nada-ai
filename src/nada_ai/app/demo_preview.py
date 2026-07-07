@@ -8,22 +8,15 @@ import pymupdf
 
 from ai4data.discovery.paths import get_document_cache_path
 
-# Cache root is derived once from a known-safe sentinel idno.  All resolved
-# paths must be descendants of this directory.
-_CACHE_ROOT: Path | None = None
-
-
-def _cache_root() -> Path:
-    global _CACHE_ROOT
-    if _CACHE_ROOT is None:
-        _CACHE_ROOT = get_document_cache_path("__sentinel__", "document").parent.parent
-    return _CACHE_ROOT
+def _document_cache_root() -> Path:
+    """Return the cache root directory (two levels above any document cache path)."""
+    return get_document_cache_path("__probe__", "document").parent.parent
 
 
 def _assert_within_cache(path: Path) -> None:
     """Raise ValueError if *path* escapes the document cache directory."""
     try:
-        path.resolve().relative_to(_cache_root().resolve())
+        path.resolve().relative_to(_document_cache_root().resolve())
     except ValueError:
         raise ValueError("path is outside the document cache directory")
 
