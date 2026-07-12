@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from opensearchpy import AsyncOpenSearch
 
     from nada_ai.app.jobs import JobRegistry
+    from nada_ai.app.metrics import MetricsRegistry
     from nada_ai.app.rate_limit import RateLimiter
     from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
     from nada_ai.search.ports import SearchBackendPort
@@ -40,6 +41,8 @@ class AppState:
     audit_lock: asyncio.Lock
     #: Per-process rate limiter for public search endpoints. ``limit_per_minute<=0`` disables.
     search_rate_limiter: RateLimiter
+    #: Per-process HTTP request counters/latency histogram, exposed at GET /admin/metrics.
+    metrics: MetricsRegistry
 
 
 state = AppState()

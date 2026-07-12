@@ -125,6 +125,11 @@ class Settings(BaseSettings):
     #: /search, /recommendations, /search/explain, and PDF preview endpoints. 0 disables.
     rate_limit_search_per_minute: int = Field(default=120, ge=0)
 
+    #: Root logger format for the FastAPI process. ``json`` for log-aggregator environments.
+    log_format: Literal["text", "json"] = Field(default="text")
+    #: Root logger level for the FastAPI process (DEBUG/INFO/WARNING/ERROR/CRITICAL).
+    log_level: str = Field(default="INFO")
+
     @field_validator("opensearch_cluster_auto_create_index", mode="before")
     @classmethod
     def empty_auto_create_to_none(cls, v: Any) -> str | None:
