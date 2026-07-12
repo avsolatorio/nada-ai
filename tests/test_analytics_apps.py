@@ -205,6 +205,7 @@ async def test_growth_app_empty_ref_areas():
     ("nada_ai.mcp_server.apps.growth_app.show_growth",
      {"idno": "TEST", "base_period": "2010", "end_period": "2020"}),
     ("nada_ai.mcp_server.apps.extremes_app.show_extremes", {"idno": "TEST"}),
+    ("nada_ai.mcp_server.apps.visualize_app.visualize_indicators", {"idno": "TEST"}),
 ])
 async def test_app_to_json_is_dict(factory, kwargs):
     import importlib
@@ -355,3 +356,75 @@ async def test_correlate_app_renders_with_chart_data():
     assert d["state"]["result"]["pearson_r"] == 0.87
     assert d["state"]["result"]["rows"][0]["value1"] == 1.0
     assert d["state"]["result"]["rows"][0]["value2"] == 2.0
+
+
+# ---------------------------------------------------------------------------
+# visualize_app — fixed 3-slot chart, merged by period across indicators
+# ---------------------------------------------------------------------------
+
+def _fake_aggregate_response(idno, values):
+    from nada_ai.nada.models import AggregateResponse, AggregateRow
+    rows = [
+        AggregateRow(period=str(2000 + i), n_ref_areas=2, mean=v, median=v,
+                     total=v * 2, min_value=v - 1, max_value=v + 1, std=0.1)
+        for i, v in enumerate(values)
+    ]
+    return AggregateResponse(idno=idno, rows=rows, indicator_name=idno, error=None)
+
+
+@pytest.mark.asyncio
+async def test_visualize_do_visualize_merges_by_period():
+    from nada_ai.mcp_server.apps.visualize_app import do_visualize
+
+    with patch("nada_ai.mcp_server.apps.visualize_app._nada_aggregate", new=AsyncMock()) as m:
+        m.side_effect = [
+            _fake_aggregate_response("A", [1.0, 2.0]),
+            _fake_aggregate_response("B", [10.0, 20.0]),
+        ]
+        result = await do_visualize(idno="A", idno2="B", idno3="", ref_areas="KEN,UGA")
+
+    assert result["rows"] == [
+        {"period": "2000", "value_1": 1.0, "value_2": 10.0},
+        {"period": "2001", "value_1": 2.0, "value_2": 20.0},
+    ]
+    assert result["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_visualize_do_visualize_single_indicator_skips_unset_slots():
+    from nada_ai.mcp_server.apps.visualize_app import do_visualize
+
+    with patch("nada_ai.mcp_server.apps.visualize_app._nada_aggregate",
+               new=AsyncMock(return_value=_fake_aggregate_response("A", [5.0]))):
+        result = await do_visualize(idno="A")
+
+    assert result["rows"] == [{"period": "2000", "value_1": 5.0}]
+
+
+@pytest.mark.asyncio
+async def test_visualize_app_renders_empty():
+    from nada_ai.mcp_server.apps.visualize_app import visualize_indicators
+
+    app = await visualize_indicators()
+    assert isinstance(app, PrefabApp)
+    d = app.to_json()
+    assert d["state"]["result"] is None
+
+
+@pytest.mark.asyncio
+async def test_visualize_app_with_result_has_no_ref_areas_list_key():
+    from nada_ai.mcp_server.apps.visualize_app import visualize_indicators
+
+    with patch("nada_ai.mcp_server.apps.visualize_app._nada_aggregate", new=AsyncMock()) as m:
+        m.side_effect = [
+            _fake_aggregate_response("A", [1.0]),
+            _fake_aggregate_response("B", [2.0]),
+        ]
+        result = await visualize_indicators(idno="A", idno2="B", ref_areas="KEN, UGA", chart_type="area")
+
+    d = _get_json(result)
+    assert d["state"]["result"]["rows"][0]["value_1"] == 1.0
+    assert d["state"]["result"]["rows"][0]["value_2"] == 2.0
+    assert d["state"]["chart_type"] == "area"
+    assert d["state"]["ref_areas"] == "KEN, UGA"
+    assert "ref_areas_list" not in d["state"]
