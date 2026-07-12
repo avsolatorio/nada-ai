@@ -4,13 +4,15 @@ import asyncio
 import json
 import logging
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 from opensearchpy.exceptions import NotFoundError, RequestError
 
@@ -22,7 +24,11 @@ from nada_ai.app.catalog_admin import catalog_router
 from nada_ai.app.facets_admin import facets_router
 from nada_ai.app.keys_admin import keys_router
 from nada_ai.app.keys_store import Role
+from nada_ai.app.logging_setup import configure_logging
+from nada_ai.app.metrics import MetricsRegistry
+from nada_ai.app.metrics_admin import metrics_router
 from nada_ai.app.rate_limit import RateLimiter, rate_limited
+from nada_ai.app.request_context import reset_request_id, set_request_id
 from nada_ai.app.webhooks import webhooks_router
 from nada_ai.app.demo_preview import render_pdf_page_png, resolve_document_pdf_path
 from nada_ai.app.jobs import JobRegistry
@@ -50,6 +56,7 @@ mcp_app = mcp.http_app(path="/mcp")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state.settings = Settings()
+    configure_logging(state.settings.log_format, state.settings.log_level)
     if state.settings.search_backend == "opensearch":
         state.client = build_async_client(state.settings)
     else:
@@ -64,6 +71,7 @@ async def lifespan(app: FastAPI):
     state.api_keys_lock = asyncio.Lock()
     state.audit_lock = asyncio.Lock()
     state.search_rate_limiter = RateLimiter(state.settings.rate_limit_search_per_minute)
+    state.metrics = MetricsRegistry()
 
     if not os.getenv("NADA_ADMIN_API_KEY"):
         logger.warning(
@@ -100,6 +108,33 @@ app.include_router(facets_router)
 app.include_router(webhooks_router)
 app.include_router(keys_router)
 app.include_router(audit_router)
+app.include_router(metrics_router)
+
+
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    """Assign/propagate a request ID and record per-route latency + status metrics."""
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    token = set_request_id(request_id)
+    start = time.monotonic()
+    try:
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration = time.monotonic() - start
+            route_obj = request.scope.get("route")
+            route = route_obj.path if route_obj is not None else request.url.path
+            await state.metrics.record(route, 500, duration)
+            raise
+        duration = time.monotonic() - start
+        route_obj = request.scope.get("route")
+        route = route_obj.path if route_obj is not None else request.url.path
+        await state.metrics.record(route, response.status_code, duration)
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        reset_request_id(token)
+
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
