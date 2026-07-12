@@ -9,6 +9,7 @@ from opensearchpy.helpers import bulk
 
 from nada_ai.ingest.pipeline import ensure_index, iter_bulk_actions
 from nada_ai.ingest.ports import IngestWriterPort
+from nada_ai.ingest.quality import QualityReport
 from nada_ai.search.backend.opensearch.client import build_client
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
 from nada_ai.search.backend.opensearch.index_template import (
@@ -56,6 +57,7 @@ class OpenSearchIngestWriter(IngestWriterPort):
         show_progress_bar: bool = True,
         buffer_size: int = 1000,
         embedding: EmbeddingService | None = None,
+        quality_report: QualityReport | None = None,
     ) -> tuple[int, list[Any] | None]:
         if self._settings.embedding_backend == "opensearch_ml":
             _embedding: EmbeddingService | None = None
@@ -83,6 +85,7 @@ class OpenSearchIngestWriter(IngestWriterPort):
                 force=force,
                 show_progress_bar=show_progress_bar,
                 buffer_size=buffer_size,
+                quality_report=quality_report,
             )
             success, errors = bulk(client, actions, raise_on_error=False, refresh="wait_for")
             err_list: list[Any] | None = None

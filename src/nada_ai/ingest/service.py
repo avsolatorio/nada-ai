@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from nada_ai.ingest.pipeline import run_bulk_index
+from nada_ai.ingest.quality import QualityReport
 from nada_ai.search.backend.opensearch.client import build_client
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
 from nada_ai.search.backend.opensearch.index_template import (
@@ -224,9 +225,13 @@ def index_ids_op(
     ``embedding`` — pass the app's shared :class:`EmbeddingService` to avoid
     reloading the model for every job.  ``None`` (default) self-loads.
 
-    Returns ``{"indexed", "errors", "requested", "metadata_type", "index"}``.
+    Returns ``{"indexed", "errors", "requested", "metadata_type", "index", "quality"}``.
+    ``quality`` is a non-blocking report of thin/malformed source documents
+    (empty content, missing idno/type) observed during this run — see
+    ``ingest/quality.py``. It never affects what gets indexed.
     """
     pairs = [(i, metadata_type) for i in idnos]
+    report = QualityReport()
     n, err = run_bulk_index(
         settings,
         pairs,
@@ -235,6 +240,7 @@ def index_ids_op(
         show_progress_bar=show_progress_bar,
         buffer_size=buffer_size,
         embedding=embedding,
+        quality_report=report,
     )
     idx = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
     return {
@@ -243,6 +249,7 @@ def index_ids_op(
         "requested": len(idnos),
         "metadata_type": metadata_type,
         "index": idx,
+        "quality": report.to_dict(),
     }
 
 
@@ -259,7 +266,10 @@ def index_from_catalog_op(
 ) -> dict[str, Any]:
     """Fetch ids from Data Compass search API and bulk-index them.
 
-    Returns ``{"indexed", "errors", "rows", "catalog_type", "index"}``.
+    Returns ``{"indexed", "errors", "rows", "catalog_type", "index", "quality"}``.
+    ``quality`` is a non-blocking report of thin/malformed source documents
+    observed during this run — see ``ingest/quality.py``. It never affects
+    what gets indexed.
     """
     from ai4data.discovery.catalog import get_metadata_ids, is_extract_mode
 
@@ -283,6 +293,7 @@ def index_from_catalog_op(
             continue
         pairs.append((idno, t))
 
+    report = QualityReport()
     n, err = run_bulk_index(
         settings,
         pairs,
@@ -291,6 +302,7 @@ def index_from_catalog_op(
         show_progress_bar=show_progress_bar,
         buffer_size=buffer_size,
         embedding=embedding,
+        quality_report=report,
     )
     idx = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
     return {
@@ -299,4 +311,5 @@ def index_from_catalog_op(
         "rows": len(pairs),
         "catalog_type": catalog_type,
         "index": idx,
+        "quality": report.to_dict(),
     }
