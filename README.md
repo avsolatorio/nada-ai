@@ -40,7 +40,7 @@ uv sync --extra local --extra qdrant
 
 ## Configuration (`NADA_*`)
 
-Settings use the **`NADA_`** prefix (see `nada_ai.settings`). Common variables:
+Settings use the **`NADA_`** prefix (see `nada_ai.settings`). **[`.env.example`](.env.example) is the authoritative, fully-documented list of every variable** (search backend, embeddings, admin auth/RBAC, rate limiting, logging, the standalone MCP server, and the `AI4DATA_*` discovery/catalog config) — copy it to `.env` and edit. Highlights:
 
 | Variable | Purpose |
 |----------|---------|
@@ -55,13 +55,15 @@ Settings use the **`NADA_`** prefix (see `nada_ai.settings`). Common variables:
 | `NADA_QUERY_PROMPT` | Optional literal prefix for `encode(..., prompt=...)`; when set, overrides `NADA_QUERY_PROMPT_NAME` for query vectors |
 | `NADA_OPENSEARCH_AUTH_MODE` | `basic` or `aws_sigv4` |
 | `NADA_AWS_REGION` | Required for SigV4 when not implicit from boto3 |
-| `NADA_ADMIN_API_KEY` | When set, admin/ingest endpoints (`POST /admin/*`, `DELETE /admin/*`) require header `X-NADA-Admin-Key: <value>`. Unset = no auth (zero-config local dev). `/jobs*` is always open. |
 
-**Discovery caches** (standalone `ai4data`):
+### Admin auth, RBAC, audit trail, rate limiting
 
-| Variable | Purpose |
-|----------|---------|
-| `AI4DATA_DISCOVERY_DATA_PATH` | Writable directory for discovery caches and bundled metadata helpers (set in Docker and CLI jobs) |
+Every admin/catalog/facets/webhook/job route requires a principal with a minimum role (`read` / `write` / `admin`), resolved from either of two credential sources:
+
+- **`NADA_ADMIN_API_KEY`** — a legacy super-admin key, checked directly against the environment (not part of `Settings`). Any caller presenting this value as `X-NADA-Admin-Key` gets role `admin`.
+- **Per-caller API keys** — issue scoped, revocable keys via `POST /admin/keys` (see `nada_ai.app.keys_admin`); each is stored hashed at `NADA_API_KEYS_PATH` (default `config/api_keys.json`).
+
+If neither `NADA_ADMIN_API_KEY` nor any stored key exists, the server runs fully **unauthenticated** with a loud startup warning — convenient for local dev, never acceptable for anything reachable over a network. Every mutating action is recorded to an append-only audit trail (`NADA_AUDIT_LOG_PATH`, default `config/audit.log`), queryable via `GET /admin/audit`. Public search endpoints (`/search`, `/recommendations`, `/search/explain`, PDF preview) are rate-limited per caller via `NADA_RATE_LIMIT_SEARCH_PER_MINUTE` (default 120/min, 0 disables).
 
 **Discovery caches** (standalone `ai4data`):
 
