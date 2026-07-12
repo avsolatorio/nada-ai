@@ -39,6 +39,17 @@ from .tool_spans import instrument_mcp_tool
 
 _TOOL_TEXTS = get_mcp_tool_texts()
 
+# Every tool in this module is a read-only query against the catalog/timeseries
+# API (or a pure computation over already-fetched data) — none mutate server
+# state. Per MCP spec (trust & safety annotations), clients can use these
+# hints to skip destructive-action confirmation prompts for these tools.
+_READ_ONLY_ANNOTATIONS = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": True,
+}
+
 
 async def _search_catalog(
     keywords: str | None = None,
@@ -202,12 +213,14 @@ search_catalog = mcp.tool(
     instrument_mcp_tool(_search_catalog, tool_name=_TOOL_TEXTS.search_tool_name),
     name=_TOOL_TEXTS.search_tool_name,
     description=_TOOL_TEXTS.search_description,
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 get_metadata = mcp.tool(
     instrument_mcp_tool(_get_metadata, tool_name=_TOOL_TEXTS.get_metadata_tool_name),
     name=_TOOL_TEXTS.get_metadata_tool_name,
     description=_TOOL_TEXTS.get_metadata_description,
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 get_data = mcp.tool(
@@ -223,6 +236,7 @@ get_data = mcp.tool(
         "Paginate with `limit`/`offset` when `has_more` is true. "
         f"Call {_get_schema_tool_name} first to discover the column names and available dimensions for the indicator."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 
@@ -276,6 +290,7 @@ get_schema = mcp.tool(
         f"{_compare_tool_name}, {_summarize_tool_name}, {_growth_tool_name}) to discover "
         "the correct column names and any disaggregation dimensions that require filtering."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 get_codelist = mcp.tool(
@@ -287,6 +302,7 @@ get_codelist = mcp.tool(
         f"Example: call with component_name='SEX' to find valid codes (M, F, T) before passing "
         f"dimensions={{'SEX': 'F'}} to {_rank_tool_name} or other analytical tools."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 
@@ -486,6 +502,7 @@ rank_tool = mcp.tool(
         "disaggregation dimensions. Pass `dimensions` to slice disaggregated indicators "
         "(e.g. rank female literacy rates by setting dimensions={'SEX': 'F'})."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 extremes_tool = mcp.tool(
@@ -497,6 +514,7 @@ extremes_tool = mcp.tool(
         "or 'what was the worst year for Y'.\n\n"
         f"Prerequisite: call {_get_schema_tool_name} first. Pass `dimensions` for disaggregated indicators."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 compare_tool = mcp.tool(
@@ -508,6 +526,7 @@ compare_tool = mcp.tool(
         "ideal for trend comparisons across countries or regions.\n\n"
         f"Prerequisite: call {_get_schema_tool_name} first. Pass `dimensions` for disaggregated indicators."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 summarize_tool = mcp.tool(
@@ -518,6 +537,7 @@ summarize_tool = mcp.tool(
         "for a given period. Useful for understanding the distribution of an indicator.\n\n"
         f"Prerequisite: call {_get_schema_tool_name} first. Pass `dimensions` for disaggregated indicators."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 growth_tool = mcp.tool(
@@ -528,6 +548,7 @@ growth_tool = mcp.tool(
         "Returns base value, end value, absolute change, and % change for each geography.\n\n"
         f"Prerequisite: call {_get_schema_tool_name} first. Pass `dimensions` for disaggregated indicators."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 
@@ -595,6 +616,7 @@ correlate_tool = mcp.tool(
         f"Prerequisite: call {_get_schema_tool_name} on both idnos. Pass `dimensions1`/`dimensions2` "
         "for disaggregated indicators."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 
@@ -677,6 +699,7 @@ outliers_tool = mcp.tool(
         "Useful for spotting data anomalies or exceptional performers.\n\n"
         f"Prerequisite: call {_get_schema_tool_name} first. Default threshold is 2.0 (|Z| ≥ 2)."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 
@@ -728,6 +751,7 @@ trend_tool = mcp.tool(
         "ideal for 'which countries are improving fastest on X?' questions.\n\n"
         f"Prerequisite: call {_get_schema_tool_name} first. Narrow time window with `from_year`/`to_year`."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 
@@ -783,6 +807,7 @@ benchmark_tool = mcp.tool(
         "Answers 'where does Kenya stand among all countries for indicator X in 2022?'\n\n"
         f"Prerequisite: call {_get_schema_tool_name} first."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 
@@ -824,6 +849,7 @@ coverage_tool = mcp.tool(
         "Useful for understanding gaps before starting analysis.\n\n"
         f"Prerequisite: call {_get_schema_tool_name} first."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 
@@ -903,6 +929,7 @@ join_tool = mcp.tool(
         f"Prerequisite: call {_get_schema_tool_name} on both idnos. "
         "Both indicators should share the same geography type."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )
 
 
@@ -952,4 +979,5 @@ aggregate_tool = mcp.tool(
         "Useful for regional aggregates, custom groupings, or constructing composite baselines.\n\n"
         f"Prerequisite: call {_get_schema_tool_name} first."
     ),
+    annotations=_READ_ONLY_ANNOTATIONS,
 )

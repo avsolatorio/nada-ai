@@ -52,3 +52,47 @@ def _search_usage_payload() -> dict:
 async def search_usage_resource() -> str:
     """Search tool usage guidance."""
     return json.dumps(_search_usage_payload(), indent=2)
+
+
+def _analytics_workflow_payload() -> dict:
+    texts = get_mcp_tool_texts()
+    prefix = texts.prefix
+    schema_tool = f"{prefix}_get_schema"
+    codelist_tool = f"{prefix}_get_codelist"
+    return {
+        "catalog_name": texts.catalog_name,
+        "workflow": [
+            f"1. Call {schema_tool} first for any timeseries `idno` — every analytical tool below "
+            "assumes you already know the column names and available dimensions.",
+            f"2. If the indicator has disaggregation dimensions (SEX, AGE_GROUP, etc.), call "
+            f"{codelist_tool} to discover valid values before filtering with `dimensions`.",
+            "3. Pick the analytical tool that matches the question (table below), pass the "
+            "`idno` plus any `dimensions`/`ref_areas`/`period` the tool requires.",
+            "4. All analytical tools auto-paginate the underlying data fetch — no manual "
+            "pagination needed once you're past step 1.",
+        ],
+        "tools": {
+            f"{prefix}_rank": "Top/bottom-N ref areas for one period — 'which countries had the highest X in 2022?'",
+            f"{prefix}_extremes": "Global max/min across all periods and ref areas — 'what was the highest X ever recorded?'",
+            f"{prefix}_compare": "Pivoted time series for a set of ref areas — trend comparison across countries.",
+            f"{prefix}_summarize": "Descriptive stats (min/max/mean/median/std) across ref areas for one period.",
+            f"{prefix}_growth": "Period-over-period absolute and percentage change per ref area.",
+            f"{prefix}_correlate": "Pearson correlation between two indicators — 'does X correlate with Y?'",
+            f"{prefix}_outliers": "Z-score / IQR / trend-residual outlier detection, cross-section or longitudinal.",
+            f"{prefix}_trend": "Linear regression per ref area — slope, R², improving/declining/stable.",
+            f"{prefix}_benchmark": "Percentile rank and deviation from peer mean/median for specific ref areas.",
+            f"{prefix}_coverage": "Data availability per ref area — periods covered, gaps, coverage %.",
+            f"{prefix}_join": "Align two indicators by (ref_area, period) into one merged table.",
+            f"{prefix}_aggregate": "Group-level statistics (mean/median/total/min/max/std) per period for a custom ref area set.",
+        },
+        "dimensions_filter": {
+            "example": "dimensions={'SEX': 'F'}",
+            "note": f"Only valid after confirming the code with {codelist_tool} — do not guess dimension values.",
+        },
+    }
+
+
+@mcp.resource("nada://analytics-workflow")
+async def analytics_workflow_resource() -> str:
+    """Analytical tool catalog and the schema-first workflow they share."""
+    return json.dumps(_analytics_workflow_payload(), indent=2)
