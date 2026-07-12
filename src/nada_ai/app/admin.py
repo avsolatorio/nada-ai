@@ -4,21 +4,21 @@ CLI mirrors run as background jobs via :class:`nada_ai.app.jobs.JobRegistry` and
 are single-flighted by ``key`` so re-submitting the same operation while it is
 in flight returns the existing job (HTTP 409) rather than starting a duplicate.
 
-Auth: write/admin endpoints require ``X-NADA-Admin-Key`` only when the
-environment variable ``NADA_ADMIN_API_KEY`` is set. Locally unset = no auth.
-``/jobs*`` endpoints are open (no admin auth) so progress can be polled.
+Auth: see ``nada_ai.app.auth`` — every route requires a principal with a
+minimum role (``read`` / ``write`` / ``admin``), resolved from either the
+legacy ``NADA_ADMIN_API_KEY`` env var or a per-caller key issued via
+``POST /admin/keys``. Routes are annotated below with their required role.
+Mutating operations write an entry to the audit trail (``app/audit.py``).
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import hmac
 import logging
-import os
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from opensearchpy.exceptions import NotFoundError
 
@@ -37,7 +37,10 @@ from nada_ai.app.admin_schemas import (
     SyncFiltersResponse,
 )
 from nada_ai.app._ingest import guarded_ingest
+from nada_ai.app.audit import audit_log
+from nada_ai.app.auth import ADMIN_API_KEY_ENV, Principal, require_role
 from nada_ai.app.jobs import Job, JobStatus
+from nada_ai.app.keys_store import Role
 from nada_ai.app.state import AppState, ensure_embedding_initialized, get_state
 from nada_ai.ingest.service import (
     create_index_op,
@@ -69,32 +72,6 @@ admin_router = APIRouter(tags=["admin"])
 jobs_router = APIRouter(tags=["jobs"])
 
 
-ADMIN_API_KEY_ENV = "NADA_ADMIN_API_KEY"
-
-_ADMIN_AUTH_WARNED = False
-
-
-def _warn_no_admin_key() -> None:
-    global _ADMIN_AUTH_WARNED
-    if not _ADMIN_AUTH_WARNED:
-        logger.warning(
-            "SECURITY: %s is not set — all admin and webhook endpoints are "
-            "unauthenticated. Set this variable before exposing the server on "
-            "any network.",
-            ADMIN_API_KEY_ENV,
-        )
-        _ADMIN_AUTH_WARNED = True
-
-
-def admin_auth(x_admin_key: str | None = Header(default=None, alias="X-NADA-Admin-Key")) -> None:
-    expected = os.getenv(ADMIN_API_KEY_ENV)
-    if not expected:
-        _warn_no_admin_key()
-        return
-    if not hmac.compare_digest(x_admin_key or "", expected):
-        raise HTTPException(status_code=401, detail="invalid or missing X-NADA-Admin-Key")
-
-
 def _job_to_response(job: Job) -> JobResponse:
     return JobResponse(**job.to_dict())
 
@@ -115,9 +92,18 @@ async def _submit_or_409(
     key: str,
     factory,
     params: dict[str, Any],
+    principal: Principal | None = None,
 ) -> JSONResponse:
     job = await s.jobs.submit(kind=kind, key=key, factory=factory, params=params)
     payload = _job_envelope(job)
+    if principal is not None:
+        await audit_log(
+            s,
+            principal,
+            action=f"job.submit.{kind}",
+            target=job.id,
+            status="already_running" if job.was_already_running else "submitted",
+        )
     if job.was_already_running:
         return JSONResponse(
             status_code=409,
@@ -126,8 +112,12 @@ async def _submit_or_409(
     return JSONResponse(status_code=202, content=payload)
 
 
-@admin_router.post("/admin/index", dependencies=[Depends(admin_auth)])
-async def admin_create_index(body: CreateIndexRequest, s: AppState = Depends(get_state)) -> JSONResponse:
+@admin_router.post("/admin/index")
+async def admin_create_index(
+    body: CreateIndexRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.admin)),
+) -> JSONResponse:
     _require_opensearch(s)
     settings = s.settings
     recreate = body.recreate
@@ -141,18 +131,22 @@ async def admin_create_index(body: CreateIndexRequest, s: AppState = Depends(get
         key="create_index",
         factory=factory,
         params={"recreate": recreate},
+        principal=principal,
     )
 
 
-@admin_router.post("/admin/index/template", dependencies=[Depends(admin_auth)])
+@admin_router.post("/admin/index/template", dependencies=[Depends(require_role(Role.admin))])
 async def admin_put_index_template(s: AppState = Depends(get_state)) -> dict[str, Any]:
     """Install composable index template (knn_vector mapping) for ``index_name``; optional cluster auto-create."""
     _require_opensearch(s)
     return await asyncio.to_thread(put_index_template_op, s.settings)
 
 
-@admin_router.post("/admin/setup-ingest-pipeline", dependencies=[Depends(admin_auth)])
-async def admin_setup_ingest_pipeline(s: AppState = Depends(get_state)) -> JSONResponse:
+@admin_router.post("/admin/setup-ingest-pipeline")
+async def admin_setup_ingest_pipeline(
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.admin)),
+) -> JSONResponse:
     settings = s.settings
 
     async def factory() -> dict[str, Any]:
@@ -164,11 +158,16 @@ async def admin_setup_ingest_pipeline(s: AppState = Depends(get_state)) -> JSONR
         key="setup_ingest_pipeline",
         factory=factory,
         params={},
+        principal=principal,
     )
 
 
-@admin_router.post("/admin/ingest/by-ids", dependencies=[Depends(admin_auth)])
-async def admin_ingest_by_ids(body: IndexByIdsRequest, s: AppState = Depends(get_state)) -> JSONResponse:
+@admin_router.post("/admin/ingest/by-ids")
+async def admin_ingest_by_ids(
+    body: IndexByIdsRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
     settings = s.settings
     idnos = [i.strip() for i in body.idnos if i.strip()]
     if not idnos:
@@ -205,12 +204,15 @@ async def admin_ingest_by_ids(body: IndexByIdsRequest, s: AppState = Depends(get
             "recreate_index": recreate_index,
             "buffer_size": buffer_size,
         },
+        principal=principal,
     )
 
 
-@admin_router.post("/admin/ingest/from-catalog", dependencies=[Depends(admin_auth)])
+@admin_router.post("/admin/ingest/from-catalog")
 async def admin_ingest_from_catalog(
-    body: IndexFromCatalogRequest, s: AppState = Depends(get_state)
+    body: IndexFromCatalogRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
 ) -> JSONResponse:
     _require_opensearch(s)
     settings = s.settings
@@ -249,10 +251,13 @@ async def admin_ingest_from_catalog(
             "recreate_index": recreate_index,
             "buffer_size": buffer_size,
         },
+        principal=principal,
     )
 
 
-@admin_router.get("/admin/index/stats", dependencies=[Depends(admin_auth)], response_model=IndexStatsResponse)
+@admin_router.get(
+    "/admin/index/stats", dependencies=[Depends(require_role(Role.read))], response_model=IndexStatsResponse
+)
 async def admin_index_stats(s: AppState = Depends(get_state)) -> IndexStatsResponse:
     _require_opensearch(s)
     name = s.settings.index_name
@@ -278,7 +283,7 @@ async def admin_index_stats(s: AppState = Depends(get_state)) -> IndexStatsRespo
     )
 
 
-@admin_router.get("/admin/index/mapping", dependencies=[Depends(admin_auth)])
+@admin_router.get("/admin/index/mapping", dependencies=[Depends(require_role(Role.read))])
 async def admin_index_mapping(s: AppState = Depends(get_state)) -> dict[str, Any]:
     _require_opensearch(s)
     name = s.settings.index_name
@@ -291,7 +296,7 @@ async def admin_index_mapping(s: AppState = Depends(get_state)) -> dict[str, Any
         raise HTTPException(status_code=503, detail="backend unavailable") from e
 
 
-@admin_router.post("/admin/index/refresh", dependencies=[Depends(admin_auth)])
+@admin_router.post("/admin/index/refresh", dependencies=[Depends(require_role(Role.write))])
 async def admin_index_refresh(s: AppState = Depends(get_state)) -> dict[str, Any]:
     _require_opensearch(s)
     name = s.settings.index_name
@@ -305,10 +310,11 @@ async def admin_index_refresh(s: AppState = Depends(get_state)) -> dict[str, Any
         raise HTTPException(status_code=503, detail="backend unavailable") from e
 
 
-@admin_router.delete("/admin/index", dependencies=[Depends(admin_auth)])
+@admin_router.delete("/admin/index")
 async def admin_index_delete(
     confirm: bool = Query(default=False, description="Must be true to actually drop the index."),
     s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.admin)),
 ) -> dict[str, Any]:
     _require_opensearch(s)
     if not confirm:
@@ -316,15 +322,17 @@ async def admin_index_delete(
     name = s.settings.index_name
     try:
         resp = await s.client.indices.delete(index=name)
+        await audit_log(s, principal, action="index.delete", target=name, status="ok")
         return {"index": name, "deleted": True, "raw": resp}
     except NotFoundError:
         return {"index": name, "deleted": False, "detail": "index did not exist"}
     except Exception as e:
         logger.error("index delete failed: %s", e)
+        await audit_log(s, principal, action="index.delete", target=name, status="error", detail=str(e))
         raise HTTPException(status_code=503, detail="backend unavailable") from e
 
 
-@admin_router.get("/admin/docs/{idno}", dependencies=[Depends(admin_auth)])
+@admin_router.get("/admin/docs/{idno}", dependencies=[Depends(require_role(Role.read))])
 async def admin_doc_get(idno: str, s: AppState = Depends(get_state)) -> dict[str, Any]:
     _require_opensearch(s)
     name = s.settings.index_name
@@ -352,10 +360,13 @@ async def admin_doc_get(idno: str, s: AppState = Depends(get_state)) -> dict[str
 
 @admin_router.delete(
     "/admin/docs/{idno}",
-    dependencies=[Depends(admin_auth)],
     response_model=DeleteDocsResponse,
 )
-async def admin_doc_delete(idno: str, s: AppState = Depends(get_state)) -> DeleteDocsResponse:
+async def admin_doc_delete(
+    idno: str,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> DeleteDocsResponse:
     _require_opensearch(s)
     name = s.settings.index_name
     body = {"query": {"term": {metadata_field("idno"): idno}}}
@@ -365,7 +376,9 @@ async def admin_doc_delete(idno: str, s: AppState = Depends(get_state)) -> Delet
         raise HTTPException(status_code=404, detail=f"index {name} not found") from e
     except Exception as e:
         logger.error("delete_by_query failed for %s: %s", idno, e)
+        await audit_log(s, principal, action="docs.delete", target=idno, status="error", detail=str(e))
         raise HTTPException(status_code=503, detail="backend unavailable") from e
+    await audit_log(s, principal, action="docs.delete", target=idno, status="ok")
     return DeleteDocsResponse(
         index=name,
         deleted=int(resp.get("deleted") or 0),
@@ -376,7 +389,7 @@ async def admin_doc_delete(idno: str, s: AppState = Depends(get_state)) -> Delet
 
 @admin_router.post(
     "/admin/embeddings/encode",
-    dependencies=[Depends(admin_auth)],
+    dependencies=[Depends(require_role(Role.read))],
     response_model=EncodeResponse,
 )
 async def admin_embeddings_encode(body: EncodeRequest, s: AppState = Depends(get_state)) -> EncodeResponse:
@@ -409,7 +422,7 @@ async def admin_embeddings_encode(body: EncodeRequest, s: AppState = Depends(get
     )
 
 
-@admin_router.get("/admin/ml/pipeline", dependencies=[Depends(admin_auth)])
+@admin_router.get("/admin/ml/pipeline", dependencies=[Depends(require_role(Role.read))])
 async def admin_ml_pipeline(s: AppState = Depends(get_state)) -> dict[str, Any]:
     _require_opensearch(s)
     name = s.settings.opensearch_ml_ingest_pipeline_name
@@ -433,7 +446,7 @@ async def admin_ml_pipeline(s: AppState = Depends(get_state)) -> dict[str, Any]:
     return out
 
 
-@admin_router.get("/admin/qdrant/collection", dependencies=[Depends(admin_auth)])
+@admin_router.get("/admin/qdrant/collection", dependencies=[Depends(require_role(Role.read))])
 async def admin_qdrant_collection(s: AppState = Depends(get_state)) -> dict[str, Any]:
     """Collection metadata when ``NADA_SEARCH_BACKEND=qdrant`` (no OpenSearch client required)."""
     if s.settings.search_backend != "qdrant":
@@ -456,10 +469,13 @@ async def admin_qdrant_collection(s: AppState = Depends(get_state)) -> dict[str,
 
 @admin_router.post(
     "/admin/filters/sync",
-    dependencies=[Depends(admin_auth)],
     response_model=SyncFiltersResponse,
 )
-async def admin_filters_sync(body: SyncFiltersRequest, s: AppState = Depends(get_state)) -> JSONResponse:
+async def admin_filters_sync(
+    body: SyncFiltersRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
     records = [{"idno": r.idno.strip(), "filters": r.filters} for r in body.records if r.idno.strip()]
     if not records:
         raise HTTPException(status_code=400, detail="records must contain at least one non-empty idno")
@@ -474,12 +490,13 @@ async def admin_filters_sync(body: SyncFiltersRequest, s: AppState = Depends(get
         key=key,
         factory=factory,
         params={"count": len(records)},
+        principal=principal,
     )
 
 
 @admin_router.post(
     "/admin/filters/ensure-indexes",
-    dependencies=[Depends(admin_auth)],
+    dependencies=[Depends(require_role(Role.write))],
 )
 async def admin_filters_ensure_indexes(s: AppState = Depends(get_state)) -> dict[str, Any]:
     return await asyncio.to_thread(ensure_filter_indexes_op_service, s.settings)
@@ -487,7 +504,7 @@ async def admin_filters_ensure_indexes(s: AppState = Depends(get_state)) -> dict
 
 @admin_router.get(
     "/admin/filters/{idno}",
-    dependencies=[Depends(admin_auth)],
+    dependencies=[Depends(require_role(Role.read))],
     response_model=GetFiltersResponse,
 )
 async def admin_filters_get(idno: str, s: AppState = Depends(get_state)) -> GetFiltersResponse:
@@ -495,7 +512,7 @@ async def admin_filters_get(idno: str, s: AppState = Depends(get_state)) -> GetF
     return GetFiltersResponse(**out)
 
 
-@jobs_router.get("/jobs", response_model=JobListResponse, dependencies=[Depends(admin_auth)])
+@jobs_router.get("/jobs", response_model=JobListResponse, dependencies=[Depends(require_role(Role.read))])
 async def jobs_list(
     status: str | None = Query(default=None, description="Filter by status: pending|running|succeeded|failed|cancelled"),
     limit: int = Query(default=50, ge=1, le=500),
@@ -511,7 +528,7 @@ async def jobs_list(
     return JobListResponse(jobs=[_job_to_response(j) for j in jobs])
 
 
-@jobs_router.get("/jobs/{job_id}", response_model=JobResponse, dependencies=[Depends(admin_auth)])
+@jobs_router.get("/jobs/{job_id}", response_model=JobResponse, dependencies=[Depends(require_role(Role.read))])
 async def job_get(job_id: str, s: AppState = Depends(get_state)) -> JobResponse:
     job = s.jobs.get(job_id)
     if job is None:
@@ -519,16 +536,20 @@ async def job_get(job_id: str, s: AppState = Depends(get_state)) -> JobResponse:
     return _job_to_response(job)
 
 
-@jobs_router.delete("/jobs/{job_id}", response_model=JobResponse, dependencies=[Depends(admin_auth)])
-async def job_cancel(job_id: str, s: AppState = Depends(get_state)) -> JobResponse:
+@jobs_router.delete("/jobs/{job_id}", response_model=JobResponse)
+async def job_cancel(
+    job_id: str,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JobResponse:
     job = await s.jobs.cancel(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+    await audit_log(s, principal, action="job.cancel", target=job_id)
     return _job_to_response(job)
 
 
 __all__ = [
-    "admin_auth",
     "admin_router",
     "ADMIN_API_KEY_ENV",
     "jobs_router",

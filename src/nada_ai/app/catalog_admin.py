@@ -9,6 +9,9 @@ Ingest jobs go through :func:`~nada_ai.app._ingest.guarded_ingest` which:
 - warms the shared EmbeddingService once (no duplicate model loads)
 - acquires the ingest semaphore (bounded by ``settings.max_concurrent_ingest_jobs``)
 before dispatching compute to a thread.
+
+Auth: see ``nada_ai.app.auth`` — read-only routes require role ``read``,
+mutating routes require role ``write``. Mutating routes write an audit entry.
 """
 
 from __future__ import annotations
@@ -18,12 +21,10 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-
-logger = logging.getLogger(__name__)
 from fastapi.responses import JSONResponse
 
 from nada_ai.app._ingest import guarded_ingest
-from nada_ai.app.admin import _idnos_key, _submit_or_409, admin_auth
+from nada_ai.app.admin import _idnos_key, _submit_or_409
 from nada_ai.app.admin_schemas import (
     CatalogBatchIndexRequest,
     CatalogFiltersRequest,
@@ -31,14 +32,21 @@ from nada_ai.app.admin_schemas import (
     CatalogStatusResponse,
     SyncFiltersRequest,
 )
+from nada_ai.app.audit import audit_log
+from nada_ai.app.auth import Principal, require_role
+from nada_ai.app.keys_store import Role
 from nada_ai.app.state import AppState, get_state
 from nada_ai.filters.service import get_filters_op, sync_filter_for_idno_op, sync_filters_op
 from nada_ai.ingest.service import delete_by_idno_op, index_ids_op
 
+logger = logging.getLogger(__name__)
+
 catalog_router = APIRouter(prefix="/admin/catalog", tags=["catalog"])
 
 
-@catalog_router.get("/{idno}/status", dependencies=[Depends(admin_auth)], response_model=CatalogStatusResponse)
+@catalog_router.get(
+    "/{idno}/status", dependencies=[Depends(require_role(Role.read))], response_model=CatalogStatusResponse
+)
 async def catalog_idno_status(idno: str, s: AppState = Depends(get_state)) -> CatalogStatusResponse:
     """Get indexed status and filter fields for a single idno."""
     out = await asyncio.to_thread(get_filters_op, s.settings, idno)
@@ -51,9 +59,12 @@ async def catalog_idno_status(idno: str, s: AppState = Depends(get_state)) -> Ca
     )
 
 
-@catalog_router.post("/{idno}/index", dependencies=[Depends(admin_auth)])
+@catalog_router.post("/{idno}/index")
 async def catalog_idno_index(
-    idno: str, body: CatalogIndexRequest, s: AppState = Depends(get_state)
+    idno: str,
+    body: CatalogIndexRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
 ) -> JSONResponse:
     """Queue a non-blocking job to index a single idno.
 
@@ -74,12 +85,16 @@ async def catalog_idno_index(
         key=f"index:{metadata_type}:{idno}",
         factory=factory,
         params={"idno": idno, "metadata_type": metadata_type, "force": force},
+        principal=principal,
     )
 
 
-@catalog_router.post("/{idno}/reindex", dependencies=[Depends(admin_auth)])
+@catalog_router.post("/{idno}/reindex")
 async def catalog_idno_reindex(
-    idno: str, body: CatalogIndexRequest, s: AppState = Depends(get_state)
+    idno: str,
+    body: CatalogIndexRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
 ) -> JSONResponse:
     """Queue a non-blocking job to delete and re-index a single idno."""
     settings = s.settings
@@ -98,29 +113,39 @@ async def catalog_idno_reindex(
         key=f"reindex:{metadata_type}:{idno}",
         factory=factory,
         params={"idno": idno, "metadata_type": metadata_type, "force": force},
+        principal=principal,
     )
 
 
-@catalog_router.delete("/{idno}", dependencies=[Depends(admin_auth)])
-async def catalog_idno_delete(idno: str, s: AppState = Depends(get_state)) -> JSONResponse:
+@catalog_router.delete("/{idno}")
+async def catalog_idno_delete(
+    idno: str,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
     """Delete all indexed documents for an idno (synchronous; typically fast)."""
     try:
         result = await asyncio.to_thread(delete_by_idno_op, s.settings, idno)
     except Exception as e:
         logger.error("delete failed for %s: %s", idno, e)
+        await audit_log(s, principal, action="catalog.delete", target=idno, status="error", detail=str(e))
         raise HTTPException(status_code=503, detail="delete operation failed") from e
+    await audit_log(s, principal, action="catalog.delete", target=idno, status="ok")
     return JSONResponse(status_code=200, content=result)
 
 
-@catalog_router.get("/{idno}/filters", dependencies=[Depends(admin_auth)])
+@catalog_router.get("/{idno}/filters", dependencies=[Depends(require_role(Role.read))])
 async def catalog_idno_get_filters(idno: str, s: AppState = Depends(get_state)) -> dict[str, Any]:
     """Get filter_fields for an idno."""
     return await asyncio.to_thread(get_filters_op, s.settings, idno)
 
 
-@catalog_router.put("/{idno}/filters", dependencies=[Depends(admin_auth)])
+@catalog_router.put("/{idno}/filters")
 async def catalog_idno_put_filters(
-    idno: str, body: CatalogFiltersRequest, s: AppState = Depends(get_state)
+    idno: str,
+    body: CatalogFiltersRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
 ) -> JSONResponse:
     """Replace all filter_fields for an idno (non-blocking job)."""
     settings = s.settings
@@ -135,12 +160,16 @@ async def catalog_idno_put_filters(
         key=f"filters:{idno}",
         factory=factory,
         params={"idno": idno, "filter_count": len(filters)},
+        principal=principal,
     )
 
 
-@catalog_router.patch("/{idno}/filters", dependencies=[Depends(admin_auth)])
+@catalog_router.patch("/{idno}/filters")
 async def catalog_idno_patch_filters(
-    idno: str, body: CatalogFiltersRequest, s: AppState = Depends(get_state)
+    idno: str,
+    body: CatalogFiltersRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
 ) -> JSONResponse:
     """Merge new filter_fields into existing ones for an idno (non-blocking job)."""
     settings = s.settings
@@ -162,11 +191,16 @@ async def catalog_idno_patch_filters(
         key=f"filters:{idno}",
         factory=factory,
         params={"idno": idno, "patch_count": len(patch)},
+        principal=principal,
     )
 
 
-@catalog_router.delete("/{idno}/filters", dependencies=[Depends(admin_auth)])
-async def catalog_idno_delete_filters(idno: str, s: AppState = Depends(get_state)) -> JSONResponse:
+@catalog_router.delete("/{idno}/filters")
+async def catalog_idno_delete_filters(
+    idno: str,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
     """Clear all filter_fields for an idno (non-blocking job)."""
     settings = s.settings
 
@@ -179,11 +213,16 @@ async def catalog_idno_delete_filters(idno: str, s: AppState = Depends(get_state
         key=f"filters:{idno}",
         factory=factory,
         params={"idno": idno, "action": "clear"},
+        principal=principal,
     )
 
 
-@catalog_router.post("/index", dependencies=[Depends(admin_auth)])
-async def catalog_batch_index(body: CatalogBatchIndexRequest, s: AppState = Depends(get_state)) -> JSONResponse:
+@catalog_router.post("/index")
+async def catalog_batch_index(
+    body: CatalogBatchIndexRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
     """Queue a non-blocking job to index a batch of idnos."""
     settings = s.settings
     idnos = [i.strip() for i in body.idnos if i.strip()]
@@ -201,11 +240,16 @@ async def catalog_batch_index(body: CatalogBatchIndexRequest, s: AppState = Depe
         key=f"index:{metadata_type}:{_idnos_key(idnos)}",
         factory=factory,
         params={"idnos": idnos, "metadata_type": metadata_type, "force": force},
+        principal=principal,
     )
 
 
-@catalog_router.post("/filters/sync", dependencies=[Depends(admin_auth)])
-async def catalog_batch_filters(body: SyncFiltersRequest, s: AppState = Depends(get_state)) -> JSONResponse:
+@catalog_router.post("/filters/sync")
+async def catalog_batch_filters(
+    body: SyncFiltersRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
     """Batch sync filter_fields for multiple idnos (non-blocking job)."""
     records = [{"idno": r.idno.strip(), "filters": r.filters} for r in body.records if r.idno.strip()]
     if not records:
@@ -221,4 +265,5 @@ async def catalog_batch_filters(body: SyncFiltersRequest, s: AppState = Depends(
         key=f"filters_sync:{_idnos_key([r['idno'] for r in records])}",
         factory=factory,
         params={"count": len(records)},
+        principal=principal,
     )

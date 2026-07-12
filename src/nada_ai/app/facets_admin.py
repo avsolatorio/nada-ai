@@ -7,7 +7,8 @@ which dynamic filter keys are returned as searchable facets in search results.
 Changes take effect immediately on the next search request — no server restart
 required.
 
-Auth: same ``X-NADA-Admin-Key`` header as all other admin routes.
+Auth: see ``nada_ai.app.auth`` — ``GET`` requires role ``read``, all mutating
+routes require role ``write``. Mutating routes write an audit entry.
 
 Routes
 ------
@@ -29,7 +30,10 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from nada_ai.app.admin import admin_auth, _submit_or_409
+from nada_ai.app.admin import _submit_or_409
+from nada_ai.app.audit import audit_log
+from nada_ai.app.auth import Principal, require_role
+from nada_ai.app.keys_store import Role
 from nada_ai.app.state import AppState, get_state
 from nada_ai.filters.facets_service import (
     add_facet_keys,
@@ -83,7 +87,7 @@ class FacetsBulkRemoveRequest(BaseModel):
 
 @facets_router.get(
     "",
-    dependencies=[Depends(admin_auth)],
+    dependencies=[Depends(require_role(Role.read))],
     summary="Get current facetable keys",
     response_description="Config state: key list, count, source, path.",
 )
@@ -100,11 +104,14 @@ async def facets_get(s: AppState = Depends(get_state)) -> dict[str, Any]:
 
 @facets_router.put(
     "",
-    dependencies=[Depends(admin_auth)],
     summary="Replace the full facetable key list",
     response_description="New config state after replacement.",
 )
-async def facets_put(body: FacetsSetRequest, s: AppState = Depends(get_state)) -> dict[str, Any]:
+async def facets_put(
+    body: FacetsSetRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> dict[str, Any]:
     """Atomically replace all facetable keys with the supplied list.
 
     Pass an empty list to clear all dynamic facets.  A ``warning`` field is
@@ -117,18 +124,24 @@ async def facets_put(body: FacetsSetRequest, s: AppState = Depends(get_state)) -
     """
     async with s.facets_config_lock:
         try:
-            return await asyncio.to_thread(set_facets_config, s.settings, body.keys)
+            result = await asyncio.to_thread(set_facets_config, s.settings, body.keys)
         except OSError as e:
+            await audit_log(s, principal, action="facets.set", status="error", detail=str(e))
             raise HTTPException(status_code=503, detail=f"Could not write facets config: {e}") from e
+    await audit_log(s, principal, action="facets.set", detail=f"count={len(body.keys)}")
+    return result
 
 
 @facets_router.post(
     "",
-    dependencies=[Depends(admin_auth)],
     summary="Add keys to the facetable list (idempotent)",
     response_description="Updated config state plus added / already_present lists.",
 )
-async def facets_add(body: FacetsAddRequest, s: AppState = Depends(get_state)) -> dict[str, Any]:
+async def facets_add(
+    body: FacetsAddRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> dict[str, Any]:
     """Add one or more keys to the facetable list.
 
     Idempotent — keys that are already present are reported in
@@ -138,20 +151,23 @@ async def facets_add(body: FacetsAddRequest, s: AppState = Depends(get_state)) -
     """
     async with s.facets_config_lock:
         try:
-            return await asyncio.to_thread(add_facet_keys, s.settings, body.keys)
+            result = await asyncio.to_thread(add_facet_keys, s.settings, body.keys)
         except OSError as e:
+            await audit_log(s, principal, action="facets.add", status="error", detail=str(e))
             raise HTTPException(status_code=503, detail=f"Could not write facets config: {e}") from e
+    await audit_log(s, principal, action="facets.add", detail=f"keys={body.keys}")
+    return result
 
 
 @facets_router.delete(
     "/{key}",
-    dependencies=[Depends(admin_auth)],
     summary="Remove a single facetable key",
     response_description="Updated config state. ``removed`` is true when the key existed.",
 )
 async def facets_delete_key(
     key: str = Path(..., description="The facet key to remove."),
     s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
 ) -> dict[str, Any]:
     """Remove a single key from the facetable list.
 
@@ -160,35 +176,44 @@ async def facets_delete_key(
     """
     async with s.facets_config_lock:
         try:
-            return await asyncio.to_thread(remove_facet_key, s.settings, key)
+            result = await asyncio.to_thread(remove_facet_key, s.settings, key)
         except OSError as e:
+            await audit_log(s, principal, action="facets.remove", target=key, status="error", detail=str(e))
             raise HTTPException(status_code=503, detail=f"Could not write facets config: {e}") from e
+    await audit_log(s, principal, action="facets.remove", target=key)
+    return result
 
 
 @facets_router.post(
     "/bulk-remove",
-    dependencies=[Depends(admin_auth)],
     summary="Remove multiple facetable keys in one call",
     response_description="Updated config state plus removed / not_found lists.",
 )
 async def facets_bulk_remove(
-    body: FacetsBulkRemoveRequest, s: AppState = Depends(get_state)
+    body: FacetsBulkRemoveRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
 ) -> dict[str, Any]:
     """Remove a set of keys from the facetable list in a single atomic write."""
     async with s.facets_config_lock:
         try:
-            return await asyncio.to_thread(remove_facet_keys, s.settings, body.keys)
+            result = await asyncio.to_thread(remove_facet_keys, s.settings, body.keys)
         except OSError as e:
+            await audit_log(s, principal, action="facets.bulk_remove", status="error", detail=str(e))
             raise HTTPException(status_code=503, detail=f"Could not write facets config: {e}") from e
+    await audit_log(s, principal, action="facets.bulk_remove", detail=f"keys={body.keys}")
+    return result
 
 
 @facets_router.post(
     "/backfill",
-    dependencies=[Depends(admin_auth)],
     summary="Backfill filter_facets from filter_fields (Qdrant only)",
     response_description="202 Accepted with job_id to poll, or immediate result if Qdrant is not in use.",
 )
-async def facets_backfill(s: AppState = Depends(get_state)) -> JSONResponse:
+async def facets_backfill(
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
     """Populate ``metadata.filter_facets`` (flat indexed payload) from the existing
     ``metadata.filter_fields`` arrays on all Qdrant points.
 
@@ -202,6 +227,7 @@ async def facets_backfill(s: AppState = Depends(get_state)) -> JSONResponse:
     """
     if s.settings.search_backend != "qdrant":
         result = await asyncio.to_thread(backfill_facets_op, s.settings)
+        await audit_log(s, principal, action="facets.backfill", status="skipped")
         return JSONResponse(status_code=200, content=result)
 
     settings = s.settings
@@ -219,4 +245,5 @@ async def facets_backfill(s: AppState = Depends(get_state)) -> JSONResponse:
         key="backfill_filter_facets",
         factory=factory,
         params={"backend": settings.search_backend, "collection": settings.qdrant_collection},
+        principal=principal,
     )

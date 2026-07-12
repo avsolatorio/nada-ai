@@ -15,3 +15,4 @@ build/
 data/
 certs/*.pem
 certs/*.crt
+config/api_keys.json

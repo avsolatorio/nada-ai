@@ -3,7 +3,10 @@
 POST /webhooks/catalog receives NADA catalog events and dispatches non-blocking
 background jobs to keep the search index in sync automatically.
 
-Auth: same X-NADA-Admin-Key as admin routes (set NADA_ADMIN_API_KEY env var).
+Auth: see ``nada_ai.app.auth`` — role ``write`` required (either the legacy
+``NADA_ADMIN_API_KEY`` or a stored key). Issue the calling system a dedicated
+key via ``POST /admin/keys`` with ``role=write`` rather than sharing the
+admin key with an external webhook sender.
 """
 
 from __future__ import annotations
@@ -17,7 +20,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from nada_ai.app._ingest import guarded_ingest
-from nada_ai.app.admin import _submit_or_409, admin_auth
+from nada_ai.app.admin import _submit_or_409
+from nada_ai.app.auth import Principal, require_role
+from nada_ai.app.keys_store import Role
 from nada_ai.app.state import AppState, get_state
 from nada_ai.filters.service import sync_filter_for_idno_op
 from nada_ai.ingest.service import delete_by_idno_op, index_ids_op
@@ -37,8 +42,12 @@ class CatalogWebhookPayload(BaseModel):
     )
 
 
-@webhooks_router.post("/catalog", dependencies=[Depends(admin_auth)])
-async def webhook_catalog(body: CatalogWebhookPayload, s: AppState = Depends(get_state)) -> JSONResponse:
+@webhooks_router.post("/catalog")
+async def webhook_catalog(
+    body: CatalogWebhookPayload,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
     """Handle a NADA catalog lifecycle event.
 
     - ``created`` / ``updated``: deletes any existing points and re-indexes the
@@ -63,6 +72,7 @@ async def webhook_catalog(body: CatalogWebhookPayload, s: AppState = Depends(get
             key=f"delete:{idno}",
             factory=factory,
             params={"idno": idno, "event": event},
+            principal=principal,
         )
 
     # created | updated — delete stale points then re-index
@@ -83,4 +93,5 @@ async def webhook_catalog(body: CatalogWebhookPayload, s: AppState = Depends(get
         key=f"reindex:{metadata_type}:{idno}",
         factory=factory,
         params={"idno": idno, "event": event, "metadata_type": metadata_type, "has_filters": bool(filters)},
+        principal=principal,
     )
