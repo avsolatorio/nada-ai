@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import logging
 import os
@@ -16,9 +15,14 @@ from fastapi.responses import HTMLResponse, Response
 from opensearchpy.exceptions import NotFoundError, RequestError
 
 from nada_ai import __version__
-from nada_ai.app.admin import admin_auth, admin_router, jobs_router
+from nada_ai.app.admin import admin_router, jobs_router
+from nada_ai.app.audit_admin import audit_router
+from nada_ai.app.auth import require_role, resolve_principal
 from nada_ai.app.catalog_admin import catalog_router
 from nada_ai.app.facets_admin import facets_router
+from nada_ai.app.keys_admin import keys_router
+from nada_ai.app.keys_store import Role
+from nada_ai.app.rate_limit import RateLimiter, rate_limited
 from nada_ai.app.webhooks import webhooks_router
 from nada_ai.app.demo_preview import render_pdf_page_png, resolve_document_pdf_path
 from nada_ai.app.jobs import JobRegistry
@@ -57,12 +61,16 @@ async def lifespan(app: FastAPI):
     state.jobs = JobRegistry()
     state.facets_config_lock = asyncio.Lock()
     state.ingest_semaphore = asyncio.Semaphore(state.settings.max_concurrent_ingest_jobs)
+    state.api_keys_lock = asyncio.Lock()
+    state.audit_lock = asyncio.Lock()
+    state.search_rate_limiter = RateLimiter(state.settings.rate_limit_search_per_minute)
 
     if not os.getenv("NADA_ADMIN_API_KEY"):
         logger.warning(
             "SECURITY: NADA_ADMIN_API_KEY is not set — admin, webhook, and "
-            "warmup endpoints are unauthenticated. Set this variable before "
-            "exposing the server on any network."
+            "warmup endpoints are unauthenticated until at least one API key "
+            "is issued via POST /admin/keys. Set the env var or create a key "
+            "before exposing the server on any network."
         )
 
     async with mcp_app.router.lifespan_context(mcp_app):
@@ -90,6 +98,8 @@ app.include_router(jobs_router)
 app.include_router(catalog_router)
 app.include_router(facets_router)
 app.include_router(webhooks_router)
+app.include_router(keys_router)
+app.include_router(audit_router)
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
@@ -111,6 +121,7 @@ async def demo_search_ui(s: AppState = Depends(get_state)) -> HTMLResponse:
     "/demo/documents/{idno}/pages/{page}.png",
     include_in_schema=False,
     responses={200: {"content": {"image/png": {}}}},
+    dependencies=[Depends(rate_limited("search_rate_limiter"))],
 )
 async def demo_document_page_preview(
     idno: str,
@@ -201,7 +212,7 @@ async def embedding_health(s: AppState = Depends(get_state)) -> dict[str, Any]:
     }
 
 
-@app.post("/health/embeddings/warmup", dependencies=[Depends(admin_auth)])
+@app.post("/health/embeddings/warmup", dependencies=[Depends(require_role(Role.write))])
 async def embedding_warmup(s: AppState = Depends(get_state)) -> dict[str, Any]:
     if s.settings.embedding_backend != "local":
         return {
@@ -226,7 +237,7 @@ async def embedding_warmup(s: AppState = Depends(get_state)) -> dict[str, Any]:
     }
 
 
-@app.post("/search", response_model=SearchResponse)
+@app.post("/search", response_model=SearchResponse, dependencies=[Depends(rate_limited("search_rate_limiter"))])
 async def search(
     body: SearchRequest,
     s: AppState = Depends(get_state),
@@ -284,9 +295,8 @@ async def search(
     except Exception as e:
         raise _search_backend_http_exception(e, s) from e
 
-    _expected_key = os.getenv("NADA_ADMIN_API_KEY")
-    _is_admin = bool(_expected_key and hmac.compare_digest(x_admin_key or "", _expected_key))
-    dbg = outcome.debug_request if (body.include_debug_request and _is_admin) else None
+    _principal = await resolve_principal(x_admin_key, s) if body.include_debug_request else None
+    dbg = outcome.debug_request if (body.include_debug_request and _principal is not None) else None
     return SearchResponse(
         total=outcome.total,
         hits=outcome.hits,
@@ -320,7 +330,11 @@ def _search_backend_http_exception(e: Exception, s: AppState) -> HTTPException:
     return HTTPException(status_code=503, detail="search backend error")
 
 
-@app.post("/recommendations", response_model=SearchResponse)
+@app.post(
+    "/recommendations",
+    response_model=SearchResponse,
+    dependencies=[Depends(rate_limited("search_rate_limiter"))],
+)
 async def recommendations(body: RecommendRequest, s: AppState = Depends(get_state)) -> SearchResponse:
     filters = body.filters.as_dict() if body.filters else None
     r_thr = body.vector_score_threshold
@@ -350,7 +364,7 @@ async def recommendations(body: RecommendRequest, s: AppState = Depends(get_stat
     )
 
 
-@app.post("/search/explain")
+@app.post("/search/explain", dependencies=[Depends(rate_limited("search_rate_limiter"))])
 async def search_explain(body: ExplainSearchRequest, s: AppState = Depends(get_state)) -> dict[str, Any]:
     filters = body.filters.as_dict() if body.filters else None
     try:

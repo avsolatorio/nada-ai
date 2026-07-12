@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from opensearchpy import AsyncOpenSearch
 
     from nada_ai.app.jobs import JobRegistry
+    from nada_ai.app.rate_limit import RateLimiter
     from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
     from nada_ai.search.ports import SearchBackendPort
 
@@ -33,6 +34,12 @@ class AppState:
     #: Bounds the number of jobs that may run embedding compute simultaneously.
     #: Sized from ``settings.max_concurrent_ingest_jobs`` at startup.
     ingest_semaphore: asyncio.Semaphore
+    #: Serialises load→mutate→save cycles for the API keys store (``app/keys_store.py``).
+    api_keys_lock: asyncio.Lock
+    #: Serialises appends to the admin audit log (``app/audit.py``).
+    audit_lock: asyncio.Lock
+    #: Per-process rate limiter for public search endpoints. ``limit_per_minute<=0`` disables.
+    search_rate_limiter: RateLimiter
 
 
 state = AppState()

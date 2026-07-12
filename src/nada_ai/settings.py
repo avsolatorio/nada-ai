@@ -116,6 +116,15 @@ class Settings(BaseSettings):
     #: Optional raw Cookie header value for authenticated training/production hosts.
     ihsn_auth_cookie: str | None = Field(default=None)
 
+    #: Override path to the API keys store (default ``config/api_keys.json``).
+    #: Contains only key hashes/prefixes, never raw key values — still keep out of version control.
+    api_keys_path: str | None = Field(default=None)
+    #: Override path to the admin audit log (default ``config/audit.log``, JSONL, append-only).
+    audit_log_path: str | None = Field(default=None)
+    #: Per-minute request cap (per caller: admin key if presented, else client IP) for the public
+    #: /search, /recommendations, /search/explain, and PDF preview endpoints. 0 disables.
+    rate_limit_search_per_minute: int = Field(default=120, ge=0)
+
     @field_validator("opensearch_cluster_auto_create_index", mode="before")
     @classmethod
     def empty_auto_create_to_none(cls, v: Any) -> str | None:
