@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from nada_ai.app._ingest import guarded_ingest
 from nada_ai.app.admin import _idnos_key, _submit_or_409
 from nada_ai.app.admin_schemas import (
+    CatalogBatchDeleteRequest,
     CatalogBatchIndexRequest,
     CatalogFiltersRequest,
     CatalogIndexRequest,
@@ -37,7 +38,7 @@ from nada_ai.app.auth import Principal, require_role
 from nada_ai.app.keys_store import Role
 from nada_ai.app.state import AppState, get_state
 from nada_ai.filters.service import get_filters_op, sync_filter_for_idno_op, sync_filters_op
-from nada_ai.ingest.service import delete_by_idno_op, index_ids_op
+from nada_ai.ingest.service import delete_by_idno_op, delete_by_idnos_op, index_ids_op
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +243,31 @@ async def catalog_batch_index(
         params={"idnos": idnos, "metadata_type": metadata_type, "force": force},
         principal=principal,
     )
+
+
+@catalog_router.post("/delete")
+async def catalog_batch_delete(
+    body: CatalogBatchDeleteRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
+    """Delete all indexed documents for a batch of idnos in one call (synchronous; typically fast)."""
+    settings = s.settings
+    idnos = [i.strip() for i in body.idnos if i.strip()]
+    if not idnos:
+        raise HTTPException(status_code=400, detail="idnos must contain at least one non-empty value")
+    try:
+        result = await asyncio.to_thread(delete_by_idnos_op, settings, idnos)
+    except Exception as e:
+        logger.error("batch delete failed for %s idnos: %s", len(idnos), e)
+        await audit_log(
+            s, principal, action="catalog.batch_delete", target=_idnos_key(idnos), status="error", detail=str(e)
+        )
+        raise HTTPException(status_code=503, detail="batch delete operation failed") from e
+    await audit_log(
+        s, principal, action="catalog.batch_delete", target=_idnos_key(idnos), status="ok", detail=f"count={len(idnos)}"
+    )
+    return JSONResponse(status_code=200, content=result)
 
 
 @catalog_router.post("/filters/sync")

@@ -109,6 +109,10 @@ class CatalogBatchIndexRequest(BaseModel):
     force: bool = Field(default=False)
 
 
+class CatalogBatchDeleteRequest(BaseModel):
+    idnos: list[str] = Field(..., min_length=1)
+
+
 class CatalogFiltersRequest(BaseModel):
     filters: dict[str, Any] = Field(default_factory=dict)
 

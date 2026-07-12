@@ -54,7 +54,7 @@ from nada_ai.filters.service import (
     get_filters_op,
     sync_filters_op,
 )
-from nada_ai.search.backend.opensearch.mapping import metadata_field
+from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, metadata_field
 from nada_ai.search.backend.opensearch.ml.setup import ingest_pipeline_definition
 
 logger = logging.getLogger(__name__)
@@ -465,6 +465,77 @@ async def admin_qdrant_collection(s: AppState = Depends(get_state)) -> dict[str,
         raise HTTPException(status_code=503, detail="backend unavailable") from e
     payload = info.model_dump() if hasattr(info, "model_dump") else {"repr": repr(info)}
     return {"collection": coll, "info": payload}
+
+
+@admin_router.get("/admin/embeddings/drift", dependencies=[Depends(require_role(Role.read))])
+async def admin_embedding_drift(s: AppState = Depends(get_state)) -> dict[str, Any]:
+    """Compare the configured embedding model's dimension against what's stored in the index/collection.
+
+    A mismatch means vector/hybrid search — and any new ingest — with the
+    currently configured model will fail or silently corrupt the index; it
+    needs a full reindex with a matching model before it's safe to use.
+
+    ``configured_dimension`` is only populated once the local embedding model
+    has already been loaded (e.g. via ``POST /health/embeddings/warmup`` or a
+    prior vector search); this endpoint never triggers a model load itself.
+    """
+    configured_dimension = s.embedding.embedding_dimension() if s.embedding is not None else None
+    stored_dimension: int | None = None
+
+    if s.settings.search_backend == "qdrant":
+        target = s.settings.qdrant_collection
+        client = getattr(s.search, "client", None)
+        if client is None:
+            raise HTTPException(status_code=503, detail="Qdrant search backend has no client")
+        try:
+            info = await client.get_collection(collection_name=target)
+        except Exception as e:
+            logger.error("embedding drift check failed (qdrant): %s", e)
+            raise HTTPException(status_code=503, detail="backend unavailable") from e
+        vectors = info.config.params.vectors
+        if hasattr(vectors, "size"):
+            stored_dimension = vectors.size
+        elif isinstance(vectors, dict) and vectors:
+            first = next(iter(vectors.values()))
+            stored_dimension = getattr(first, "size", None)
+    else:
+        _require_opensearch(s)
+        target = s.settings.index_name
+        try:
+            mapping = await s.client.indices.get_mapping(index=target)
+        except NotFoundError as e:
+            raise HTTPException(status_code=404, detail=f"index {target} not found") from e
+        except Exception as e:
+            logger.error("embedding drift check failed (opensearch): %s", e)
+            raise HTTPException(status_code=503, detail="backend unavailable") from e
+        for body in mapping.values():
+            props = (body.get("mappings") or {}).get("properties") or {}
+            emb = props.get(EMBEDDING_FIELD) or {}
+            if "dimension" in emb:
+                stored_dimension = emb["dimension"]
+                break
+
+    dimension_match = (
+        configured_dimension == stored_dimension
+        if configured_dimension is not None and stored_dimension is not None
+        else None
+    )
+    result: dict[str, Any] = {
+        "backend": s.settings.search_backend,
+        "target": target,
+        "configured_model_id": s.settings.embedding_model_id,
+        "configured_dimension": configured_dimension,
+        "stored_dimension": stored_dimension,
+        "dimension_match": dimension_match,
+    }
+    if dimension_match is False:
+        kind = "collection" if s.settings.search_backend == "qdrant" else "index"
+        result["warning"] = (
+            f"Configured model '{s.settings.embedding_model_id}' produces {configured_dimension}-dim "
+            f"vectors but {kind} '{target}' stores {stored_dimension}-dim vectors. Reindex with a "
+            "matching model, or switch back to the model that built this index."
+        )
+    return result
 
 
 @admin_router.post(

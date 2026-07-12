@@ -81,6 +81,57 @@ def _delete_opensearch(settings: Settings, idno: str) -> dict[str, Any]:
         _close_quiet(client)
 
 
+def delete_by_idnos_op(settings: Settings, idnos: list[str]) -> dict[str, Any]:
+    """Delete all indexed documents/points for a batch of idnos in one call. Works with both backends."""
+    if settings.search_backend == "qdrant":
+        return _delete_qdrant_batch(settings, idnos)
+    return _delete_opensearch_batch(settings, idnos)
+
+
+def _delete_qdrant_batch(settings: Settings, idnos: list[str]) -> dict[str, Any]:
+    from qdrant_client.http import models as qm
+    from nada_ai.ingest.qdrant_writer import _client as make_client
+    from nada_ai.search.backend.opensearch.mapping import metadata_field
+
+    client = make_client(settings)
+    coll = settings.qdrant_collection
+    try:
+        result = client.delete(
+            collection_name=coll,
+            points_selector=qm.FilterSelector(
+                filter=qm.Filter(must=[
+                    qm.FieldCondition(key=metadata_field("idno"), match=qm.MatchAny(any=idnos))
+                ])
+            ),
+        )
+        return {
+            "backend": "qdrant",
+            "collection": coll,
+            "idnos": idnos,
+            "operation": result.status.value if result else "unknown",
+        }
+    finally:
+        client.close()
+
+
+def _delete_opensearch_batch(settings: Settings, idnos: list[str]) -> dict[str, Any]:
+    from nada_ai.search.backend.opensearch.mapping import metadata_field
+
+    client = build_client(settings)
+    try:
+        body = {"query": {"terms": {metadata_field("idno"): idnos}}}
+        resp = client.delete_by_query(index=settings.index_name, body=body, refresh=True)
+        return {
+            "backend": "opensearch",
+            "index": settings.index_name,
+            "idnos": idnos,
+            "deleted": int(resp.get("deleted") or 0),
+            "total": resp.get("total"),
+        }
+    finally:
+        _close_quiet(client)
+
+
 def put_index_template_op(settings: Settings) -> dict[str, Any]:
     """Install composable index template (and optional cluster auto-create setting) for OpenSearch only."""
     if settings.search_backend == "qdrant":
