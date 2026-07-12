@@ -32,12 +32,17 @@ async def do_growth(
     idno: str,
     base_period: str,
     end_period: str,
-    ref_areas: list[str] | None = None,
+    ref_areas: str | None = None,
     dimensions: dict[str, str] | None = None,
 ) -> GrowthResponse:
-    """Fetch schema + data and compute period-over-period change."""
+    """Fetch schema + data and compute period-over-period change.
+
+    ``ref_areas`` is a comma-separated string, parsed here — see do_compare's
+    docstring in compare_app.py for why (avoids a stale pre-parsed list).
+    """
+    parsed = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else None
     return await _nada_growth(idno=idno, base_period=base_period, end_period=end_period,
-                               ref_areas=ref_areas, dimensions=dimensions)
+                               ref_areas=parsed, dimensions=dimensions)
 
 
 @growth_app.ui(
@@ -61,16 +66,15 @@ async def show_growth(
         end_period: Ending period for comparison (e.g. 2022). Pre-fills the form.
         ref_areas: Comma-separated ref area codes to include (e.g. KEN,UGA). Optional.
     """
-    parsed_refs = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else []
     result = None
     if idno and base_period and end_period:
         result = await do_growth(idno=idno, base_period=base_period, end_period=end_period,
-                                 ref_areas=parsed_refs or None)
+                                 ref_areas=ref_areas or None)
 
     _growth_action = make_action(
         do_growth,
         {"idno": "{{ idno }}", "base_period": "{{ base_period }}",
-         "end_period": "{{ end_period }}", "ref_areas": "{{ ref_areas_list }}"},
+         "end_period": "{{ end_period }}", "ref_areas": "{{ ref_areas }}"},
         error_msg="Growth calculation failed.",
     )
 
@@ -81,7 +85,6 @@ async def show_growth(
             "base_period": str(base_period),
             "end_period": str(end_period),
             "ref_areas": ref_areas,
-            "ref_areas_list": parsed_refs,
             "loading": False,
             "result": result.model_dump() if result and not result.error else None,
             "error": result.error if result else None,

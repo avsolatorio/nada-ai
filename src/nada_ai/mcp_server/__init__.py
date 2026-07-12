@@ -17,10 +17,12 @@ from .apps.benchmark_app import benchmark_app
 from .apps.coverage_app import coverage_app
 from .apps.join_app import join_app
 from .apps.aggregate_app import aggregate_app
+from .apps.extremes_app import extremes_app
 
 for _app in (
     search_app, schema_app, rank_app, compare_app, summarize_app, growth_app,
-    correlate_app, outliers_app, trend_app, benchmark_app, coverage_app, join_app, aggregate_app,
+    correlate_app, outliers_app, trend_app, benchmark_app, coverage_app, join_app,
+    aggregate_app, extremes_app,
 ):
     mcp.add_provider(_app)
 
@@ -39,6 +41,7 @@ __all__ = [
     "coverage_app",
     "join_app",
     "aggregate_app",
+    "extremes_app",
     "tools",
     "resources",
     "prompts",

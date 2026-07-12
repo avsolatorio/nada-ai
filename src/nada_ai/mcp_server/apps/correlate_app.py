@@ -17,6 +17,7 @@ from prefab_ui.components import (
     Small,
     Text,
 )
+from prefab_ui.components.charts import ChartSeries, ScatterChart
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
@@ -47,7 +48,8 @@ async def do_correlate(
 @correlate_app.ui(
     description=(
         "Open an interactive correlation UI between two timeseries indicators. "
-        "Shows Pearson r and a scatter table of ref area values for a given period."
+        "Shows Pearson r, a scatter plot of value1 vs value2, and the underlying "
+        "per-ref-area values table for a given period."
     ),
     title="Correlate Indicators",
 )
@@ -119,6 +121,16 @@ async def show_correlate(
                     Small("Pearson r: ", css_class="font-medium")
                     Badge("{{ result.pearson_r }}")
                     Small("n = {{ result.n }} ref areas", css_class="text-muted-foreground")
+
+                # value1/value2 are always the fixed column names for this response
+                # shape, so a single scatter series is safe regardless of n ref areas.
+                ScatterChart(
+                    data="{{ result.rows }}",
+                    series=[ChartSeries(data_key="value2", label="Ref areas")],
+                    x_axis="value1",
+                    y_axis="value2",
+                    height=350,
+                )
 
                 DataTable(
                     columns=[

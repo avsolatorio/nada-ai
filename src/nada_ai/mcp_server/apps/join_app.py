@@ -33,13 +33,18 @@ async def do_join(
     idno2: str,
     from_year: int | None = None,
     to_year: int | None = None,
-    ref_areas: list[str] | None = None,
+    ref_areas: str | None = None,
     dimensions1: dict[str, str] | None = None,
     dimensions2: dict[str, str] | None = None,
 ) -> JoinResponse:
-    """Fetch both indicators and align them by (ref_area, period)."""
+    """Fetch both indicators and align them by (ref_area, period).
+
+    ``ref_areas`` is a comma-separated string, parsed here — see do_compare's
+    docstring in compare_app.py for why (avoids a stale pre-parsed list).
+    """
+    parsed = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else None
     return await _nada_join(idno1=idno1, idno2=idno2, from_year=from_year, to_year=to_year,
-                             ref_areas=ref_areas, dimensions1=dimensions1, dimensions2=dimensions2)
+                             ref_areas=parsed, dimensions1=dimensions1, dimensions2=dimensions2)
 
 
 @join_app.ui(
@@ -65,18 +70,17 @@ async def show_join(
         to_year: End year filter (e.g. 2022). Optional.
         ref_areas: Comma-separated ref area codes to include (e.g. KEN,UGA). Optional.
     """
-    parsed_refs = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else []
     fy = int(from_year) if from_year and from_year.isdigit() else None
     ty = int(to_year) if to_year and to_year.isdigit() else None
     result = None
     if idno1 and idno2:
         result = await do_join(idno1=idno1, idno2=idno2, from_year=fy, to_year=ty,
-                               ref_areas=parsed_refs or None)
+                               ref_areas=ref_areas or None)
 
     _action = make_action(
         do_join,
         {"idno1": "{{ idno1 }}", "idno2": "{{ idno2 }}", "from_year": "{{ from_year }}",
-         "to_year": "{{ to_year }}", "ref_areas": "{{ ref_areas_list }}"},
+         "to_year": "{{ to_year }}", "ref_areas": "{{ ref_areas }}"},
         error_msg="Join failed.",
     )
 
@@ -85,7 +89,7 @@ async def show_join(
         state={
             "idno1": idno1, "idno2": idno2,
             "from_year": from_year, "to_year": to_year,
-            "ref_areas": ref_areas, "ref_areas_list": parsed_refs,
+            "ref_areas": ref_areas,
             "loading": False,
             "result": result.model_dump() if result and not result.error else None,
             "error": result.error if result else None,

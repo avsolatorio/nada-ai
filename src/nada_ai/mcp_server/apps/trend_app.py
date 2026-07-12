@@ -30,13 +30,18 @@ trend_app = FastMCPApp("Trend")
 @trend_app.tool()
 async def do_trend(
     idno: str,
-    ref_areas: list[str] | None = None,
+    ref_areas: str | None = None,
     from_year: int | None = None,
     to_year: int | None = None,
     dimensions: dict[str, str] | None = None,
 ) -> TrendResponse:
-    """Fetch schema + data and compute linear trend per ref area."""
-    return await _nada_trend(idno=idno, ref_areas=ref_areas,
+    """Fetch schema + data and compute linear trend per ref area.
+
+    ``ref_areas`` is a comma-separated string, parsed here — see do_compare's
+    docstring in compare_app.py for why (avoids a stale pre-parsed list).
+    """
+    parsed = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else None
+    return await _nada_trend(idno=idno, ref_areas=parsed,
                               from_year=from_year, to_year=to_year, dimensions=dimensions)
 
 
@@ -61,17 +66,16 @@ async def show_trend(
         from_year: Start year to narrow the trend window (e.g. 2000). Optional.
         to_year: End year to narrow the trend window (e.g. 2022). Optional.
     """
-    parsed_refs = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else []
     fy = int(from_year) if from_year and from_year.isdigit() else None
     ty = int(to_year) if to_year and to_year.isdigit() else None
     result = None
     if idno:
-        result = await do_trend(idno=idno, ref_areas=parsed_refs or None,
+        result = await do_trend(idno=idno, ref_areas=ref_areas or None,
                                 from_year=fy, to_year=ty)
 
     _action = make_action(
         do_trend,
-        {"idno": "{{ idno }}", "ref_areas": "{{ ref_areas_list }}",
+        {"idno": "{{ idno }}", "ref_areas": "{{ ref_areas }}",
          "from_year": "{{ from_year }}", "to_year": "{{ to_year }}"},
         error_msg="Trend analysis failed.",
     )
@@ -79,7 +83,7 @@ async def show_trend(
     with PrefabApp(
         title="Trend Analysis",
         state={
-            "idno": idno, "ref_areas": ref_areas, "ref_areas_list": parsed_refs,
+            "idno": idno, "ref_areas": ref_areas,
             "from_year": from_year, "to_year": to_year,
             "loading": False,
             "result": result.model_dump() if result and not result.error else None,

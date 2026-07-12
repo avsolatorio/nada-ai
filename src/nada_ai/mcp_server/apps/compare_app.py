@@ -31,21 +31,28 @@ compare_app = FastMCPApp("Compare")
 @compare_app.tool()
 async def do_compare(
     idno: str,
-    ref_areas: list[str],
+    ref_areas: str,
     from_year: int | None = None,
     to_year: int | None = None,
     dimensions: dict[str, str] | None = None,
 ) -> CompareResponse:
-    """Fetch schema + data and build a pivoted comparison."""
-    return await _nada_compare(idno=idno, ref_areas=ref_areas,
+    """Fetch schema + data and build a pivoted comparison.
+
+    ``ref_areas`` is a comma-separated string, parsed here — the click action
+    binds it directly to the same live state key as the text input, so edits
+    to the field are always reflected (a separately-tracked pre-parsed list
+    would go stale the moment the user edits the input after initial load).
+    """
+    parsed = [r.strip() for r in ref_areas.split(",") if r.strip()]
+    return await _nada_compare(idno=idno, ref_areas=parsed,
                                from_year=from_year, to_year=to_year, dimensions=dimensions)
 
 
 @compare_app.ui(
     description=(
         "Open an interactive time-series comparison UI for a timeseries indicator. "
-        "Shows trend lines for multiple ref areas (countries, provinces, etc.) "
-        "over a selected period range."
+        "Shows a searchable, sortable table of values for multiple ref areas "
+        "(countries, provinces, etc.) across all available periods."
     ),
     title="Compare Ref Areas",
 )
@@ -63,16 +70,15 @@ async def compare_ref_areas(
         from_year: Start year filter (e.g. 2000). Optional.
         to_year: End year filter (e.g. 2022). Optional.
     """
-    parsed_refs = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else []
     fy = int(from_year) if from_year and from_year.isdigit() else None
     ty = int(to_year) if to_year and to_year.isdigit() else None
     result = None
-    if idno and parsed_refs:
-        result = await do_compare(idno=idno, ref_areas=parsed_refs, from_year=fy, to_year=ty)
+    if idno and ref_areas.strip():
+        result = await do_compare(idno=idno, ref_areas=ref_areas, from_year=fy, to_year=ty)
 
     _compare_action = make_action(
         do_compare,
-        {"idno": "{{ idno }}", "ref_areas": "{{ ref_areas_list }}",
+        {"idno": "{{ idno }}", "ref_areas": "{{ ref_areas }}",
          "from_year": "{{ from_year }}", "to_year": "{{ to_year }}"},
         error_msg="Comparison failed. Check the idno and ref area codes.",
     )
@@ -82,7 +88,6 @@ async def compare_ref_areas(
         state={
             "idno": idno,
             "ref_areas": ref_areas,
-            "ref_areas_list": parsed_refs,
             "from_year": from_year,
             "to_year": to_year,
             "loading": False,

@@ -31,11 +31,16 @@ benchmark_app = FastMCPApp("Benchmark")
 async def do_benchmark(
     idno: str,
     period: str,
-    ref_areas: list[str],
+    ref_areas: str,
     dimensions: dict[str, str] | None = None,
 ) -> BenchmarkResponse:
-    """Fetch schema + data and benchmark ref areas against all peers."""
-    return await _nada_benchmark(idno=idno, period=period, ref_areas=ref_areas,
+    """Fetch schema + data and benchmark ref areas against all peers.
+
+    ``ref_areas`` is a comma-separated string, parsed here — see do_compare's
+    docstring in compare_app.py for why (avoids a stale pre-parsed list).
+    """
+    parsed = [r.strip() for r in ref_areas.split(",") if r.strip()]
+    return await _nada_benchmark(idno=idno, period=period, ref_areas=parsed,
                                   dimensions=dimensions)
 
 
@@ -59,14 +64,13 @@ async def show_benchmark(
         period: Time period to benchmark in (e.g. 2022). Pre-fills the form.
         ref_areas: Comma-separated ref area codes to benchmark (e.g. KEN,UGA). Pre-fills the form.
     """
-    parsed_refs = [r.strip() for r in ref_areas.split(",") if r.strip()] if ref_areas else []
     result = None
-    if idno and period and parsed_refs:
-        result = await do_benchmark(idno=idno, period=period, ref_areas=parsed_refs)
+    if idno and period and ref_areas.strip():
+        result = await do_benchmark(idno=idno, period=period, ref_areas=ref_areas)
 
     _action = make_action(
         do_benchmark,
-        {"idno": "{{ idno }}", "period": "{{ period }}", "ref_areas": "{{ ref_areas_list }}"},
+        {"idno": "{{ idno }}", "period": "{{ period }}", "ref_areas": "{{ ref_areas }}"},
         error_msg="Benchmark failed.",
     )
 
@@ -74,7 +78,7 @@ async def show_benchmark(
         title="Benchmark",
         state={
             "idno": idno, "period": str(period),
-            "ref_areas": ref_areas, "ref_areas_list": parsed_refs,
+            "ref_areas": ref_areas,
             "loading": False,
             "result": result.model_dump() if result and not result.error else None,
             "error": result.error if result else None,

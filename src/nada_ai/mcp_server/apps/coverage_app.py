@@ -16,6 +16,7 @@ from prefab_ui.components import (
     Row,
     Small,
 )
+from prefab_ui.components.charts import BarChart, ChartSeries
 from prefab_ui.components.data_table import DataTable, DataTableColumn
 from prefab_ui.rx import STATE
 
@@ -91,6 +92,19 @@ async def show_coverage(idno: str = "") -> PrefabApp:
                     Small("{{ result.indicator_name }}", css_class="text-muted-foreground")
                     Badge("{{ result.total_ref_areas }} ref areas")
                     Badge("{{ result.total_periods }} distinct periods")
+
+                # coverage_pct is always present regardless of how many ref areas
+                # were returned, so a single fixed series is safe here (unlike a
+                # per-ref-area comparison, which would need a dynamic series list).
+                BarChart(
+                    data="{{ result.rows }}",
+                    series=[ChartSeries(data_key="coverage_pct", label="Coverage %")],
+                    x_axis="ref_area",
+                    horizontal=True,
+                    show_legend=False,
+                    value_format="number:1",
+                    height=350,
+                )
 
                 DataTable(
                     columns=[
