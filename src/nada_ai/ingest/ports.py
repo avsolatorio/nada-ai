@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from nada_ai.ingest.quality import QualityReport
     from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
 
 
@@ -24,10 +25,14 @@ class IngestWriterPort(Protocol):
         show_progress_bar: bool = True,
         buffer_size: int = 1000,
         embedding: "EmbeddingService | None" = None,
+        quality_report: "QualityReport | None" = None,
     ) -> tuple[int, list[Any] | None]:
         """Index all langdocs for ``pairs``; returns ``(success_count, errors_or_none)``.
 
         ``embedding`` — pre-built :class:`EmbeddingService` to reuse rather than
         loading the model again.  Pass ``None`` (default) and the writer will
         instantiate its own; this is the path taken by the CLI and tests.
+
+        ``quality_report`` — optional :class:`QualityReport` that observes each
+        source document as it's built; purely additive, never rejects a document.
         """

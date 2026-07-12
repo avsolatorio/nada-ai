@@ -8,6 +8,7 @@ from ai4data.discovery.catalog import get_langdoc_uuid
 from ai4data.discovery.metadata.handler import MetadataLoader
 from tqdm.auto import tqdm
 
+from nada_ai.ingest.quality import QualityReport
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
 from nada_ai.search.backend.opensearch.mapping import index_body
 from nada_ai.search.documents import langdoc_to_source
@@ -31,8 +32,14 @@ def iter_langdoc_records(
     force: bool = False,
     show_progress_bar: bool = True,
     buffer_size: int = 1000,
+    quality_report: QualityReport | None = None,
 ) -> Iterator[tuple[str, list[float] | None, dict[str, Any]]]:
-    """Yield ``(document_id, embedding_or_none_if_ml_backend, source_payload)`` for each langdoc row."""
+    """Yield ``(document_id, embedding_or_none_if_ml_backend, source_payload)`` for each langdoc row.
+
+    ``quality_report``, if given, observes every ``source`` payload as it's
+    built (see ``ingest/quality.py``) — purely additive, never skips or
+    rejects a document.
+    """
     use_ml = settings.embedding_backend == "opensearch_ml"
     buffer: list[tuple[Any, Any | None]] = []
 
@@ -49,6 +56,8 @@ def iter_langdoc_records(
             for _, (doc, raw_meta) in ml_iter:
                 doc_id = get_langdoc_uuid(doc)
                 source = langdoc_to_source(doc, None, raw_metadata=raw_meta)
+                if quality_report is not None:
+                    quality_report.observe(source)
                 yield doc_id, None, source
             return
         if embedding is None:
@@ -62,6 +71,8 @@ def iter_langdoc_records(
             vec = vectors[i].tolist()
             doc_id = get_langdoc_uuid(doc)
             source = langdoc_to_source(doc, vec, raw_metadata=raw_meta)
+            if quality_report is not None:
+                quality_report.observe(source)
             yield doc_id, vec, source
 
     pairs_iter: Iterable[tuple[str, str]] = pairs
@@ -98,6 +109,7 @@ def iter_bulk_actions(
     force: bool = False,
     show_progress_bar: bool = True,
     buffer_size: int = 1000,
+    quality_report: QualityReport | None = None,
 ) -> Iterator[dict[str, Any]]:
     """pairs: (idno, metadata_type).
 
@@ -106,7 +118,13 @@ def iter_bulk_actions(
     """
     use_ml = settings.embedding_backend == "opensearch_ml"
     for doc_id, vec, source in iter_langdoc_records(
-        settings, embedding, pairs, force=force, show_progress_bar=show_progress_bar, buffer_size=buffer_size
+        settings,
+        embedding,
+        pairs,
+        force=force,
+        show_progress_bar=show_progress_bar,
+        buffer_size=buffer_size,
+        quality_report=quality_report,
     ):
         if use_ml:
             yield {
@@ -133,6 +151,7 @@ def run_bulk_index(
     show_progress_bar: bool = True,
     buffer_size: int = 1000,
     embedding: EmbeddingService | None = None,
+    quality_report: QualityReport | None = None,
 ) -> tuple[int, list | None]:
     from nada_ai.ingest.factory import create_ingest_writer
 
@@ -143,6 +162,7 @@ def run_bulk_index(
         recreate_target=recreate_index,
         show_progress_bar=show_progress_bar,
         buffer_size=buffer_size,
+        quality_report=quality_report,
         embedding=embedding,
     )
 
