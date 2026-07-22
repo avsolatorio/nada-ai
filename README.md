@@ -1,6 +1,8 @@
 # nada-ai (`nada_ai`)
 
-Python package for **NADA AI**: ingest [NADA / Data Compass–style](https://data-compass.ihsn.org/) metadata via **`ai4data.discovery`** and search in **OpenSearch** (keyword, k-NN vector, hybrid). **MCP** support is planned as an optional extension in this repo.
+Python package for **NADA AI**: ingest [NADA / Data Compass–style](https://data-compass.ihsn.org/) metadata via **`ai4data.discovery`**, search it (keyword, k-NN vector, hybrid) over **OpenSearch or Qdrant**, and expose catalog search + timeseries analytics to LLM agents via an **MCP server** (tools, interactive apps, resources, prompts).
+
+**New here? Read the [developer guide](docs/GUIDE.md)** — architecture, semantic search, the MCP server, NADA connectivity, configuration reference, and deployment, all in one place.
 
 ## Requirements
 
@@ -35,6 +37,7 @@ uv sync --extra local --extra qdrant
 
 | Guide | Description |
 |-------|-------------|
+| **[Developer guide](docs/GUIDE.md)** | Full reference: architecture, semantic search, ingestion, the MCP server (tools/apps/resources/prompts), NADA connectivity, every config variable, deployment, observability |
 | **[Qdrant pipeline guide](docs/qdrant-pipeline-guide.md)** | End-to-end catalog ingest and search with Qdrant — **host ingest** and **full Docker** setups, metadata-extract catalog, verification, troubleshooting |
 | [Dynamic filters](docs/dynamic-filters.md) | Sync IHSN catalog filters into the index and search by facet keys |
 
