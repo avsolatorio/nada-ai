@@ -45,7 +45,10 @@ an LLM agent, jump to [The MCP server](#the-mcp-server).
 `nada-ai` ingests metadata from **NADA** (National Data Archive) catalogs — the
 [Data Compass](https://data-compass.ihsn.org/)-style microdata/timeseries cataloging
 system used by IHSN and partner statistical agencies — and exposes two ways to work
-with that catalog:
+with that catalog. Nothing in the codebase is hardcoded to IHSN's own deployment:
+every catalog/instance-specific value (base URL, credentials, extract path) is
+configuration, so `nada-ai` works against any NADA instance — IHSN's Data Compass is
+just the reference instance used in examples throughout this guide.
 
 1. **Semantic search** — a FastAPI service that indexes catalog metadata into a vector
    store (OpenSearch or Qdrant) and serves keyword / vector / hybrid search over it,
@@ -94,7 +97,7 @@ flowchart LR
 | **Discovery** | external `ai4data.discovery` package | Catalog auth, caching, bulk metadata extraction — the only import boundary allowed for talking to `ai4data` (enforced by `tests/test_ai4data_import_boundary.py`) |
 | **Ingest** | `src/nada_ai/ingest/` | Pulls catalog metadata, computes embeddings, bulk-writes to the search backend |
 | **Search** | `src/nada_ai/search/` | Backend-agnostic search contract + OpenSearch/Qdrant implementations |
-| **Filters** | `src/nada_ai/filters/` | Syncs IHSN facet filters into the index |
+| **Filters** | `src/nada_ai/filters/` | Syncs facet filters from a NADA instance's metadata-extract API into the index |
 | **FastAPI app** | `src/nada_ai/app/` | `/search`, `/recommendations`, `/admin/*`, `/health*`, mounts MCP at `/mcp` |
 | **MCP server** | `src/nada_ai/mcp_server/` | Tools, interactive apps, resources, prompts for LLM agents |
 
@@ -177,14 +180,17 @@ which credential:
 **Auth**: the public Data Compass instance needs no credentials. A gated catalog
 accepts `AI4DATA_METADATA_CATALOG_X_API_KEY` (`x-api-key` header), an auth cookie
 (`AI4DATA_METADATA_CATALOG_COOKIES`), or a bearer token
-(`AI4DATA_METADATA_CATALOG_AUTH_BEARER`). The separate `nada_ai.filters` IHSN sync
-path (facet syncing, not catalog search) has its own `NADA_IHSN_*` credentials,
-falling back to the `AI4DATA_METADATA_CATALOG_*` ones when unset.
+(`AI4DATA_METADATA_CATALOG_AUTH_BEARER`). The separate `nada_ai.filters` metadata-extract
+sync path (facet syncing, not catalog search) has its own `NADA_METADATA_EXTRACT_*`
+credentials, falling back to the `AI4DATA_METADATA_CATALOG_*` ones when unset — these
+point at whatever NADA instance you're syncing filters from, not necessarily the same
+instance as the main catalog config.
 
 > **Trust boundary — don't cross it.** `NADA_ADMIN_API_KEY` is *inbound*: it's what
 > callers present to authenticate to *this* service. `AI4DATA_METADATA_CATALOG_X_API_KEY`
-> / `NADA_IHSN_API_KEY` are *outbound*: what this service presents to NADA/IHSN. Never
-> reuse one value for both — leaking one should never grant the other.
+> / `NADA_METADATA_EXTRACT_API_KEY` are *outbound*: what this service presents to the
+> configured NADA instance. Never reuse one value for both — leaking one should never
+> grant the other.
 
 To point at a different NADA instance, set `AI4DATA_METADATA_CATALOG_URL`. If that
 instance supports the bulk extract endpoint, set
@@ -247,9 +253,9 @@ exact lookup rather than running full search.
 
 ### Dynamic filters and facets
 
-External catalog filters (country, topic, data class, etc.) are synced from IHSN into
-the index under `metadata.filter_fields` — see [`docs/dynamic-filters.md`](dynamic-filters.md)
-for the full sync/query story. In short:
+External catalog filters (country, topic, data class, etc.) are synced from a NADA
+instance's metadata-extract API into the index under `metadata.filter_fields` — see
+[`docs/dynamic-filters.md`](dynamic-filters.md) for the full sync/query story. In short:
 
 - **Qdrant** stores both the nested `metadata.filter_fields` array (parity/backfill
   source of truth) *and* a flattened `metadata.filter_facets` map with payload indexes
@@ -259,7 +265,7 @@ for the full sync/query story. In short:
   `config/dynamic_filter_facets.json` (path overridable via
   `NADA_DYNAMIC_FILTER_FACETS_PATH`), managed at runtime via
   `GET/PUT/POST/DELETE /admin/facets`.
-- Sync from the command line: `python -m nada_ai.filters.cli {sync, sync-batch, sync-from-ihsn, backfill-facets, ensure-indexes}`.
+- Sync from the command line: `python -m nada_ai.filters.cli {sync, sync-batch, sync-from-extract, backfill-facets, ensure-indexes}`.
 
 ### The REST search API
 
@@ -581,14 +587,14 @@ in `src/nada_ai/settings.py` unless noted.
 | `NADA_LOG_FORMAT` | `text` | `text` or `json` |
 | `NADA_LOG_LEVEL` | `INFO` | `DEBUG`..`CRITICAL` |
 
-### IHSN filter sync CLI
+### Metadata-extract filter sync CLI
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NADA_IHSN_METADATA_EXTRACT_BASE_URL` | falls back to `AI4DATA_METADATA_CATALOG_*` | Base URL for the search-metadata-extract API |
-| `NADA_IHSN_API_KEY` | unset | Outbound `X-API-KEY` to IHSN |
-| `NADA_IHSN_AUTH_BEARER` | unset | Outbound Bearer token |
-| `NADA_IHSN_AUTH_COOKIE` | unset | Raw Cookie header for session-gated hosts |
+| `NADA_METADATA_EXTRACT_BASE_URL` | falls back to `AI4DATA_METADATA_CATALOG_*`; raises a clear error if neither is set | Base URL for the configured NADA instance's search-metadata-extract API |
+| `NADA_METADATA_EXTRACT_API_KEY` | unset | Outbound `X-API-KEY` to that instance |
+| `NADA_METADATA_EXTRACT_AUTH_BEARER` | unset | Outbound Bearer token |
+| `NADA_METADATA_EXTRACT_AUTH_COOKIE` | unset | Raw Cookie header for session-gated hosts |
 
 ### Discovery / NADA catalog (`AI4DATA_` prefix — a separate settings class from `nada_ai.settings`)
 
@@ -713,7 +719,7 @@ Unit tests (`tests/`) cover, by subsystem:
 | Subsystem | Test files |
 |---|---|
 | Search backends & queries | `test_queries.py`, `test_qdrant_filters.py`, `test_qdrant_sparse_and_collapse.py`, `test_index_template.py`, `test_facets_and_collapse.py` |
-| Dynamic filters/facets | `test_dynamic_filters_normalize.py`, `test_dynamic_filters_opensearch.py`, `test_dynamic_filters_qdrant.py`, `test_dynamic_facets.py`, `test_explain_dynamic_filters.py`, `test_explain_filters.py`, `test_filter_backfill.py`, `test_filter_sync.py`, `test_ihsn_extract.py` |
+| Dynamic filters/facets | `test_dynamic_filters_normalize.py`, `test_dynamic_filters_opensearch.py`, `test_dynamic_filters_qdrant.py`, `test_dynamic_facets.py`, `test_explain_dynamic_filters.py`, `test_explain_filters.py`, `test_filter_backfill.py`, `test_filter_sync.py`, `test_metadata_extract.py` |
 | Ingest | `test_ingest_quality.py`, `test_microdata_enrich.py`, `test_jobs_registry.py` |
 | Catalog client / NADA API | `test_catalog_search.py`, `test_timeseries_api.py`, `test_timeseries_models.py`, `test_idno_heuristic.py` |
 | MCP server | `test_analytics.py`, `test_analytics_apps.py`, `test_analytics_tools.py`, `test_mcp_resources_and_prompts.py`, `test_mcp_tool_config.py` |
@@ -754,8 +760,8 @@ src/nada_ai/
 │   ├── quality.py               non-blocking ingest quality reports
 │   └── service.py               shared *_op callables (CLI + HTTP admin)
 │
-├── filters/               IHSN dynamic filter/facet sync
-│   ├── cli.py / service.py / sync.py / indexes.py / facets_service.py / ihsn_extract.py
+├── filters/               dynamic filter/facet sync from a NADA instance's metadata-extract API
+│   ├── cli.py / service.py / sync.py / indexes.py / facets_service.py / metadata_extract.py
 │
 ├── mcp_server/             MCP server — tools, apps, resources, prompts
 │   ├── tools.py                 nada_* tool registrations

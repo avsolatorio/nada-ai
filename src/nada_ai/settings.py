@@ -107,14 +107,16 @@ class Settings(BaseSettings):
     #: Raise to 2–4 for CPU-only deployments with plentiful cores.
     max_concurrent_ingest_jobs: int = Field(default=1, ge=1, le=16)
 
-    #: IHSN search-metadata-extract API base URL (no trailing slash).
-    ihsn_metadata_extract_base_url: str | None = Field(default=None)
+    #: NADA search-metadata-extract API base URL (no trailing slash). This is
+    #: instance-specific — every NADA deployment (IHSN's or anyone else's) has
+    #: its own metadata-extract host, so there is no built-in default here.
+    metadata_extract_base_url: str | None = Field(default=None)
     #: Optional API key sent as ``X-API-KEY`` (if the deployment requires it).
-    ihsn_api_key: str | None = Field(default=None)
+    metadata_extract_api_key: str | None = Field(default=None)
     #: Optional bearer token for ``Authorization: Bearer ...``.
-    ihsn_auth_bearer: str | None = Field(default=None)
+    metadata_extract_auth_bearer: str | None = Field(default=None)
     #: Optional raw Cookie header value for authenticated training/production hosts.
-    ihsn_auth_cookie: str | None = Field(default=None)
+    metadata_extract_auth_cookie: str | None = Field(default=None)
 
     #: Override path to the API keys store (default ``config/api_keys.json``).
     #: Contains only key hashes/prefixes, never raw key values — still keep out of version control.

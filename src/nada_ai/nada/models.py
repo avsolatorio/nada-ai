@@ -207,7 +207,7 @@ class CatalogMetadataRequest(BaseModel):
 
 
 class TimeseriesCatalogMetadata(TimeseriesSchema):
-    """IHSN timeseries / indicator metadata (``schematype`` timeseries or indicator)."""
+    """NADA timeseries / indicator metadata (``schematype`` timeseries or indicator)."""
 
     schematype: Literal["timeseries", "indicator"] = Field(
         default="timeseries",
@@ -216,7 +216,7 @@ class TimeseriesCatalogMetadata(TimeseriesSchema):
 
 
 class DocumentCatalogMetadata(ScriptSchemaDraft):
-    """IHSN document metadata."""
+    """NADA document metadata."""
 
     schematype: Literal["document"] = Field(
         default="document",
@@ -225,7 +225,7 @@ class DocumentCatalogMetadata(ScriptSchemaDraft):
 
 
 class MicrodataCatalogMetadata(MicrodataSchema):
-    """IHSN microdata / survey metadata."""
+    """NADA microdata / survey metadata."""
 
     schematype: Literal["microdata", "survey"] = Field(
         default="microdata",
@@ -234,7 +234,7 @@ class MicrodataCatalogMetadata(MicrodataSchema):
 
 
 class GeospatialCatalogMetadata(GeospatialSchema):
-    """IHSN geospatial metadata."""
+    """NADA geospatial metadata."""
 
     schematype: Literal["geospatial"] = Field(
         default="geospatial",
@@ -243,7 +243,7 @@ class GeospatialCatalogMetadata(GeospatialSchema):
 
 
 class TableCatalogMetadata(TableSchema):
-    """IHSN table metadata."""
+    """NADA table metadata."""
 
     schematype: Literal["table"] = Field(
         default="table",
@@ -334,8 +334,8 @@ class CatalogMetadataDataset(BaseModel):
     link_study: str | None = Field(default=None, description="Linked study URL")
     link_indicator: str | None = Field(default=None, description="Linked indicator URL")
     link_report: str | None = Field(default=None, description="Linked report URL")
-    # metadata: CatalogMetadata = Field(description="Type-specific IHSN metadata payload")
-    metadata: dict[str, Any] = Field(description="Type-specific IHSN metadata payload")
+    # metadata: CatalogMetadata = Field(description="Type-specific NADA metadata payload")
+    metadata: dict[str, Any] = Field(description="Type-specific NADA metadata payload")
 
     # @model_validator(mode="before")
     # @classmethod

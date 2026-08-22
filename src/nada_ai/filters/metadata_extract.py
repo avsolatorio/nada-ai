@@ -1,4 +1,10 @@
-"""Fetch study filters from IHSN search-metadata-extract API."""
+"""Fetch study filters from a NADA search-metadata-extract API.
+
+This talks to the metadata-extract endpoint of whichever NADA instance is
+configured (``NADA_METADATA_EXTRACT_BASE_URL``, falling back to the general
+``AI4DATA_METADATA_CATALOG_*`` catalog config) — it is not tied to any single
+deployment (e.g. IHSN's Data Compass instance is just one such NADA instance).
+"""
 
 from __future__ import annotations
 
@@ -13,29 +19,31 @@ from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BASE_URL = "https://training.ihsn.org/index.php/api/admin/search-metadata-extract"
 
-
-class IhsnExtractError(RuntimeError):
+class MetadataExtractError(RuntimeError):
     """Raised when the metadata-extract API returns an error payload."""
+
+
+class MetadataExtractNotConfigured(MetadataExtractError):
+    """Raised when no metadata-extract base URL is configured for this instance."""
 
 
 def _build_headers(settings: Settings) -> dict[str, str]:
     headers = {"Accept": "application/json", "User-Agent": "nada-ai-filters-cli/1.0"}
-    api_key = settings.ihsn_api_key or metadata_catalog.x_api_key
+    api_key = settings.metadata_extract_api_key or metadata_catalog.x_api_key
     if api_key:
         headers["X-API-KEY"] = api_key
-    bearer = settings.ihsn_auth_bearer or metadata_catalog.auth_bearer
+    bearer = settings.metadata_extract_auth_bearer or metadata_catalog.auth_bearer
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
-    cookie = settings.ihsn_auth_cookie or metadata_catalog.cookies
+    cookie = settings.metadata_extract_auth_cookie or metadata_catalog.cookies
     if cookie:
         headers["Cookie"] = cookie
     return headers
 
 
 def _build_cookies(settings: Settings) -> dict[str, str]:
-    raw = settings.ihsn_auth_cookie or metadata_catalog.cookies
+    raw = settings.metadata_extract_auth_cookie or metadata_catalog.cookies
     if not raw:
         return {}
     out: dict[str, str] = {}
@@ -50,11 +58,15 @@ def _build_cookies(settings: Settings) -> dict[str, str]:
 
 
 def _base_url(settings: Settings) -> str:
-    if settings.ihsn_metadata_extract_base_url:
-        return settings.ihsn_metadata_extract_base_url.rstrip("/")
+    if settings.metadata_extract_base_url:
+        return settings.metadata_extract_base_url.rstrip("/")
     if url := catalog_extract.extract_base_url():
         return url
-    return DEFAULT_BASE_URL
+    raise MetadataExtractNotConfigured(
+        "No metadata-extract base URL configured. Set NADA_METADATA_EXTRACT_BASE_URL "
+        "(or AI4DATA_METADATA_CATALOG_EXTRACT_PATH) to the metadata-extract API for "
+        "your NADA instance."
+    )
 
 
 def _request_kwargs(settings: Settings) -> dict[str, Any]:
@@ -68,17 +80,17 @@ def _request_kwargs(settings: Settings) -> dict[str, Any]:
 def _scrub_credentials(msg: str, settings: Settings) -> str:
     """Remove known credential values from an exception message string."""
     for secret in filter(None, [
-        settings.ihsn_api_key,
-        settings.ihsn_auth_bearer,
-        settings.ihsn_auth_cookie,
+        settings.metadata_extract_api_key,
+        settings.metadata_extract_auth_bearer,
+        settings.metadata_extract_auth_cookie,
     ]):
         msg = msg.replace(secret, "[REDACTED]")
     return msg
 
 
-def _wrap_extract_error(exc: Exception, settings: Settings | None = None) -> IhsnExtractError:
+def _wrap_extract_error(exc: Exception, settings: Settings | None = None) -> MetadataExtractError:
     msg = _scrub_credentials(str(exc), settings) if settings is not None else str(exc)
-    return IhsnExtractError(msg)
+    return MetadataExtractError(msg)
 
 
 def study_idno(study: dict[str, Any]) -> str | None:
@@ -135,7 +147,7 @@ def fetch_study_records(
 
     records = parse_extract_response(data)
     if not records:
-        raise IhsnExtractError(f"No filters found in response for idno {idno!r}")
+        raise MetadataExtractError(f"No filters found in response for idno {idno!r}")
     return records
 
 
@@ -177,7 +189,7 @@ def iter_study_records(
                     total = max_records
                 elif isinstance(data.get("total"), int):
                     total = int(data["total"])
-                pbar = tqdm(total=total, unit="study", desc="Fetch IHSN filters")
+                pbar = tqdm(total=total, unit="study", desc="Fetch NADA filters")
 
             for rec in batch:
                 yield rec

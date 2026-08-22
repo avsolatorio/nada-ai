@@ -48,34 +48,36 @@ Admin API (when `NADA_ADMIN_API_KEY` is set):
 
 Sync updates **all points** sharing the same `metadata.idno` (all langdoc chunks).
 
-## IHSN metadata-extract API
+## NADA metadata-extract API
 
-Fetch filters from the IHSN admin metadata-extract API and sync them in one step:
+Fetch filters from your NADA instance's admin metadata-extract API and sync them in
+one step (the examples below use IHSN's training instance, but any NADA instance's
+extract API works the same way — see `NADA_METADATA_EXTRACT_BASE_URL` below):
 
 ```bash
 # Single study
-uv run python -m nada_ai.filters.cli sync-from-ihsn \
+uv run python -m nada_ai.filters.cli sync-from-extract \
   --idno=RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1
 
 # Paginate all studies (optional --limit for testing)
-uv run python -m nada_ai.filters.cli sync-from-ihsn --all --page-size=100
+uv run python -m nada_ai.filters.cli sync-from-extract --all --page-size=100
 
 # Fetch only (no index write)
-uv run python -m nada_ai.filters.cli fetch-from-ihsn --all --out=records.json
+uv run python -m nada_ai.filters.cli fetch-from-extract --all --out=records.json
 
 # Preview what would sync
-uv run python -m nada_ai.filters.cli sync-from-ihsn --all --dry-run --limit=5
+uv run python -m nada_ai.filters.cli sync-from-extract --all --dry-run --limit=5
 ```
 
 Configure auth in `.env` if the host requires it:
 
 ```env
-NADA_IHSN_METADATA_EXTRACT_BASE_URL=https://training.ihsn.org/index.php/api/admin/search-metadata-extract
-NADA_IHSN_API_KEY=your-key
+NADA_METADATA_EXTRACT_BASE_URL=https://training.ihsn.org/index.php/api/admin/search-metadata-extract
+NADA_METADATA_EXTRACT_API_KEY=your-key
 # or
-NADA_IHSN_AUTH_BEARER=your-token
+NADA_METADATA_EXTRACT_AUTH_BEARER=your-token
 # or
-NADA_IHSN_AUTH_COOKIE=session=...
+NADA_METADATA_EXTRACT_AUTH_COOKIE=session=...
 ```
 
 Query flags (defaults match typical filter-only extraction):
@@ -127,10 +129,10 @@ Migrate existing points that only have `filter_fields`:
 NADA_SEARCH_BACKEND=qdrant uv run python -m nada_ai.filters.cli backfill-facets
 ```
 
-Or re-sync from IHSN (writes both fields):
+Or re-sync from the metadata-extract API (writes both fields):
 
 ```bash
-NADA_SEARCH_BACKEND=qdrant uv run python -m nada_ai.filters.cli sync-from-ihsn --all --page-size=100
+NADA_SEARCH_BACKEND=qdrant uv run python -m nada_ai.filters.cli sync-from-extract --all --page-size=100
 ```
 
 The search API auto-creates missing indexes on first dynamic facet request; running `ensure-indexes` explicitly after deploy is recommended.
