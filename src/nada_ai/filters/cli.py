@@ -7,9 +7,9 @@ Examples::
     uv run python -m nada_ai.filters.cli get --idno=DOC-123
     uv run python -m nada_ai.filters.cli ensure-indexes
     uv run python -m nada_ai.filters.cli backfill-facets
-    uv run python -m nada_ai.filters.cli sync-from-ihsn --idno=RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1
-    uv run python -m nada_ai.filters.cli sync-from-ihsn --all --page-size=100
-    uv run python -m nada_ai.filters.cli fetch-from-ihsn --all --out=records.json
+    uv run python -m nada_ai.filters.cli sync-from-extract --idno=RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1
+    uv run python -m nada_ai.filters.cli sync-from-extract --all --page-size=100
+    uv run python -m nada_ai.filters.cli fetch-from-extract --all --out=records.json
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from nada_ai.filters.ihsn_extract import fetch_all_study_records, fetch_study_records
+from nada_ai.filters.metadata_extract import fetch_all_study_records, fetch_study_records
 from nada_ai.filters.service import (
     backfill_filter_facets_op,
     ensure_filter_indexes_op_service,
@@ -76,7 +76,7 @@ def backfill_facets(show_progress_bar: bool = True) -> None:
     print(json.dumps(res, indent=2))
 
 
-def fetch_from_ihsn(
+def fetch_from_extract(
     idno: str | None = None,
     all: bool = False,
     out: str | None = None,
@@ -86,7 +86,7 @@ def fetch_from_ihsn(
     limit: int | None = None,
     show_progress_bar: bool = True,
 ) -> None:
-    """Fetch ``{idno, filters}`` records from IHSN metadata-extract API (no index sync)."""
+    """Fetch ``{idno, filters}`` records from the NADA metadata-extract API (no index sync)."""
     if bool(idno) == bool(all):
         raise ValueError("Provide exactly one of --idno or --all")
     settings = Settings()
@@ -115,7 +115,7 @@ def fetch_from_ihsn(
         print(text)
 
 
-def sync_from_ihsn(
+def sync_from_extract(
     idno: str | None = None,
     all: bool = False,
     dry_run: bool = False,
@@ -125,7 +125,7 @@ def sync_from_ihsn(
     limit: int | None = None,
     show_progress_bar: bool = True,
 ) -> None:
-    """Fetch filters from IHSN API and sync to ``metadata.filter_fields`` by idno."""
+    """Fetch filters from the NADA metadata-extract API and sync to ``metadata.filter_fields`` by idno."""
     if bool(idno) == bool(all):
         raise ValueError("Provide exactly one of --idno or --all")
     settings = Settings()
@@ -167,9 +167,9 @@ if __name__ == "__main__":
             "ensure_indexes": ensure_indexes,
             "backfill-facets": backfill_facets,
             "backfill_facets": backfill_facets,
-            "fetch-from-ihsn": fetch_from_ihsn,
-            "fetch_from_ihsn": fetch_from_ihsn,
-            "sync-from-ihsn": sync_from_ihsn,
-            "sync_from_ihsn": sync_from_ihsn,
+            "fetch-from-extract": fetch_from_extract,
+            "fetch_from_extract": fetch_from_extract,
+            "sync-from-extract": sync_from_extract,
+            "sync_from_extract": sync_from_extract,
         }
     )

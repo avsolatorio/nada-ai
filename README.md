@@ -39,7 +39,7 @@ uv sync --extra local --extra qdrant
 |-------|-------------|
 | **[Developer guide](docs/GUIDE.md)** | Full reference: architecture, semantic search, ingestion, the MCP server (tools/apps/resources/prompts), NADA connectivity, every config variable, deployment, observability |
 | **[Qdrant pipeline guide](docs/qdrant-pipeline-guide.md)** | End-to-end catalog ingest and search with Qdrant — **host ingest** and **full Docker** setups, metadata-extract catalog, verification, troubleshooting |
-| [Dynamic filters](docs/dynamic-filters.md) | Sync IHSN catalog filters into the index and search by facet keys |
+| [Dynamic filters](docs/dynamic-filters.md) | Sync catalog filters from a NADA instance's metadata-extract API into the index and search by facet keys |
 
 ## Configuration (`NADA_*`)
 

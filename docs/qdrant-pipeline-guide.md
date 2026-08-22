@@ -13,7 +13,7 @@ This guide includes the optional **metadata-extract** catalog backend (`search-m
 | 1 | Qdrant | Vector + sparse (BM25) storage |
 | 2 | `create_index` | Create the Qdrant collection |
 | 3 | `index_from_catalog` | Fetch metadata, embed, upsert points |
-| 4 | (optional) `sync-from-ihsn` | Sync dynamic catalog filters into points |
+| 4 | (optional) `sync-from-extract` | Sync dynamic catalog filters into points |
 | 5 | API + `POST /search` | Keyword, vector, or hybrid search |
 
 ```mermaid
@@ -36,7 +36,7 @@ flowchart LR
 
 - **Python 3.11+** and [**uv**](https://docs.astral.sh/uv/) on the host (required for host-side ingest; the Docker image bundles its own venv).
 - **Docker** and **Docker Compose** v2.
-- Network access to your NADA / IHSN catalog (and credentials if the host requires auth).
+- Network access to your NADA instance's catalog (this guide's examples use IHSN's training instance; any NADA instance works — and credentials if the host requires auth).
 - Disk space for:
   - Hugging Face / SentenceTransformer model cache (~1–3 GB depending on model)
   - `./data/nada-discovery` metadata cache
@@ -75,7 +75,7 @@ Copy the example env file and edit it:
 cp .env.example .env
 ```
 
-### Minimal `.env` for training IHSN + extract
+### Minimal `.env` for the IHSN training instance + extract
 
 ```env
 # --- Search backend ---
@@ -243,14 +243,14 @@ Then run `index_from_catalog` as above; cached JSON under `data/nada-discovery/m
 
 ### A6. (Optional) Sync dynamic filters
 
-After ingest, sync IHSN filter facets (see also [dynamic-filters.md](./dynamic-filters.md)):
+After ingest, sync filter facets from the metadata-extract API (see also [dynamic-filters.md](./dynamic-filters.md)):
 
 ```bash
 uv run python -m nada_ai.filters.cli ensure-indexes
-uv run python -m nada_ai.filters.cli sync-from-ihsn --all --page-size=100
+uv run python -m nada_ai.filters.cli sync-from-extract --all --page-size=100
 ```
 
-Filter auth can use `NADA_IHSN_*` variables or the same `AI4DATA_METADATA_CATALOG_*` credentials when extract path is configured.
+Filter auth can use `NADA_METADATA_EXTRACT_*` variables or the same `AI4DATA_METADATA_CATALOG_*` credentials when extract path is configured.
 
 ### A7. Start the search API (host)
 

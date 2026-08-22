@@ -1,6 +1,6 @@
-"""Tests for IHSN metadata-extract parsing."""
+"""Tests for NADA metadata-extract response parsing."""
 
-from nada_ai.filters.ihsn_extract import parse_extract_response, study_to_sync_record
+from nada_ai.filters.metadata_extract import parse_extract_response, study_to_sync_record
 
 SAMPLE_LIST = {
     "status": "success",
