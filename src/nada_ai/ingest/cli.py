@@ -103,6 +103,29 @@ def index_from_catalog(
     print(f"Indexed {res['indexed']} docs from catalog ({res['rows']} ids); {err_part}")
 
 
+def reconcile_search_index(limit: int = 50) -> None:
+    """Poll NADA's ``search-index`` change queue and apply + ack up to ``limit`` items.
+
+    Run this on a schedule (cron, systemd timer, etc.) to keep the index in
+    sync with catalog changes without a full re-ingest — it complements
+    ``POST /webhooks/catalog`` by giving a reliable catch-up path after any
+    downtime, since NADA (not this process) owns what's still pending.
+    """
+    from nada_ai.ingest.search_index_sync import reconcile_once
+
+    settings = Settings()
+    res = reconcile_once(settings, limit=limit)
+    print(res)
+
+
+def search_index_status() -> None:
+    """Show NADA's search-index queue/state counts for this instance."""
+    from nada_ai.ingest.search_index_sync import get_status
+
+    settings = Settings()
+    print(get_status(settings).model_dump())
+
+
 if __name__ == "__main__":
     import fire
 
@@ -113,5 +136,7 @@ if __name__ == "__main__":
             "setup_ingest_pipeline": setup_ingest_pipeline,
             "index": index,
             "index_from_catalog": index_from_catalog,
+            "reconcile_search_index": reconcile_search_index,
+            "search_index_status": search_index_status,
         }
     )

@@ -118,6 +118,13 @@ class Settings(BaseSettings):
     #: Optional raw Cookie header value for authenticated training/production hosts.
     metadata_extract_auth_cookie: str | None = Field(default=None)
 
+    #: NADA admin API root (the OpenAPI ``servers`` base, e.g.
+    #: ``https://your-nada-instance/index.php/api``) for the ``search-index``
+    #: change-queue endpoints. Defaults to ``{AI4DATA_METADATA_CATALOG_URL}/api``
+    #: when unset. Shares the ``metadata_extract_*`` credentials above — NADA's
+    #: own docs require the same admin API key for both admin surfaces.
+    search_index_base_url: str | None = Field(default=None)
+
     #: Override path to the API keys store (default ``config/api_keys.json``).
     #: Contains only key hashes/prefixes, never raw key values — still keep out of version control.
     api_keys_path: str | None = Field(default=None)
