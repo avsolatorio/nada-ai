@@ -214,7 +214,7 @@ def requeue_failed(settings: Settings) -> dict[str, Any]:
     return resp.json()
 
 
-def _lookup_metadata_type(settings: Settings, idno: str) -> str | None:
+def lookup_metadata_type(settings: Settings, idno: str) -> str | None:
     """Resolve NADA's dataset_type for idno and map it to a nada_ai metadata_type.
 
     Confirmed against a live instance: the study document has no top-level
@@ -234,6 +234,75 @@ def _lookup_metadata_type(settings: Settings, idno: str) -> str | None:
     return _DATASET_TYPE_TO_METADATA_TYPE.get(dataset_type) if dataset_type else None
 
 
+def apply_and_ack_queue_item(
+    settings: Settings,
+    item: SearchIndexQueueItem,
+    *,
+    metadata_type: str | None = None,
+    embedding: Any | None = None,
+) -> dict[str, Any]:
+    """Apply one queue item (index or delete) and ack it back to NADA.
+
+    Factored out of ``reconcile_once`` so both the batch CLI path and the
+    per-item job-registry-scheduled path (``app.reconcile_scheduler``) share
+    the exact same apply-then-ack logic — including the ack_conflict/failure
+    handling — rather than two copies drifting apart.
+
+    ``metadata_type``: pass a pre-resolved value when the caller already
+    looked it up (the scheduler needs it *before* calling this, to build a
+    job-registry key matching ``content_sync_job_key`` — see
+    ``app.reconcile_scheduler``) to avoid a redundant second lookup. Resolved
+    internally via :func:`lookup_metadata_type` when omitted (the CLI/batch
+    path via ``reconcile_once`` doesn't need it upfront).
+
+    The upsert branch's ``index_ids_op`` call also syncs this idno's
+    filters/facets — not via an extra call here, but because
+    ``ingest.pipeline.iter_langdoc_records`` (which both backend writers
+    route through) fetches and bakes in NADA's ``filters`` data as part of
+    building the document/point payload itself (see
+    ``settings.sync_filters_during_ingest``). So a queue-driven reindex keeps
+    both content and facets in sync from a single fetch, with no separate
+    filters-sync pass required.
+
+    Returns ``{"idno", "action": "indexed"|"deleted"|"failed", "ack_conflict": bool, "error": str|None}``.
+    """
+    idno = item.object_key
+    result: Literal["indexed", "failed"]
+    error: str | None
+    try:
+        if item.is_delete:
+            delete_by_idno_op(settings, idno)
+            action = "deleted"
+        else:
+            resolved_type = metadata_type or lookup_metadata_type(settings, idno)
+            if resolved_type is None:
+                raise SearchIndexSyncError(
+                    f"No metadata_type mapping for idno {idno!r} — unsupported or unknown dataset_type"
+                )
+            index_ids_op(
+                settings,
+                idnos=[idno],
+                metadata_type=resolved_type,
+                force=True,
+                show_progress_bar=False,
+                embedding=embedding,
+            )
+            action = "indexed"
+    except Exception as e:  # noqa: BLE001 - reported back to NADA, not swallowed
+        logger.warning("search-index reconcile failed for idno=%s: %s", idno, e)
+        result, error, action = "failed", str(e), "failed"
+    else:
+        result, error = "indexed", None
+
+    ack_conflict = False
+    try:
+        ack_item(settings, item.id, result=result, changed=item.changed, error=error)
+    except QueueItemChanged:
+        ack_conflict = True
+
+    return {"idno": idno, "action": action, "ack_conflict": ack_conflict, "error": error}
+
+
 def reconcile_once(
     settings: Settings,
     *,
@@ -247,50 +316,28 @@ def reconcile_once(
     (e.g. on a schedule) to keep draining the queue, since one call only
     processes up to ``limit`` items.
 
-    The upsert branch's ``index_ids_op`` call also syncs this idno's
-    filters/facets — not via an extra call here, but because
-    ``ingest.pipeline.iter_langdoc_records`` (which both backend writers
-    route through) fetches and bakes in NADA's ``filters`` data as part of
-    building the document/point payload itself (see
-    ``settings.sync_filters_during_ingest``). So a queue-driven reindex keeps
-    both content and facets in sync from a single fetch, with no separate
-    filters-sync pass required.
+    This is the standalone, one-shot entrypoint (used by the
+    ``reconcile_search_index`` CLI command) — it does not go through the
+    FastAPI job registry, so concurrent runs alongside a webhook or admin
+    reindex for the same idno aren't coordinated. For a deployment that runs
+    the FastAPI app, prefer the in-process scheduler
+    (``app.reconcile_scheduler``, ``NADA_RECONCILE_SEARCH_INDEX_ENABLED``),
+    which submits each item through the same job registry — and the same
+    ``content:{metadata_type}:{idno}`` key — as webhooks and admin routes use,
+    so they properly single-flight against each other.
     """
     items = list_queue(settings, status="pending", object_type="survey", limit=limit)
     summary = {"polled": len(items), "indexed": 0, "deleted": 0, "failed": 0, "ack_conflicts": 0}
 
     for item in items:
-        idno = item.object_key
-        result: Literal["indexed", "failed"]
-        error: str | None
-        try:
-            if item.is_delete:
-                delete_by_idno_op(settings, idno)
-            else:
-                metadata_type = _lookup_metadata_type(settings, idno)
-                if metadata_type is None:
-                    raise SearchIndexSyncError(
-                        f"No metadata_type mapping for idno {idno!r} — unsupported or unknown dataset_type"
-                    )
-                index_ids_op(
-                    settings,
-                    idnos=[idno],
-                    metadata_type=metadata_type,
-                    force=True,
-                    show_progress_bar=False,
-                    embedding=embedding,
-                )
-        except Exception as e:  # noqa: BLE001 - reported back to NADA, not swallowed
-            logger.warning("search-index reconcile failed for idno=%s: %s", idno, e)
-            result, error = "failed", str(e)
-            summary["failed"] += 1
-        else:
-            result, error = "indexed", None
-            summary["deleted" if item.is_delete else "indexed"] += 1
-
-        try:
-            ack_item(settings, item.id, result=result, changed=item.changed, error=error)
-        except QueueItemChanged:
+        outcome = apply_and_ack_queue_item(settings, item, embedding=embedding)
+        if outcome["ack_conflict"]:
             summary["ack_conflicts"] += 1
+        if outcome["action"] == "failed":
+            summary["failed"] += 1
+        elif outcome["action"] == "deleted":
+            summary["deleted"] += 1
+        else:
+            summary["indexed"] += 1
 
     return summary

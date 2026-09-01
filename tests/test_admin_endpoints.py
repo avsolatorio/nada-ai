@@ -301,6 +301,44 @@ def test_cancel_running_job_via_endpoint(monkeypatch):
         assert s["status"] in {"cancelled", "succeeded", "failed"}
 
 
+def test_webhook_and_admin_index_dedupe_same_idno(monkeypatch):
+    """Regression test: /admin/catalog/{idno}/index and the created/updated
+    webhook used to submit under different job-registry keys (index:... vs
+    reindex:...) for the exact same (metadata_type, idno) write, so they could
+    run concurrently with zero coordination. They now share
+    content_sync_job_key() and must single-flight against each other."""
+    import nada_ai.app.catalog_admin as catalog_admin_module
+    import nada_ai.app.webhooks as webhooks_module
+
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    gate = threading.Event()
+
+    def slow_index(settings, idnos, metadata_type, force, embedding=None):
+        gate.wait(timeout=5)
+        return {"indexed": 1, "errors": []}
+
+    monkeypatch.setattr(catalog_admin_module, "index_ids_op", slow_index)
+    monkeypatch.setattr(webhooks_module, "index_ids_op", slow_index)
+    monkeypatch.setattr(webhooks_module, "delete_by_idno_op", lambda settings, idno: {"deleted": 0})
+
+    with TestClient(app) as client:
+        _fresh_state()
+        r1 = client.post(
+            "/admin/catalog/SAME_IDNO/index",
+            json={"metadata_type": "indicator", "force": False},
+        )
+        assert r1.status_code == 202
+
+        r2 = client.post(
+            "/webhooks/catalog",
+            json={"event": "updated", "idno": "SAME_IDNO", "metadata_type": "indicator"},
+        )
+        assert r2.status_code == 409
+        body = r2.json()
+        assert body["job"]["id"] == r1.json()["id"]
+        gate.set()
+
+
 # Avoid leaving asyncio mocks around between tests.
 def teardown_function(_) -> None:
     try:
