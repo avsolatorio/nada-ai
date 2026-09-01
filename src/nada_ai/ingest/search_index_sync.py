@@ -246,6 +246,15 @@ def reconcile_once(
     catalog metadata this index covers. Returns a summary dict; call again
     (e.g. on a schedule) to keep draining the queue, since one call only
     processes up to ``limit`` items.
+
+    The upsert branch's ``index_ids_op`` call also syncs this idno's
+    filters/facets — not via an extra call here, but because
+    ``ingest.pipeline.iter_langdoc_records`` (which both backend writers
+    route through) fetches and bakes in NADA's ``filters`` data as part of
+    building the document/point payload itself (see
+    ``settings.sync_filters_during_ingest``). So a queue-driven reindex keeps
+    both content and facets in sync from a single fetch, with no separate
+    filters-sync pass required.
     """
     items = list_queue(settings, status="pending", object_type="survey", limit=limit)
     summary = {"polled": len(items), "indexed": 0, "deleted": 0, "failed": 0, "ack_conflicts": 0}

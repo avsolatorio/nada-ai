@@ -261,11 +261,20 @@ instance's metadata-extract API into the index under `metadata.filter_fields` �
   source of truth) *and* a flattened `metadata.filter_facets` map with payload indexes
   per facetable key, for fast filter+facet aggregation queries.
 - **OpenSearch** keeps only the nested `metadata.filter_fields` form.
-- The registry of which keys are facetable lives in
-  `config/dynamic_filter_facets.json` (path overridable via
-  `NADA_DYNAMIC_FILTER_FACETS_PATH`), managed at runtime via
-  `GET/PUT/POST/DELETE /admin/facets`.
-- Sync from the command line: `python -m nada_ai.filters.cli {sync, sync-batch, sync-from-extract, backfill-facets, ensure-indexes}`.
+- The registry of which keys are facetable is **auto-derived**, not manually curated:
+  every filter sync (including content ingest, see below) auto-registers and indexes
+  any key NADA sends that isn't already known — `config/dynamic_filter_facets.json`
+  (path overridable via `NADA_DYNAMIC_FILTER_FACETS_PATH`) is a cache of what's been
+  seen, not a policy file you edit by hand. `GET/PUT/POST/DELETE /admin/facets` still
+  works, but mainly as an **exclusion** mechanism — `DELETE` suppresses a key so
+  auto-registration won't resurrect it, `POST`/`PUT` always wins over a prior exclusion.
+- Content ingest (`index_from_catalog`, `index`, and the search-index queue
+  reconciliation) **also syncs filters/facets in the same pass** — no separate step
+  required. `nada_ai.filters.cli {sync, sync-batch, sync-from-extract, backfill-facets}`
+  remain available for a standalone filters-only pass (e.g. re-syncing filters without
+  touching embeddings) or for backends where `sync_filters_during_ingest` was disabled.
+  Disable the automatic behavior with `NADA_SYNC_FILTERS_DURING_INGEST=false` if you
+  want pure content-only ingest (shaves one metadata-extract round trip per idno).
 
 ### The REST search API
 
@@ -570,6 +579,7 @@ in `src/nada_ai/settings.py` unless noted.
 | Variable | Default | Purpose |
 |---|---|---|
 | `NADA_MAX_CONCURRENT_INGEST_JOBS` | `1` | Max simultaneous embedding-compute ingest jobs |
+| `NADA_SYNC_FILTERS_DURING_INGEST` | `true` | Content ingest also fetches + bakes in filters/facets per idno; `false` for content-only ingest |
 
 ### Admin auth / RBAC / audit / rate limiting
 

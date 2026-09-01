@@ -107,6 +107,14 @@ class Settings(BaseSettings):
     #: Raise to 2–4 for CPU-only deployments with plentiful cores.
     max_concurrent_ingest_jobs: int = Field(default=1, ge=1, le=16)
 
+    #: When true (default), content ingest (index/index_from_catalog) also
+    #: fetches and bakes in each idno's NADA filters/facets at write time —
+    #: see ingest.pipeline._fetch_filter_payload — instead of requiring a
+    #: separate filters-sync pass afterward. Disable for a pure content-only
+    #: ingest (e.g. to shave the extra per-idno metadata-extract round trip
+    #: when the deployment doesn't use facets at all).
+    sync_filters_during_ingest: bool = Field(default=True)
+
     #: NADA search-metadata-extract API base URL (no trailing slash). This is
     #: instance-specific — every NADA deployment (IHSN's or anyone else's) has
     #: its own metadata-extract host, so there is no built-in default here.
