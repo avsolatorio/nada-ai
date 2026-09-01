@@ -10,6 +10,7 @@ import pytest
 from nada_ai.ingest.search_index_sync import (
     QueueItemChanged,
     SearchIndexQueueItem,
+    _lookup_metadata_type,
     ack_item,
     get_status,
     list_queue,
@@ -102,6 +103,52 @@ def test_ack_item_success():
     with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
         res = ack_item(_settings(), 1, result="indexed", changed=123)
     assert res["applied"] is True
+
+
+# Real single-study response shape from a live instance
+# (https://nada-demo.ihsn.org/index.php/api/admin/search-metadata-extract/studies/{idno}):
+# dataset_type lives at study["filters"]["dataset_type"], NOT at the study's top
+# level despite the catalog-admin OpenAPI spec documenting a top-level field.
+LIVE_STUDY_RESPONSE = {
+    "status": "success",
+    "study": {
+        "core_fields": {"idno": "WB_LSMS_001"},
+        "filters": {
+            "doctype": 1,
+            "published": 1,
+            "dataset_type": "document",
+            "formid": None,
+            "form_model": None,
+            "year_start": 2020,
+            "year_end": 2020,
+            "years": [2020],
+            "repositoryid": "central",
+            "repositories": ["central"],
+            "countries": [],
+            "regions": [],
+            "data_class_id": None,
+            "tags": [],
+        },
+        "metadata": {},
+        "admin_metadata": {},
+    },
+}
+
+
+def test_lookup_metadata_type_reads_dataset_type_from_filters():
+    with patch(
+        "nada_ai.ingest.search_index_sync.catalog_extract.fetch_extract_study",
+        return_value=LIVE_STUDY_RESPONSE,
+    ):
+        result = _lookup_metadata_type(_settings(), "WB_LSMS_001")
+    assert result == "document"
+
+
+def test_lookup_metadata_type_none_when_dataset_type_unmapped():
+    resp = {"status": "success", "study": {**LIVE_STUDY_RESPONSE["study"], "filters": {"dataset_type": "script"}}}
+    with patch("nada_ai.ingest.search_index_sync.catalog_extract.fetch_extract_study", return_value=resp):
+        result = _lookup_metadata_type(_settings(), "SOME_SCRIPT_IDNO")
+    assert result is None
 
 
 def _queue_item(idno: str, *, delete: bool = False, item_id: int = 1) -> SearchIndexQueueItem:

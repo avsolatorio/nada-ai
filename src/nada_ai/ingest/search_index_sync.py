@@ -215,14 +215,22 @@ def requeue_failed(settings: Settings) -> dict[str, Any]:
 
 
 def _lookup_metadata_type(settings: Settings, idno: str) -> str | None:
-    """Resolve NADA's dataset_type for idno and map it to a nada_ai metadata_type."""
+    """Resolve NADA's dataset_type for idno and map it to a nada_ai metadata_type.
+
+    Confirmed against a live instance: the study document has no top-level
+    ``dataset_type`` — despite what the catalog-admin OpenAPI spec documents,
+    the real field lives at ``study["filters"]["dataset_type"]`` (``filters``
+    is NADA's own per-study computed facet dict — see ``ai4data``'s
+    ``study_metadata_type()``, which reads it from the same place).
+    """
     extract_base = settings.metadata_extract_base_url or catalog_extract.extract_base_url()
     kwargs: dict[str, Any] = {"headers": _headers(settings), "cookies": _cookies(settings)}
     if extract_base:
         kwargs["base_url"] = extract_base
     data = catalog_extract.fetch_extract_study(idno, **kwargs)
     study = data.get("study") if isinstance(data.get("study"), dict) else data
-    dataset_type = (study or {}).get("dataset_type")
+    filters = (study or {}).get("filters")
+    dataset_type = filters.get("dataset_type") if isinstance(filters, dict) else None
     return _DATASET_TYPE_TO_METADATA_TYPE.get(dataset_type) if dataset_type else None
 
 
