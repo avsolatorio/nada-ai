@@ -115,6 +115,16 @@ cp .env.example .env
 uv sync --extra local --extra qdrant
 ```
 
+> **Set an admin credential for your NADA instance if you have one.** `.env.example`
+> enables NADA's bulk `search-metadata-extract` API by default
+> (`AI4DATA_METADATA_CATALOG_EXTRACT_PATH`) — a full-catalog `index_from_catalog` run
+> does ~N/100 HTTP calls instead of ~N, and filter/facet sync comes along for free on
+> the same fetch (see [Ingestion](#ingestion)). This endpoint is admin-only, so set
+> `AI4DATA_METADATA_CATALOG_X_API_KEY` (or `_AUTH_BEARER`/`_COOKIES`) in `.env` to an
+> admin-capable credential for your target NADA instance. No admin credential
+> available? Comment out `AI4DATA_METADATA_CATALOG_EXTRACT_PATH` in `.env` and nada-ai
+> falls back to the classic per-idno flow automatically — no other change needed.
+
 Bring up a local Qdrant + API stack (recommended local path — see the
 [Qdrant pipeline guide](qdrant-pipeline-guide.md) for the fully worked walkthrough,
 including a host-only ingest path that skips Docker for the API):
@@ -192,10 +202,13 @@ instance as the main catalog config.
 > configured NADA instance. Never reuse one value for both — leaking one should never
 > grant the other.
 
-To point at a different NADA instance, set `AI4DATA_METADATA_CATALOG_URL`. If that
-instance supports the bulk extract endpoint, set
-`AI4DATA_METADATA_CATALOG_EXTRACT_PATH` to use it during ingestion instead of the
-classic search + per-idno JSON flow — it's substantially faster for large catalogs.
+To point at a different NADA instance, set `AI4DATA_METADATA_CATALOG_URL`.
+`.env.example` enables the bulk `search-metadata-extract` endpoint
+(`AI4DATA_METADATA_CATALOG_EXTRACT_PATH`) by default — substantially faster for large
+catalogs than the classic search + per-idno JSON flow — but it's admin-only, so it
+needs an admin-capable credential for the target instance (see
+[Quickstart](#quickstart)). Comment the setting out to fall back to the classic flow
+against an instance where you only have anonymous/read access.
 
 ---
 
@@ -307,12 +320,27 @@ flowchart LR
 1. `src/nada_ai/ingest/pipeline.py::iter_langdoc_records` loads catalog metadata
    through `ai4data`'s `MetadataLoader` and converts each study into a "langdoc"
    (the canonical document shape defined in `search/documents.py`).
-2. Embeddings are computed in batches (`buffer_size`) to bound memory.
-3. `iter_bulk_actions` builds backend-specific bulk write actions; `run_bulk_index`
+2. It also fetches, normalizes, and auto-registers that idno's filters/facets
+   (`nada_ai.filters.sync.fetch_filters_for_idno`) and bakes them into the same
+   document — see [Dynamic filters and facets](#dynamic-filters-and-facets). No
+   separate filters-sync pass is needed after a content ingest.
+3. Embeddings are computed in batches (`buffer_size`) to bound memory.
+4. `iter_bulk_actions` builds backend-specific bulk write actions; `run_bulk_index`
    executes them via whichever writer `create_ingest_writer()` (`ingest/factory.py`)
    selects for the configured `NADA_SEARCH_BACKEND`.
-4. Every document is passed through `ingest/quality.py::check_source_document` along
+5. Every document is passed through `ingest/quality.py::check_source_document` along
    the way — see [Ingest quality reports](#ingest-quality-reports).
+
+**Performance**: how expensive step 1 is depends on
+`AI4DATA_METADATA_CATALOG_EXTRACT_PATH`. Enabled (the `.env.example` default) —
+`get_metadata_ids` paginates NADA's bulk `search-metadata-extract/studies` endpoint
+once, warming the local metadata cache (including filters) for every idno on each
+page; the later per-idno `MetadataLoader` fetch is then a cache hit, not a second
+network call. Disabled — every idno gets its own `/api/catalog/json/{idno}` call, an
+N+1 pattern. The bulk endpoint is admin-only (requires
+`AI4DATA_METADATA_CATALOG_X_API_KEY`/`_AUTH_BEARER`/`_COOKIES` for an admin-capable
+account on the target instance); comment the setting out to fall back to the classic
+flow, which works against a public/anonymous-read catalog.
 
 ### Running ingestion
 
@@ -613,7 +641,7 @@ in `src/nada_ai/settings.py` unless noted.
 | `AI4DATA_DISCOVERY_DATA_PATH` | `./data/nada-discovery` | Writable cache dir (metadata IDs, metadata cache, PDF document cache) |
 | `AI4DATA_METADATA_CATALOG_URL` | Data Compass public instance | NADA catalog base URL |
 | `AI4DATA_METADATA_CATALOG_THUMBNAIL_URL` | unset | Thumbnail template (`{db_id}`) |
-| `AI4DATA_METADATA_CATALOG_EXTRACT_PATH` | unset (classic flow) | Use bulk `search-metadata-extract/studies` instead of catalog-search + per-idno JSON |
+| `AI4DATA_METADATA_CATALOG_EXTRACT_PATH` | `api/admin/search-metadata-extract` (`.env.example` default) | Use bulk `search-metadata-extract/studies` instead of catalog-search + per-idno JSON. Admin-only — comment out for the classic flow against an anonymous/read-only catalog |
 | `AI4DATA_METADATA_CATALOG_EXTRACT_INCLUDE_ADMIN_METADATA` | `true` | Include admin metadata in extract payload |
 | `AI4DATA_METADATA_CATALOG_EXTRACT_INCLUDE_METADATA` | `true` | Include full study metadata |
 | `AI4DATA_METADATA_CATALOG_EXTRACT_FALLBACK_CATALOG_JSON` | `false` | Fall back to classic JSON endpoint if resources are missing |
