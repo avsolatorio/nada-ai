@@ -392,10 +392,55 @@ ingestion on data you don't control.
 
 `GET /admin/embeddings/drift` (role `read`) compares the dimension of the currently
 configured embedding model against what's actually stored in the index/collection
-mapping. A mismatch means either vector/hybrid search is already broken, or the next
-ingest will corrupt the index silently (writes succeed, but vectors are wrong-shaped
-or truncated) until a full reindex. Check this after **any** embedding model change,
-before ingesting.
+mapping. A mismatch means vector/hybrid search is already broken against existing
+data. Both ingest writers also check this themselves before writing to an *existing*
+index/collection (not just when creating a new one) and raise immediately if the
+configured model's dimension doesn't match — so a changed `NADA_EMBEDDING_MODEL_ID`
+fails fast at the start of an ingest run, not per-document deep inside a bulk write.
+Check `/admin/embeddings/drift` after **any** embedding model change; the fix is
+either reverting the model or re-ingesting with `recreate_index=True`/`recreate_target=True`
+(a full reindex).
+
+### Search-index queue reconciliation
+
+Beyond the push-based `/webhooks/catalog` and manual admin/CLI reindex commands, nada-ai
+can also *pull* changes from NADA's own `search-index` change queue (see
+[Connecting to NADA](#connecting-to-nada) for the underlying API) — useful as a
+catch-up path after downtime, or as the only sync mechanism when the target NADA
+instance can't call out via webhook.
+
+**One-shot / CLI** (`nada_ai.ingest.search_index_sync`):
+
+```bash
+uv run python -m nada_ai.ingest.cli search_index_status        # queue/state counts, tracking_enabled
+uv run python -m nada_ai.ingest.cli reconcile_search_index --limit=50
+```
+
+This is a bare, `Settings`-only function with no access to the FastAPI job registry —
+concurrent runs (e.g. cron alongside a live webhook) aren't coordinated with other
+write paths for the same idno.
+
+**In-process scheduler** (recommended when running the FastAPI app): set
+`NADA_RECONCILE_SEARCH_INDEX_ENABLED=true` to run reconciliation as a periodic
+background loop inside the app itself (`app/reconcile_scheduler.py`), started in the
+app's lifespan and cancelled cleanly on shutdown. Each queue item is submitted as its
+own job through the **same** `JobRegistry` and the **same** `content:{metadata_type}:{idno}`
+key that `/webhooks/catalog` and the admin index/reindex routes use — so a
+queue-driven reindex and a webhook-triggered one for the same idno now properly
+single-flight against each other instead of racing with no coordination.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NADA_RECONCILE_SEARCH_INDEX_ENABLED` | `false` | Run the in-process reconciliation scheduler |
+| `NADA_RECONCILE_SEARCH_INDEX_INTERVAL_SECONDS` | `300` | Seconds between polls |
+| `NADA_RECONCILE_SEARCH_INDEX_BATCH_LIMIT` | `50` | Max queue items submitted as jobs per poll |
+
+Enabling the scheduler needs two things configured on NADA's side, not just here:
+an admin-capable credential (same `NADA_METADATA_EXTRACT_*`/`NADA_SEARCH_INDEX_BASE_URL`
+settings the CLI uses), and NADA's own `search_provider`/tracking configuration
+actually pointed at this deployment — check with `search_index_status` first. If
+`tracking_enabled` is `false`, the queue stays empty and the scheduler logs a warning
+each poll rather than failing silently.
 
 ---
 
