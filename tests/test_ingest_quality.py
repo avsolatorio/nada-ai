@@ -122,7 +122,7 @@ def test_iter_langdoc_records_observes_quality_report(monkeypatch):
     monkeypatch.setattr(pipeline_module, "MetadataLoader", _FakeLoader)
     monkeypatch.setattr(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata.get("idno") or "NOMETA")
 
-    settings = SimpleNamespace(embedding_backend="opensearch_ml")
+    settings = SimpleNamespace(embedding_backend="opensearch_ml", sync_filters_during_ingest=False)
     report = QualityReport()
 
     results = list(
@@ -151,7 +151,7 @@ def test_iter_langdoc_records_without_quality_report_is_unaffected(monkeypatch):
     monkeypatch.setattr(pipeline_module, "MetadataLoader", _FakeLoader)
     monkeypatch.setattr(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata["idno"])
 
-    settings = SimpleNamespace(embedding_backend="opensearch_ml")
+    settings = SimpleNamespace(embedding_backend="opensearch_ml", sync_filters_during_ingest=False)
     results = list(
         pipeline_module.iter_langdoc_records(
             settings, None, [("GOOD", "indicator")], show_progress_bar=False

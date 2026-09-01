@@ -12,18 +12,29 @@ from typing import Any
 from langchain_core.documents import Document as LangchainDocument
 
 from nada_ai.ingest.microdata_enrich import append_microdata_discoverability_text
+from nada_ai.search.dynamic_filters import FILTER_FACETS_KEY, FILTER_FIELDS_KEY
 
 
 def langdoc_to_source(
     doc: LangchainDocument,
     embedding: list[float] | None,
     raw_metadata: dict | None = None,
+    filter_fields: list[dict[str, Any]] | None = None,
+    filter_facets: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Build the canonical JSON document: ``page_content``, ``metadata`` facets, optional ``embedding``.
 
     Pass ``embedding=None`` when an OpenSearch ingest pipeline (e.g. ``text_embedding``)
     fills ``embedding`` server-side. Qdrant upserts pass the dense vector separately and
     typically omit ``embedding`` from the payload.
+
+    ``filter_fields``/``filter_facets`` (already normalized — see
+    ``search.dynamic_filters.normalize_external_filters``/``normalized_to_facets_map``)
+    bake NADA's dynamic filter data directly into the point at creation time,
+    so a freshly bulk-ingested document is facetable immediately rather than
+    needing a separate ``sync_filters_for_idno`` patch after the fact — see
+    ``ingest.pipeline.iter_langdoc_records``. Only pass ``filter_facets`` for
+    the Qdrant backend; OpenSearch doesn't use it.
     """
     meta = dict(doc.metadata)
     qfield = meta.pop("qfield", None)
@@ -36,6 +47,10 @@ def langdoc_to_source(
     metadata_body: dict[str, Any] = dict(meta)
     if qfield is not None:
         metadata_body["qfield"] = qfield
+    if filter_fields is not None:
+        metadata_body[FILTER_FIELDS_KEY] = filter_fields
+    if filter_facets is not None:
+        metadata_body[FILTER_FACETS_KEY] = filter_facets
 
     pruned_meta = _prune_none(metadata_body)
     source: dict[str, Any] = {

@@ -260,6 +260,67 @@ def sync_filters_for_idno(settings: Settings, idno: str, filters_dict: dict[str,
     return _sync_opensearch(settings, idno, normalized)
 
 
+def fetch_filters_for_idno(
+    settings: Settings,
+    idno: str,
+    *,
+    raw_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return NADA's raw filters dict for ``idno``, preferring already-fetched data.
+
+    If ``raw_metadata`` (e.g. content ingest's raw catalog metadata from
+    ``ai4data``'s ``MetadataLoader``) already carries ``_extract_filters`` —
+    populated by ``ai4data``'s own extract-mode fetch, see
+    ``ai4data.discovery.catalog.extract.study_to_catalog_metadata`` — reuses
+    it for free, no extra API call. Otherwise makes one explicit call to the
+    metadata-extract API (``nada_ai.filters.metadata_extract``).
+
+    Returns ``None`` (never raises) when no filters data is available —
+    filter sync is always best-effort and must never block content indexing.
+    """
+    if isinstance(raw_metadata, dict):
+        cached = raw_metadata.get("_extract_filters")
+        if isinstance(cached, dict):
+            return cached
+
+    from nada_ai.filters.metadata_extract import MetadataExtractError, fetch_study_records
+
+    try:
+        records = fetch_study_records(settings, idno)
+    except MetadataExtractError as e:
+        logger.debug("No filters available for idno=%s: %s", idno, e)
+        return None
+    except Exception as e:  # noqa: BLE001 - best-effort, must never break the caller
+        logger.warning("Unexpected error fetching filters for idno=%s: %s", idno, e)
+        return None
+
+    if not records:
+        return None
+    filters = records[0].get("filters")
+    return filters if isinstance(filters, dict) else None
+
+
+def sync_filters_for_idno_from_nada(
+    settings: Settings,
+    idno: str,
+    *,
+    raw_metadata: dict[str, Any] | None = None,
+) -> FilterSyncResult | None:
+    """Fetch (see ``fetch_filters_for_idno``) and sync filters for one idno in one call.
+
+    Used by the search-index queue reconciliation (``ingest.search_index_sync``)
+    where the idno's points already exist by the time this runs, so the
+    ``sync_filters_for_idno`` patch-existing-points write is safe. Returns
+    ``None`` (rather than syncing an empty filter set) when no filters data
+    was available for this idno at all, distinct from a sync that ran and
+    found no matching points (``FilterSyncResult(found=False, ...)``).
+    """
+    filters = fetch_filters_for_idno(settings, idno, raw_metadata=raw_metadata)
+    if filters is None:
+        return None
+    return sync_filters_for_idno(settings, idno, filters)
+
+
 def sync_filters_batch(
     settings: Settings,
     records: list[dict[str, Any]],
