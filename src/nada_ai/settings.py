@@ -133,6 +133,19 @@ class Settings(BaseSettings):
     #: own docs require the same admin API key for both admin surfaces.
     search_index_base_url: str | None = Field(default=None)
 
+    #: Run the search-index queue reconciliation as an in-process periodic
+    #: loop inside the FastAPI app (see app/reconcile_scheduler.py), instead
+    #: of only via the manual `reconcile_search_index` CLI command. Off by
+    #: default — enabling it requires an admin credential for the target NADA
+    #: instance (see metadata_extract_* above) and NADA's own search-index
+    #: tracking configured for this deployment (search_provider set,
+    #: tracking_enabled true — check with `search_index_status` first).
+    reconcile_search_index_enabled: bool = Field(default=False)
+    #: Seconds between reconciliation polls when enabled.
+    reconcile_search_index_interval_seconds: int = Field(default=300, ge=30, le=3600)
+    #: Max queue items to submit as jobs per poll (mirrors list_queue's own cap).
+    reconcile_search_index_batch_limit: int = Field(default=50, ge=1, le=100)
+
     #: Override path to the API keys store (default ``config/api_keys.json``).
     #: Contains only key hashes/prefixes, never raw key values — still keep out of version control.
     api_keys_path: str | None = Field(default=None)

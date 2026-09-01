@@ -72,6 +72,13 @@ async def lifespan(app: FastAPI):
     state.audit_lock = asyncio.Lock()
     state.search_rate_limiter = RateLimiter(state.settings.rate_limit_search_per_minute)
     state.metrics = MetricsRegistry()
+    state.reconcile_scheduler_task = None
+    if state.settings.reconcile_search_index_enabled:
+        from nada_ai.app.reconcile_scheduler import reconcile_loop
+
+        state.reconcile_scheduler_task = asyncio.create_task(
+            reconcile_loop(state), name="search-index-reconcile-scheduler"
+        )
 
     if not os.getenv("NADA_ADMIN_API_KEY"):
         logger.warning(
@@ -83,6 +90,12 @@ async def lifespan(app: FastAPI):
 
     async with mcp_app.router.lifespan_context(mcp_app):
         yield
+    if state.reconcile_scheduler_task is not None:
+        state.reconcile_scheduler_task.cancel()
+        try:
+            await state.reconcile_scheduler_task
+        except (asyncio.CancelledError, Exception):
+            pass
     try:
         await state.jobs.shutdown()
     except Exception:

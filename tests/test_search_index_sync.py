@@ -10,10 +10,11 @@ import pytest
 from nada_ai.ingest.search_index_sync import (
     QueueItemChanged,
     SearchIndexQueueItem,
-    _lookup_metadata_type,
     ack_item,
+    apply_and_ack_queue_item,
     get_status,
     list_queue,
+    lookup_metadata_type,
     reconcile_once,
 )
 from nada_ai.settings import Settings
@@ -140,14 +141,14 @@ def test_lookup_metadata_type_reads_dataset_type_from_filters():
         "nada_ai.ingest.search_index_sync.catalog_extract.fetch_extract_study",
         return_value=LIVE_STUDY_RESPONSE,
     ):
-        result = _lookup_metadata_type(_settings(), "WB_LSMS_001")
+        result = lookup_metadata_type(_settings(), "WB_LSMS_001")
     assert result == "document"
 
 
 def test_lookup_metadata_type_none_when_dataset_type_unmapped():
     resp = {"status": "success", "study": {**LIVE_STUDY_RESPONSE["study"], "filters": {"dataset_type": "script"}}}
     with patch("nada_ai.ingest.search_index_sync.catalog_extract.fetch_extract_study", return_value=resp):
-        result = _lookup_metadata_type(_settings(), "SOME_SCRIPT_IDNO")
+        result = lookup_metadata_type(_settings(), "SOME_SCRIPT_IDNO")
     assert result is None
 
 
@@ -162,7 +163,7 @@ def _queue_item(idno: str, *, delete: bool = False, item_id: int = 1) -> SearchI
 def test_reconcile_once_indexes_upsert_and_acks_indexed():
     items = [_queue_item("WLD_2021_TEST_v01")]
     with patch("nada_ai.ingest.search_index_sync.list_queue", return_value=items), \
-         patch("nada_ai.ingest.search_index_sync._lookup_metadata_type", return_value="indicator"), \
+         patch("nada_ai.ingest.search_index_sync.lookup_metadata_type", return_value="indicator"), \
          patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index, \
          patch("nada_ai.ingest.search_index_sync.delete_by_idno_op") as mock_delete, \
          patch("nada_ai.ingest.search_index_sync.ack_item") as mock_ack:
@@ -196,7 +197,7 @@ def test_reconcile_once_deletes_tombstone_and_acks_indexed():
 def test_reconcile_once_acks_failed_for_unmapped_dataset_type():
     items = [_queue_item("SOME_TABLE_IDNO")]
     with patch("nada_ai.ingest.search_index_sync.list_queue", return_value=items), \
-         patch("nada_ai.ingest.search_index_sync._lookup_metadata_type", return_value=None), \
+         patch("nada_ai.ingest.search_index_sync.lookup_metadata_type", return_value=None), \
          patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index, \
          patch("nada_ai.ingest.search_index_sync.ack_item") as mock_ack:
         summary = reconcile_once(_settings(), limit=10)
@@ -210,7 +211,7 @@ def test_reconcile_once_acks_failed_for_unmapped_dataset_type():
 def test_reconcile_once_acks_failed_when_index_raises():
     items = [_queue_item("WLD_2021_TEST_v01")]
     with patch("nada_ai.ingest.search_index_sync.list_queue", return_value=items), \
-         patch("nada_ai.ingest.search_index_sync._lookup_metadata_type", return_value="indicator"), \
+         patch("nada_ai.ingest.search_index_sync.lookup_metadata_type", return_value="indicator"), \
          patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=RuntimeError("boom")), \
          patch("nada_ai.ingest.search_index_sync.ack_item") as mock_ack:
         summary = reconcile_once(_settings(), limit=10)
@@ -223,10 +224,35 @@ def test_reconcile_once_acks_failed_when_index_raises():
 def test_reconcile_once_counts_ack_conflict_without_raising():
     items = [_queue_item("WLD_2021_TEST_v01")]
     with patch("nada_ai.ingest.search_index_sync.list_queue", return_value=items), \
-         patch("nada_ai.ingest.search_index_sync._lookup_metadata_type", return_value="indicator"), \
+         patch("nada_ai.ingest.search_index_sync.lookup_metadata_type", return_value="indicator"), \
          patch("nada_ai.ingest.search_index_sync.index_ids_op"), \
          patch("nada_ai.ingest.search_index_sync.ack_item", side_effect=QueueItemChanged("conflict")):
         summary = reconcile_once(_settings(), limit=10)
 
     assert summary["ack_conflicts"] == 1
     assert summary["indexed"] == 1
+
+
+def test_apply_and_ack_queue_item_uses_pre_resolved_metadata_type():
+    """The scheduler resolves metadata_type BEFORE calling this (to build a
+    matching job-registry key) and must not pay for a second lookup here."""
+    item = _queue_item("WLD_2021_TEST_v01")
+    with patch("nada_ai.ingest.search_index_sync.lookup_metadata_type") as mock_lookup, \
+         patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index, \
+         patch("nada_ai.ingest.search_index_sync.ack_item"):
+        outcome = apply_and_ack_queue_item(_settings(), item, metadata_type="document")
+
+    mock_lookup.assert_not_called()
+    assert mock_index.call_args.kwargs["metadata_type"] == "document"
+    assert outcome == {"idno": "WLD_2021_TEST_v01", "action": "indexed", "ack_conflict": False, "error": None}
+
+
+def test_apply_and_ack_queue_item_falls_back_to_lookup_when_type_omitted():
+    item = _queue_item("WLD_2021_TEST_v01")
+    with patch("nada_ai.ingest.search_index_sync.lookup_metadata_type", return_value="indicator") as mock_lookup, \
+         patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index, \
+         patch("nada_ai.ingest.search_index_sync.ack_item"):
+        apply_and_ack_queue_item(_settings(), item)
+
+    mock_lookup.assert_called_once()
+    assert mock_index.call_args.kwargs["metadata_type"] == "indicator"

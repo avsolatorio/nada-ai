@@ -23,7 +23,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
-from nada_ai.app._ingest import guarded_ingest
+from nada_ai.app._ingest import content_sync_job_key, guarded_ingest
 from nada_ai.app.admin import _idnos_key, _submit_or_409
 from nada_ai.app.admin_schemas import (
     CatalogBatchDeleteRequest,
@@ -83,7 +83,7 @@ async def catalog_idno_index(
     return await _submit_or_409(
         s,
         kind="index_by_ids",
-        key=f"index:{metadata_type}:{idno}",
+        key=content_sync_job_key(metadata_type, idno),
         factory=factory,
         params={"idno": idno, "metadata_type": metadata_type, "force": force},
         principal=principal,
@@ -111,7 +111,7 @@ async def catalog_idno_reindex(
     return await _submit_or_409(
         s,
         kind="reindex",
-        key=f"reindex:{metadata_type}:{idno}",
+        key=content_sync_job_key(metadata_type, idno),
         factory=factory,
         params={"idno": idno, "metadata_type": metadata_type, "force": force},
         principal=principal,

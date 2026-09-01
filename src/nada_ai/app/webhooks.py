@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from nada_ai.app._ingest import guarded_ingest
+from nada_ai.app._ingest import content_sync_job_key, guarded_ingest
 from nada_ai.app.admin import _submit_or_409
 from nada_ai.app.auth import Principal, require_role
 from nada_ai.app.keys_store import Role
@@ -90,7 +90,7 @@ async def webhook_catalog(
     return await _submit_or_409(
         s,
         kind="webhook_catalog",
-        key=f"reindex:{metadata_type}:{idno}",
+        key=content_sync_job_key(metadata_type, idno),
         factory=factory,
         params={"idno": idno, "event": event, "metadata_type": metadata_type, "has_filters": bool(filters)},
         principal=principal,
