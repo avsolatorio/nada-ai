@@ -10,7 +10,7 @@ from tqdm.auto import tqdm
 
 from nada_ai.ingest.quality import QualityReport
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
-from nada_ai.search.backend.opensearch.mapping import index_body
+from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, index_body
 from nada_ai.search.documents import langdoc_to_source
 from nada_ai.search.dynamic_filters import normalize_external_filters, normalized_to_facets_map
 from nada_ai.settings import Settings
@@ -18,9 +18,36 @@ from nada_ai.settings import Settings
 logger = logging.getLogger(__name__)
 
 
+def _assert_dense_dim_matches(client, name: str, embedding_dim: int, model_id: str) -> None:
+    """Guard against silently writing wrong-dimension vectors into an existing index.
+
+    Mirrors the check in ingest.qdrant_writer._assert_dense_dim_matches and
+    the reporting logic in GET /admin/embeddings/drift — same failure mode,
+    same fix: without this, a changed NADA_EMBEDDING_MODEL_ID fails per-doc
+    deep inside the bulk write instead of failing fast here.
+    """
+    mapping = client.indices.get_mapping(index=name)
+    stored_dim: int | None = None
+    for body in mapping.values():
+        props = (body.get("mappings") or {}).get("properties") or {}
+        emb = props.get(EMBEDDING_FIELD) or {}
+        if "dimension" in emb:
+            stored_dim = emb["dimension"]
+            break
+    if stored_dim is not None and stored_dim != embedding_dim:
+        raise ValueError(
+            f"Index {name!r} was created with dense vector dimension {stored_dim}, "
+            f"but the configured embedding model {model_id!r} produces {embedding_dim}-dim "
+            "vectors. Check GET /admin/embeddings/drift, then either revert the embedding "
+            "model or recreate the index (index_from_catalog/index with recreate_index=True "
+            "— plan for a full reindex)."
+        )
+
+
 def ensure_index(client, settings: Settings, embedding_dim: int) -> None:
     name = settings.index_name
     if client.indices.exists(index=name):
+        _assert_dense_dim_matches(client, name, embedding_dim, settings.embedding_model_id)
         return
     # `body` carries settings + mappings; if opensearch-py deprecates this shape, see UPGRADING.md and split kwargs.
     client.indices.create(index=name, body=index_body(embedding_dim))

@@ -80,6 +80,33 @@ def _assert_sparse_config_if_needed(client: QdrantClient, collection: str, spars
         )
 
 
+def _assert_dense_dim_matches(client: QdrantClient, collection: str, embedding_dim: int, model_id: str) -> None:
+    """Guard against silently writing wrong-dimension vectors into an existing collection.
+
+    Without this, changing NADA_EMBEDDING_MODEL_ID to a different-dimension
+    model and running ingest against an existing collection (without
+    recreate_target=True) fails per-point deep inside run_bulk's upsert —
+    burning a full ingest pass before the mismatch surfaces. Fail fast here
+    instead, with a message pointing at the actual fix.
+    """
+    info = client.get_collection(collection_name=collection)
+    vectors = info.config.params.vectors
+    # Unnamed default vector (how QdrantIngestWriter always creates it) is a single
+    # VectorParams; a hand-created named-vector collection would be a dict instead.
+    existing_dim = vectors.size if hasattr(vectors, "size") else None
+    if existing_dim is None and isinstance(vectors, dict) and vectors:
+        first = next(iter(vectors.values()))
+        existing_dim = getattr(first, "size", None)
+    if existing_dim is not None and existing_dim != embedding_dim:
+        raise ValueError(
+            f"Collection {collection!r} was created with dense vector size {existing_dim}, "
+            f"but the configured embedding model {model_id!r} produces {embedding_dim}-dim "
+            "vectors. Check GET /admin/embeddings/drift, then either revert the embedding "
+            "model or re-ingest with recreate_target=True (this deletes and rebuilds the "
+            "collection — plan for a full reindex)."
+        )
+
+
 class QdrantIngestWriter(IngestWriterPort):
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -102,8 +129,10 @@ class QdrantIngestWriter(IngestWriterPort):
                 if sparse_on:
                     create_kwargs["sparse_vectors_config"] = {sparse_name: qm.SparseVectorParams()}
                 client.create_collection(**create_kwargs)
-            elif sparse_on:
-                _assert_sparse_config_if_needed(client, coll, sparse_name)
+            else:
+                _assert_dense_dim_matches(client, coll, embedding_dim, self._settings.embedding_model_id)
+                if sparse_on:
+                    _assert_sparse_config_if_needed(client, coll, sparse_name)
             _ensure_payload_indexes(client, coll)
         finally:
             client.close()
