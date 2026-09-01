@@ -12,6 +12,7 @@ from qdrant_client.http import models as qm
 from nada_ai.filters.indexes import (
     ensure_opensearch_filter_fields_mapping,
     ensure_qdrant_filter_field_indexes,
+    ensure_qdrant_filter_field_indexes_for_keys,
     qdrant_dynamic_facet_indexes_ready,
 )
 from nada_ai.ingest.qdrant_writer import _client as qdrant_client
@@ -20,7 +21,10 @@ from nada_ai.search.backend.opensearch.mapping import METADATA_OBJECT_KEY, metad
 from nada_ai.search.dynamic_filters import (
     FILTER_FACETS_KEY,
     FILTER_FIELDS_KEY,
+    FIXED_FILTER_KEYS,
     facets_map_from_filter_fields_rows,
+    load_dynamic_facet_keys,
+    load_excluded_facet_keys,
     normalize_external_filters,
     normalized_to_facets_map,
     unwrap_external_filters,
@@ -197,12 +201,60 @@ def _sync_opensearch(settings: Settings, idno: str, normalized: list[dict[str, l
             pass
 
 
+def auto_register_new_facet_keys(settings: Settings, keys: list[str]) -> list[str]:
+    """Promote any not-yet-known key in ``keys`` to facetable, indexing it (Qdrant).
+
+    Called on every filter sync so a newly-observed key from NADA's data
+    (rather than a human editing the registry) becomes facetable automatically
+    — see the discussion in docs/GUIDE.md's dynamic-filters section. Skips:
+
+    - keys already facetable (nothing to do)
+    - keys on the excluded (deny) list — an admin explicitly removed one of
+      these via ``remove_facet_keys``; auto-registration must not resurrect
+      it just because NADA sent it again
+    - keys in ``FIXED_FILTER_KEYS`` — handled via the static metadata path,
+      not the dynamic facet path, promoting them would be a no-op at best
+
+    Returns the list of keys actually newly registered.
+    """
+    if not keys:
+        return []
+    current = load_dynamic_facet_keys(settings)
+    excluded = load_excluded_facet_keys(settings)
+    candidates = frozenset(str(k).strip() for k in keys if str(k).strip())
+    new_keys = sorted(candidates - current - excluded - FIXED_FILTER_KEYS)
+    if not new_keys:
+        return []
+
+    # Import here (not at module top) to avoid a facets_service <-> sync circular import.
+    from nada_ai.filters.facets_service import add_facet_keys
+
+    add_facet_keys(settings, new_keys)
+    logger.info("Auto-registered new facet key(s) from NADA data: %s", new_keys)
+
+    if settings.search_backend == "qdrant":
+        client = qdrant_client(settings)
+        try:
+            ensure_qdrant_filter_field_indexes_for_keys(client, settings.qdrant_collection, new_keys)
+        finally:
+            client.close()
+
+    return new_keys
+
+
 def sync_filters_for_idno(settings: Settings, idno: str, filters_dict: dict[str, Any]) -> FilterSyncResult:
-    """Normalize and write ``filter_fields`` to every indexed point for ``idno``."""
+    """Normalize and write ``filter_fields`` to every indexed point for ``idno``.
+
+    Also auto-registers (and, on Qdrant, indexes) any key present in
+    ``filters_dict`` that isn't already a known facet — see
+    ``auto_register_new_facet_keys``. This runs before the write so the
+    facet index exists before the data that would populate it lands.
+    """
     idno = idno.strip()
     if not idno:
         raise ValueError("idno must be non-empty")
     normalized = normalize_external_filters(filters_dict)
+    auto_register_new_facet_keys(settings, [entry["key"] for entry in normalized])
     if settings.search_backend == "qdrant":
         return _sync_qdrant(settings, idno, normalized)
     return _sync_opensearch(settings, idno, normalized)

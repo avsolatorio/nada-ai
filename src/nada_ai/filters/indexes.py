@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from typing import Any
 
 from qdrant_client import QdrantClient
@@ -49,6 +50,28 @@ def qdrant_dynamic_facet_indexes_ready(client: QdrantClient, collection: str, se
     info = client.get_collection(collection_name=collection)
     schema = info.payload_schema or {}
     return all(path in schema for path in qdrant_filter_facets_index_paths(settings))
+
+
+def ensure_qdrant_filter_field_indexes_for_keys(
+    client: QdrantClient,
+    collection: str,
+    keys: Iterable[str],
+    *,
+    strict: bool = False,
+) -> dict[str, str]:
+    """Create keyword payload indexes for a specific subset of facet keys.
+
+    Used by auto-registration (see ``filters/sync.py``) to index only the
+    keys just newly observed from NADA, rather than re-touching the whole
+    registry (``ensure_qdrant_filter_field_indexes``) on every sync call —
+    ``_create_keyword_index`` is idempotent either way, this just avoids the
+    extra round trips for keys that are already indexed.
+    """
+    results: dict[str, str] = {}
+    for key in sorted({str(k) for k in keys}):
+        path = dynamic_facet_qdrant_key(key)
+        results[path] = _create_keyword_index(client, collection, path, strict=strict)
+    return results
 
 
 def ensure_qdrant_filter_field_indexes(
