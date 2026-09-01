@@ -104,7 +104,15 @@ Fixed keys (`type`, `idno`, `geographies`, …) query legacy metadata paths. On 
 
 ## Facets
 
-Dynamic facet keys are listed in [`config/dynamic_filter_facets.json`](../config/dynamic_filter_facets.json). Override path with `NADA_DYNAMIC_FILTER_FACETS_PATH`.
+Dynamic facet keys are listed in [`config/dynamic_filter_facets.json`](../config/dynamic_filter_facets.json). Override path with `NADA_DYNAMIC_FILTER_FACETS_PATH`. The file has two arrays:
+
+```json
+{"facetable": ["doctype", "countries", ...], "excluded": []}
+```
+
+**`facetable` keys don't require manual curation anymore.** Every `sync_filters_for_idno` call (CLI, admin API, or batch sync) auto-registers any key present in the incoming filters dict that isn't already known — and on Qdrant, immediately creates its payload index — so a new key NADA starts sending shows up as a working facet on its very next sync, with no `POST /admin/facets` step required. This is safe because NADA's `filters` field (verified live against `nada-demo.ihsn.org`) is itself a stable, purpose-built projection — not arbitrary metadata — so trusting its keys directly is reasonable.
+
+`excluded` is a deny-list: calling `DELETE /admin/facets/{key}` (or `remove_facet_keys`) both removes a key from `facetable` *and* adds it to `excluded`, so auto-registration won't resurrect it the next time NADA sends data containing it. `POST /admin/facets` (`add_facet_keys`) always wins over a prior exclusion — an explicit add clears the key from `excluded` too.
 
 When `include_facets=true`, the response includes static facets plus registered dynamic facets.
 

@@ -19,7 +19,9 @@ from nada_ai.search.dynamic_filters import (
     _DEFAULT_FACETABLE,
     _resolve_facets_path,
     load_dynamic_facet_keys,
+    load_excluded_facet_keys,
     save_dynamic_facet_keys,
+    save_excluded_facet_keys,
 )
 from nada_ai.settings import Settings
 
@@ -42,6 +44,7 @@ def _config_state(settings: Settings, keys: frozenset[str]) -> dict[str, Any]:
         "path": str(path),
         "writable": True,
         "fixed_filter_keys": sorted(FIXED_FILTER_KEYS),
+        "excluded_keys": sorted(load_excluded_facet_keys(settings)),
     }
 
 
@@ -69,7 +72,9 @@ def set_facets_config(settings: Settings, keys: list[str]) -> dict[str, Any]:
 def add_facet_keys(settings: Settings, new_keys: list[str]) -> dict[str, Any]:
     """Add one or more keys to the facetable list.
 
-    Idempotent: already-present keys are reported but not duplicated.
+    Idempotent: already-present keys are reported but not duplicated. A key
+    being manually (re-)added is also cleared from the excluded list — an
+    explicit add always wins over a prior removal.
     Returns the new config state plus ``added`` / ``already_present`` lists.
     """
     current = load_dynamic_facet_keys(settings)
@@ -78,6 +83,9 @@ def add_facet_keys(settings: Settings, new_keys: list[str]) -> dict[str, Any]:
     already_present = sorted(incoming & current)
     merged = current | incoming
     save_dynamic_facet_keys(merged, settings)
+    excluded = load_excluded_facet_keys(settings)
+    if excluded & incoming:
+        save_excluded_facet_keys(excluded - incoming, settings)
     state = _config_state(settings, merged)
     state["added"] = added
     state["already_present"] = already_present
@@ -93,6 +101,10 @@ def add_facet_keys(settings: Settings, new_keys: list[str]) -> dict[str, Any]:
 def remove_facet_keys(settings: Settings, keys_to_remove: list[str]) -> dict[str, Any]:
     """Remove one or more keys from the facetable list.
 
+    Removed keys are also added to the excluded (deny) list, so that
+    auto-registration (see ``filters/sync.py``) doesn't immediately
+    re-promote a key an admin deliberately suppressed the next time NADA
+    sends data containing it. Use ``add_facet_keys`` to reverse this.
     Returns the new config state plus ``removed`` / ``not_found`` lists.
     """
     current = load_dynamic_facet_keys(settings)
@@ -101,6 +113,9 @@ def remove_facet_keys(settings: Settings, keys_to_remove: list[str]) -> dict[str
     not_found = sorted(targets - current)
     remaining = current - targets
     save_dynamic_facet_keys(remaining, settings)
+    if removed:
+        excluded = load_excluded_facet_keys(settings)
+        save_excluded_facet_keys(excluded | frozenset(removed), settings)
     state = _config_state(settings, remaining)
     state["removed"] = removed
     state["not_found"] = not_found

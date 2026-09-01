@@ -61,24 +61,46 @@ def _resolve_facets_path(settings: Settings | None) -> tuple[Path, bool]:
     return _DEFAULT_FACETS_PATH, _DEFAULT_FACETS_PATH.is_file()
 
 
-def load_dynamic_facet_keys(settings: Settings | None = None) -> frozenset[str]:
-    """Load facetable dynamic filter keys from config (env override optional)."""
+def _load_facets_file(settings: Settings | None) -> dict[str, list[str]]:
+    """Read the raw ``{facetable, excluded}`` config, tolerant of a missing/legacy file.
+
+    ``excluded`` is the deny-list a key lands on when explicitly removed via
+    ``remove_facet_keys`` — it exists so auto-registration (new keys observed
+    from NADA's ``filters`` data get auto-promoted to facetable, see
+    ``filters/sync.py``) doesn't immediately resurrect a key an admin
+    deliberately suppressed. A legacy file with only ``facetable`` is read as
+    ``excluded: []``.
+    """
     path, from_file = _resolve_facets_path(settings)
     if not from_file or not path.is_file():
-        return _DEFAULT_FACETABLE
+        return {"facetable": sorted(_DEFAULT_FACETABLE), "excluded": []}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        keys = data.get("facetable") or []
-        return frozenset(str(k) for k in keys)
+        return {
+            "facetable": [str(k) for k in (data.get("facetable") or [])],
+            "excluded": [str(k) for k in (data.get("excluded") or [])],
+        }
     except (OSError, json.JSONDecodeError, TypeError):
-        return _DEFAULT_FACETABLE
+        return {"facetable": sorted(_DEFAULT_FACETABLE), "excluded": []}
 
 
-def save_dynamic_facet_keys(
-    keys: frozenset[str] | set[str] | list[str],
+def load_dynamic_facet_keys(settings: Settings | None = None) -> frozenset[str]:
+    """Load facetable dynamic filter keys from config (env override optional)."""
+    return frozenset(_load_facets_file(settings)["facetable"])
+
+
+def load_excluded_facet_keys(settings: Settings | None = None) -> frozenset[str]:
+    """Load the deny-list of keys that must never be auto-promoted to facetable."""
+    return frozenset(_load_facets_file(settings)["excluded"])
+
+
+def _write_facets_file(
+    *,
+    facetable: frozenset[str] | set[str] | list[str],
+    excluded: frozenset[str] | set[str] | list[str],
     settings: Settings | None = None,
 ) -> Path:
-    """Atomically persist ``keys`` to the facets config file.
+    """Atomically persist both ``facetable`` and ``excluded`` to the facets config file.
 
     Creates parent directories if needed.  Uses ``tempfile.mkstemp`` for a
     unique per-call temp file (so concurrent callers never clobber each other's
@@ -88,7 +110,14 @@ def save_dynamic_facet_keys(
     path, _ = _resolve_facets_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     content = (
-        json.dumps({"facetable": sorted(str(k) for k in keys if str(k).strip())}, indent=2, ensure_ascii=False)
+        json.dumps(
+            {
+                "facetable": sorted(str(k) for k in facetable if str(k).strip()),
+                "excluded": sorted(str(k) for k in excluded if str(k).strip()),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
         + "\n"
     ).encode("utf-8")
     fd, tmp_str = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}.", suffix=".tmp")
@@ -103,6 +132,24 @@ def save_dynamic_facet_keys(
         tmp.unlink(missing_ok=True)
         raise
     return path
+
+
+def save_dynamic_facet_keys(
+    keys: frozenset[str] | set[str] | list[str],
+    settings: Settings | None = None,
+) -> Path:
+    """Persist ``keys`` as the facetable list, preserving the existing excluded list."""
+    excluded = _load_facets_file(settings)["excluded"]
+    return _write_facets_file(facetable=keys, excluded=excluded, settings=settings)
+
+
+def save_excluded_facet_keys(
+    keys: frozenset[str] | set[str] | list[str],
+    settings: Settings | None = None,
+) -> Path:
+    """Persist ``keys`` as the excluded list, preserving the existing facetable list."""
+    facetable = _load_facets_file(settings)["facetable"]
+    return _write_facets_file(facetable=facetable, excluded=keys, settings=settings)
 
 
 def unwrap_external_filters(raw: dict[str, Any]) -> dict[str, Any]:
