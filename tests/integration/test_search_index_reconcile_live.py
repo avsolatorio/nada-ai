@@ -11,10 +11,13 @@ Run::
 
     export NADA_INTEGRATION_NADA_API=1
     export AI4DATA_METADATA_CATALOG_URL=https://your-nada-instance/index.php
-    export NADA_METADATA_EXTRACT_BASE_URL=https://your-nada-instance/index.php/api/admin/search-metadata-extract
-    export NADA_SEARCH_INDEX_BASE_URL=https://your-nada-instance/index.php/api
-    export NADA_METADATA_EXTRACT_API_KEY=...   # admin-capable credential
+    export AI4DATA_METADATA_CATALOG_EXTRACT_PATH=api/admin/search-metadata-extract
+    export AI4DATA_METADATA_CATALOG_X_API_KEY=...   # admin-capable credential
     uv run pytest tests/integration/test_search_index_reconcile_live.py -m integration -v
+
+(NADA_METADATA_EXTRACT_BASE_URL / NADA_SEARCH_INDEX_BASE_URL are optional —
+only needed if your extract/search-index endpoints live at a different
+host/path than the derivation from AI4DATA_METADATA_CATALOG_URL produces.)
 """
 
 from __future__ import annotations
@@ -26,9 +29,9 @@ import pytest
 pytestmark = pytest.mark.integration
 
 _SKIP_REASON = (
-    "Set NADA_INTEGRATION_NADA_API=1 plus AI4DATA_METADATA_CATALOG_URL, "
-    "NADA_METADATA_EXTRACT_BASE_URL/NADA_SEARCH_INDEX_BASE_URL, and an admin "
-    "NADA_METADATA_EXTRACT_API_KEY for the target NADA instance."
+    "Set NADA_INTEGRATION_NADA_API=1, AI4DATA_METADATA_CATALOG_URL, "
+    "AI4DATA_METADATA_CATALOG_EXTRACT_PATH, and an admin "
+    "AI4DATA_METADATA_CATALOG_X_API_KEY for the target NADA instance."
 )
 
 
