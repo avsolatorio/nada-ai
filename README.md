@@ -47,7 +47,7 @@ Settings use the **`NADA_`** prefix (see `nada_ai.settings`). **[`.env.example`]
 
 | Variable | Purpose |
 |----------|---------|
-| `NADA_SEARCH_BACKEND` | `opensearch` (default) or `qdrant` — see [Qdrant pipeline guide](docs/qdrant-pipeline-guide.md) |
+| `NADA_SEARCH_BACKEND` | `qdrant` (default) or `opensearch` — see [Qdrant pipeline guide](docs/qdrant-pipeline-guide.md) |
 | `NADA_QDRANT_URL` | Qdrant HTTP URL (default `http://localhost:6333`; compose uses `http://qdrant-nada:6333`) |
 | `NADA_QDRANT_COLLECTION_NAME` | Qdrant collection (defaults to `NADA_INDEX_NAME`) |
 | `NADA_OPENSEARCH_URL` | Cluster URL (default `http://localhost:9200`) |

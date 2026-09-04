@@ -13,6 +13,7 @@ def test_opensearch_ml_requires_model_and_dimension():
 
 def test_opensearch_ml_ok():
     s = Settings(
+        search_backend="opensearch",
         embedding_backend="opensearch_ml",
         opensearch_ml_model_id="mid",
         opensearch_ml_embedding_dimension=384,

@@ -154,13 +154,14 @@ standalone MCP server:
 uv run python -m nada_ai.mcp_server --port 8025
 ```
 
-Prefer OpenSearch instead of Qdrant? Same shape, different compose file:
+Prefer OpenSearch instead of Qdrant (the default)? Same shape, different compose file
+and one setting:
 
 ```bash
 docker compose -f docker-compose.opensearch.yml -f docker-compose.dev.yml up --build -d
 ```
 
-with `NADA_SEARCH_BACKEND=opensearch` in `.env` (the default).
+with `NADA_SEARCH_BACKEND=opensearch` in `.env`.
 
 ---
 
@@ -224,13 +225,13 @@ MCP search tool, the ingest pipeline) is written against a single backend-agnost
 contract (`src/nada_ai/search/ports.py::SearchBackendPort`) so the choice is purely
 operational.
 
-| | OpenSearch (default) | Qdrant |
+| | Qdrant (default) | OpenSearch |
 |---|---|---|
-| Vector search | k-NN plugin | native HNSW |
-| Keyword leg | BM25 (native) | FastEmbed BM25 sparse vectors (`NADA_QDRANT_SPARSE_LEXICAL`) |
-| Hybrid fusion | weighted score combination | RRF (reciprocal rank fusion) with collapse-group prefetch |
-| Server-side embeddings | optional, via ML Commons (`opensearch_ml` backend) | not supported — always client-side |
-| Best for | teams already standardized on OpenSearch/Elasticsearch tooling | simpler local dev loop, native sparse+dense hybrid |
+| Vector search | native HNSW | k-NN plugin |
+| Keyword leg | FastEmbed BM25 sparse vectors (`NADA_QDRANT_SPARSE_LEXICAL`) | BM25 (native) |
+| Hybrid fusion | RRF (reciprocal rank fusion) with collapse-group prefetch | weighted score combination |
+| Server-side embeddings | not supported — always client-side | optional, via ML Commons (`opensearch_ml` backend) |
+| Best for | simpler local dev loop, native sparse+dense hybrid | teams already standardized on OpenSearch/Elasticsearch tooling |
 
 Both are covered end-to-end, including Docker Compose setups, in the
 [Qdrant pipeline guide](qdrant-pipeline-guide.md).
@@ -587,7 +588,7 @@ in `src/nada_ai/settings.py` unless noted.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NADA_SEARCH_BACKEND` | `opensearch` | `opensearch` or `qdrant` |
+| `NADA_SEARCH_BACKEND` | `qdrant` | `qdrant` or `opensearch` |
 | `NADA_INDEX_NAME` | `nada-metadata` | Index name (OpenSearch) / collection name (Qdrant, unless overridden) |
 
 ### OpenSearch

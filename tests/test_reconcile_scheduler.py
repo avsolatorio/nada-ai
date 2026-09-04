@@ -30,6 +30,7 @@ def _queue_item(idno: str, *, delete: bool = False, item_id: int = 1) -> SearchI
 def _state() -> AppState:
     s = AppState()
     s.settings = Settings(
+        search_backend="opensearch",
         embedding_backend="opensearch_ml",
         opensearch_ml_model_id="dummy-model",
         opensearch_ml_embedding_dimension=8,

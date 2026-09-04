@@ -28,6 +28,9 @@ def _isolate_stores(monkeypatch, tmp_path):
 def test_unconfigured_server_is_fail_open(monkeypatch, tmp_path):
     """No env key and no stored keys => admin routes remain open (dev default)."""
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    # /admin/index is OpenSearch-only (_require_opensearch) — pin the backend
+    # explicitly rather than relying on whatever NADA_SEARCH_BACKEND defaults to.
+    monkeypatch.setenv("NADA_SEARCH_BACKEND", "opensearch")
     _isolate_stores(monkeypatch, tmp_path)
     monkeypatch.setattr(admin_module, "create_index_op", lambda settings, recreate=False: {"index": "x"})
 
