@@ -171,6 +171,7 @@ def test_build_search_exclude_embedding_inner_hits():
 
 def _ml_settings() -> Settings:
     return Settings(
+        search_backend="opensearch",
         embedding_backend="opensearch_ml",
         opensearch_ml_model_id="deployed-model-id",
         opensearch_ml_embedding_dimension=768,
