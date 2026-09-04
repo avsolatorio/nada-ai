@@ -53,11 +53,13 @@ from ai4data.discovery.config import metadata_catalog
 from pydantic import BaseModel
 
 from nada_ai.ingest.service import delete_by_idno_op, index_ids_op
+from nada_ai.nada.admin_auth import resolve_admin_cookies, resolve_admin_headers
 from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 30.0
+_USER_AGENT = "nada-ai-search-index-sync/1.0"
 
 #: NADA dataset_type -> nada_ai metadata_type. Anything not listed here has no
 #: ingest path yet and is acked as failed rather than guessed at.
@@ -119,36 +121,11 @@ def _base_url(settings: Settings) -> str:
     return f"{metadata_catalog.url.rstrip('/')}/api"
 
 
-def _headers(settings: Settings) -> dict[str, str]:
-    headers = {"Accept": "application/json", "User-Agent": "nada-ai-search-index-sync/1.0"}
-    api_key = settings.metadata_extract_api_key or metadata_catalog.x_api_key
-    if api_key:
-        headers["X-API-KEY"] = api_key
-    bearer = settings.metadata_extract_auth_bearer or metadata_catalog.auth_bearer
-    if bearer:
-        headers["Authorization"] = f"Bearer {bearer}"
-    return headers
-
-
-def _cookies(settings: Settings) -> dict[str, str]:
-    raw = settings.metadata_extract_auth_cookie or metadata_catalog.cookies
-    if not raw:
-        return {}
-    out: dict[str, str] = {}
-    for part in raw.split(";"):
-        if "=" not in part:
-            continue
-        name, value = part.split("=", 1)
-        if name := name.strip():
-            out[name] = value.strip()
-    return out
-
-
 def _client(settings: Settings) -> httpx.Client:
     return httpx.Client(
         base_url=_base_url(settings),
-        headers=_headers(settings),
-        cookies=_cookies(settings),
+        headers=resolve_admin_headers(user_agent=_USER_AGENT),
+        cookies=resolve_admin_cookies(),
         timeout=_TIMEOUT,
     )
 
@@ -224,7 +201,10 @@ def lookup_metadata_type(settings: Settings, idno: str) -> str | None:
     ``study_metadata_type()``, which reads it from the same place).
     """
     extract_base = settings.metadata_extract_base_url or catalog_extract.extract_base_url()
-    kwargs: dict[str, Any] = {"headers": _headers(settings), "cookies": _cookies(settings)}
+    kwargs: dict[str, Any] = {
+        "headers": resolve_admin_headers(user_agent=_USER_AGENT),
+        "cookies": resolve_admin_cookies(),
+    }
     if extract_base:
         kwargs["base_url"] = extract_base
     data = catalog_extract.fetch_extract_study(idno, **kwargs)

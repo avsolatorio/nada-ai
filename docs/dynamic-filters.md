@@ -69,16 +69,24 @@ uv run python -m nada_ai.filters.cli fetch-from-extract --all --out=records.json
 uv run python -m nada_ai.filters.cli sync-from-extract --all --dry-run --limit=5
 ```
 
-Configure auth in `.env` if the host requires it:
+Configure auth in `.env` — this uses the same `AI4DATA_METADATA_CATALOG_*` admin
+credential every other admin-API feature uses (search-index reconciliation,
+extract-mode content ingest), not a separate one:
 
 ```env
-NADA_METADATA_EXTRACT_BASE_URL=https://training.ihsn.org/index.php/api/admin/search-metadata-extract
-NADA_METADATA_EXTRACT_API_KEY=your-key
+AI4DATA_METADATA_CATALOG_URL=https://training.ihsn.org/index.php
+AI4DATA_METADATA_CATALOG_EXTRACT_PATH=api/admin/search-metadata-extract
+AI4DATA_METADATA_CATALOG_X_API_KEY=your-key
 # or
-NADA_METADATA_EXTRACT_AUTH_BEARER=your-token
+AI4DATA_METADATA_CATALOG_AUTH_BEARER=your-token
 # or
-NADA_METADATA_EXTRACT_AUTH_COOKIE=session=...
+AI4DATA_METADATA_CATALOG_COOKIES=session=...
 ```
+
+Only set `NADA_METADATA_EXTRACT_BASE_URL` if your extract API lives at a
+different host/path than `{AI4DATA_METADATA_CATALOG_URL}/{AI4DATA_METADATA_CATALOG_EXTRACT_PATH}`
+derives — see `nada_ai.nada.admin_auth` for why credentials have no separate
+override.
 
 Query flags (defaults match typical filter-only extraction):
 
