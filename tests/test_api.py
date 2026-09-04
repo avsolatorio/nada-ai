@@ -8,7 +8,11 @@ from nada_ai.app.main import app, state
 from nada_ai.search.factory import create_search_backend
 
 
-def test_health_returns_ok():
+def test_health_returns_ok(monkeypatch):
+    # This test mocks an OpenSearch client/search backend post-lifespan; pin
+    # the backend the lifespan itself constructs to match, rather than
+    # whatever NADA_SEARCH_BACKEND currently defaults to.
+    monkeypatch.setenv("NADA_SEARCH_BACKEND", "opensearch")
     with TestClient(app) as client:
         mock = MagicMock()
         mock.cluster.health = AsyncMock(return_value={"status": "green", "cluster_name": "test"})

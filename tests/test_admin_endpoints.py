@@ -14,6 +14,7 @@ import asyncio
 import threading
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from starlette.testclient import TestClient
 
 from nada_ai.app import admin as admin_module
@@ -21,6 +22,16 @@ from nada_ai.app.jobs import JobRegistry
 from nada_ai.app.main import app, state
 from nada_ai.search.factory import create_search_backend
 from nada_ai.settings import Settings
+
+
+@pytest.fixture(autouse=True)
+def _opensearch_backend_by_default(monkeypatch):
+    """This file's tests exercise OpenSearch-specific admin routes throughout
+    (only test_put_index_template_501_when_qdrant wants qdrant, and it
+    overrides state.settings directly post-lifespan, unaffected by this) —
+    pin the backend explicitly rather than relying on whatever
+    NADA_SEARCH_BACKEND currently defaults to."""
+    monkeypatch.setenv("NADA_SEARCH_BACKEND", "opensearch")
 
 
 def _fresh_state() -> None:
