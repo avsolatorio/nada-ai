@@ -1,9 +1,12 @@
 """Fetch study filters from a NADA search-metadata-extract API.
 
 This talks to the metadata-extract endpoint of whichever NADA instance is
-configured (``NADA_METADATA_EXTRACT_BASE_URL``, falling back to the general
-``AI4DATA_METADATA_CATALOG_*`` catalog config) — it is not tied to any single
-deployment (e.g. IHSN's Data Compass instance is just one such NADA instance).
+configured (``NADA_METADATA_EXTRACT_BASE_URL``, falling back to
+``AI4DATA_METADATA_CATALOG_URL`` + ``_EXTRACT_PATH``) — it is not tied to any
+single deployment (e.g. IHSN's Data Compass instance is just one such NADA
+instance). Credentials always come from ``AI4DATA_METADATA_CATALOG_*`` — see
+``nada_ai.nada.admin_auth`` for why there's no separate credential setting
+here.
 """
 
 from __future__ import annotations
@@ -13,11 +16,13 @@ from collections.abc import Iterator
 from typing import Any
 
 import ai4data.discovery.catalog.extract as catalog_extract
-from ai4data.discovery.config import metadata_catalog
 
+from nada_ai.nada.admin_auth import resolve_admin_cookies, resolve_admin_headers, scrub_admin_credentials
 from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+_USER_AGENT = "nada-ai-filters-cli/1.0"
 
 
 class MetadataExtractError(RuntimeError):
@@ -26,35 +31,6 @@ class MetadataExtractError(RuntimeError):
 
 class MetadataExtractNotConfigured(MetadataExtractError):
     """Raised when no metadata-extract base URL is configured for this instance."""
-
-
-def _build_headers(settings: Settings) -> dict[str, str]:
-    headers = {"Accept": "application/json", "User-Agent": "nada-ai-filters-cli/1.0"}
-    api_key = settings.metadata_extract_api_key or metadata_catalog.x_api_key
-    if api_key:
-        headers["X-API-KEY"] = api_key
-    bearer = settings.metadata_extract_auth_bearer or metadata_catalog.auth_bearer
-    if bearer:
-        headers["Authorization"] = f"Bearer {bearer}"
-    cookie = settings.metadata_extract_auth_cookie or metadata_catalog.cookies
-    if cookie:
-        headers["Cookie"] = cookie
-    return headers
-
-
-def _build_cookies(settings: Settings) -> dict[str, str]:
-    raw = settings.metadata_extract_auth_cookie or metadata_catalog.cookies
-    if not raw:
-        return {}
-    out: dict[str, str] = {}
-    for part in raw.split(";"):
-        if "=" not in part:
-            continue
-        name, value = part.split("=", 1)
-        name = name.strip()
-        if name:
-            out[name] = value.strip()
-    return out
 
 
 def _base_url(settings: Settings) -> str:
@@ -72,25 +48,13 @@ def _base_url(settings: Settings) -> str:
 def _request_kwargs(settings: Settings) -> dict[str, Any]:
     return {
         "base_url": _base_url(settings),
-        "headers": _build_headers(settings),
-        "cookies": _build_cookies(settings),
+        "headers": resolve_admin_headers(user_agent=_USER_AGENT),
+        "cookies": resolve_admin_cookies(),
     }
 
 
-def _scrub_credentials(msg: str, settings: Settings) -> str:
-    """Remove known credential values from an exception message string."""
-    for secret in filter(None, [
-        settings.metadata_extract_api_key,
-        settings.metadata_extract_auth_bearer,
-        settings.metadata_extract_auth_cookie,
-    ]):
-        msg = msg.replace(secret, "[REDACTED]")
-    return msg
-
-
-def _wrap_extract_error(exc: Exception, settings: Settings | None = None) -> MetadataExtractError:
-    msg = _scrub_credentials(str(exc), settings) if settings is not None else str(exc)
-    return MetadataExtractError(msg)
+def _wrap_extract_error(exc: Exception) -> MetadataExtractError:
+    return MetadataExtractError(scrub_admin_credentials(str(exc)))
 
 
 def study_idno(study: dict[str, Any]) -> str | None:
@@ -143,7 +107,7 @@ def fetch_study_records(
             **_request_kwargs(settings),
         )
     except Exception as e:
-        raise _wrap_extract_error(e, settings) from e
+        raise _wrap_extract_error(e) from e
 
     records = parse_extract_response(data)
     if not records:
@@ -175,7 +139,7 @@ def iter_study_records(
                     **request_kwargs,
                 )
             except Exception as e:
-                raise _wrap_extract_error(e, settings) from e
+                raise _wrap_extract_error(e) from e
 
             batch = parse_extract_response(data)
             if not batch:

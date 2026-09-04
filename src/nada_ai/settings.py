@@ -118,19 +118,21 @@ class Settings(BaseSettings):
     #: NADA search-metadata-extract API base URL (no trailing slash). This is
     #: instance-specific — every NADA deployment (IHSN's or anyone else's) has
     #: its own metadata-extract host, so there is no built-in default here.
+    #: Defaults to ``{AI4DATA_METADATA_CATALOG_URL}/{AI4DATA_METADATA_CATALOG_EXTRACT_PATH}``
+    #: when unset — only set this if your extract API lives at a different
+    #: host/path than that derivation produces (e.g. a nonstandard reverse
+    #: proxy route). Credentials are NOT configured here — see
+    #: ``nada_ai.nada.admin_auth``: both this and the search-index endpoints
+    #: below always use ``AI4DATA_METADATA_CATALOG_X_API_KEY``/``_AUTH_BEARER``/
+    #: ``_COOKIES``, since NADA's own docs require the same admin account for
+    #: both admin surfaces — there is no separate credential to set here.
     metadata_extract_base_url: str | None = Field(default=None)
-    #: Optional API key sent as ``X-API-KEY`` (if the deployment requires it).
-    metadata_extract_api_key: str | None = Field(default=None)
-    #: Optional bearer token for ``Authorization: Bearer ...``.
-    metadata_extract_auth_bearer: str | None = Field(default=None)
-    #: Optional raw Cookie header value for authenticated training/production hosts.
-    metadata_extract_auth_cookie: str | None = Field(default=None)
 
     #: NADA admin API root (the OpenAPI ``servers`` base, e.g.
     #: ``https://your-nada-instance/index.php/api``) for the ``search-index``
     #: change-queue endpoints. Defaults to ``{AI4DATA_METADATA_CATALOG_URL}/api``
-    #: when unset. Shares the ``metadata_extract_*`` credentials above — NADA's
-    #: own docs require the same admin API key for both admin surfaces.
+    #: when unset — same rare-override rationale as ``metadata_extract_base_url``
+    #: above, and the same shared ``AI4DATA_METADATA_CATALOG_*`` credentials.
     search_index_base_url: str | None = Field(default=None)
 
     #: Run the search-index queue reconciliation as an in-process periodic

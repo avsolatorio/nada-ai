@@ -190,17 +190,20 @@ which credential:
 **Auth**: the public Data Compass instance needs no credentials. A gated catalog
 accepts `AI4DATA_METADATA_CATALOG_X_API_KEY` (`x-api-key` header), an auth cookie
 (`AI4DATA_METADATA_CATALOG_COOKIES`), or a bearer token
-(`AI4DATA_METADATA_CATALOG_AUTH_BEARER`). The separate `nada_ai.filters` metadata-extract
-sync path (facet syncing, not catalog search) has its own `NADA_METADATA_EXTRACT_*`
-credentials, falling back to the `AI4DATA_METADATA_CATALOG_*` ones when unset — these
-point at whatever NADA instance you're syncing filters from, not necessarily the same
-instance as the main catalog config.
+(`AI4DATA_METADATA_CATALOG_AUTH_BEARER`) — this is the **one** outbound credential set
+for the whole package: content ingest, `nada_ai.filters` (facet sync), and
+`nada_ai.ingest.search_index_sync` (queue reconciliation) all use it automatically,
+with no separate per-feature credential to configure (see
+`src/nada_ai/nada/admin_auth.py`). Only the request **URLs** for the latter two are
+independently overridable (`NADA_METADATA_EXTRACT_BASE_URL`,
+`NADA_SEARCH_INDEX_BASE_URL`, both optional, both derived from
+`AI4DATA_METADATA_CATALOG_URL` when unset) — for the rare case where those admin
+surfaces live at a different host/path than the derivation produces.
 
 > **Trust boundary — don't cross it.** `NADA_ADMIN_API_KEY` is *inbound*: it's what
 > callers present to authenticate to *this* service. `AI4DATA_METADATA_CATALOG_X_API_KEY`
-> / `NADA_METADATA_EXTRACT_API_KEY` are *outbound*: what this service presents to the
-> configured NADA instance. Never reuse one value for both — leaking one should never
-> grant the other.
+> is *outbound*: what this service presents to the configured NADA instance. Never
+> reuse one value for both — leaking one should never grant the other.
 
 To point at a different NADA instance, set `AI4DATA_METADATA_CATALOG_URL`.
 `.env.example` enables the bulk `search-metadata-extract` endpoint
@@ -436,8 +439,8 @@ single-flight against each other instead of racing with no coordination.
 | `NADA_RECONCILE_SEARCH_INDEX_BATCH_LIMIT` | `50` | Max queue items submitted as jobs per poll |
 
 Enabling the scheduler needs two things configured on NADA's side, not just here:
-an admin-capable credential (same `NADA_METADATA_EXTRACT_*`/`NADA_SEARCH_INDEX_BASE_URL`
-settings the CLI uses), and NADA's own `search_provider`/tracking configuration
+an admin-capable credential (`AI4DATA_METADATA_CATALOG_X_API_KEY` — the same one
+everything else uses), and NADA's own `search_provider`/tracking configuration
 actually pointed at this deployment — check with `search_index_status` first. If
 `tracking_enabled` is `false`, the queue stays empty and the scheduler logs a warning
 each poll rather than failing silently.
@@ -670,14 +673,18 @@ in `src/nada_ai/settings.py` unless noted.
 | `NADA_LOG_FORMAT` | `text` | `text` or `json` |
 | `NADA_LOG_LEVEL` | `INFO` | `DEBUG`..`CRITICAL` |
 
-### Metadata-extract filter sync CLI
+### Admin-API feature URL overrides (rare)
+
+Credentials are never configured here — both features below always use the one
+`AI4DATA_METADATA_CATALOG_*` credential set from the table further down. These two
+variables exist only to override a *URL*, for the rare case where an admin surface
+lives at a different host/path than the derivation from `AI4DATA_METADATA_CATALOG_URL`
+produces.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NADA_METADATA_EXTRACT_BASE_URL` | falls back to `AI4DATA_METADATA_CATALOG_*`; raises a clear error if neither is set | Base URL for the configured NADA instance's search-metadata-extract API |
-| `NADA_METADATA_EXTRACT_API_KEY` | unset | Outbound `X-API-KEY` to that instance |
-| `NADA_METADATA_EXTRACT_AUTH_BEARER` | unset | Outbound Bearer token |
-| `NADA_METADATA_EXTRACT_AUTH_COOKIE` | unset | Raw Cookie header for session-gated hosts |
+| `NADA_METADATA_EXTRACT_BASE_URL` | derived from `AI4DATA_METADATA_CATALOG_URL` + `_EXTRACT_PATH`; raises a clear error if neither is set | Base URL for the configured NADA instance's search-metadata-extract API |
+| `NADA_SEARCH_INDEX_BASE_URL` | derived as `{AI4DATA_METADATA_CATALOG_URL}/api` | Base URL for the search-index change-queue API |
 
 ### Discovery / NADA catalog (`AI4DATA_` prefix — a separate settings class from `nada_ai.settings`)
 
