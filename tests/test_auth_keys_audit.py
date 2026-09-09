@@ -7,6 +7,7 @@ these tests never touch the real ``config/`` directory.
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock
 
 from starlette.testclient import TestClient
 
@@ -14,6 +15,7 @@ from nada_ai.app import admin as admin_module
 from nada_ai.app.jobs import JobRegistry
 from nada_ai.app.main import app, state
 from nada_ai.app.rate_limit import RateLimiter
+from nada_ai.search.ports import SearchOutcome
 
 
 def _fresh_state() -> None:
@@ -186,15 +188,29 @@ def test_rate_limiter_disabled_when_zero():
 
 
 def test_search_rate_limit_enforced(monkeypatch, tmp_path):
+    """This must never touch a real search backend: /search's first call has
+    to succeed for the rate limiter (not the backend) to be what produces the
+    429 on the second call. Un-mocked, this test's outcome — and, worse, its
+    process stability — depends on whatever happens to be reachable at
+    localhost:6333/:9200 when it runs (e.g. a Qdrant container left running
+    from manual testing), which previously caused a real, unmocked keyword
+    search to reach a live Qdrant and segfault computing a real FastEmbed
+    BM25 sparse embedding — a native-extension crash, not a test assertion
+    failure, so it took the whole pytest process down with it."""
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
     _isolate_stores(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
         _fresh_state()
         state.search_rate_limiter = RateLimiter(limit_per_minute=1)
+        prev_search = state.search
+        state.search = AsyncMock()
+        state.search.search = AsyncMock(return_value=SearchOutcome(total=0, hits=[]))
         try:
             r1 = client.post("/search", json={"query": "poverty", "mode": "keyword"})
             r2 = client.post("/search", json={"query": "poverty", "mode": "keyword"})
+            assert r1.status_code == 200
             assert r2.status_code == 429
         finally:
             state.search_rate_limiter = RateLimiter(limit_per_minute=state.settings.rate_limit_search_per_minute)
+            state.search = prev_search
