@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -342,6 +343,19 @@ async def search(
         outcome = await s.search.search(params)
     except Exception as e:
         raise _search_backend_http_exception(e, s) from e
+
+    if use_idno_fast_path and outcome.total == 0:
+        # looks_like_catalog_idno() is a cheap heuristic (compact token, no
+        # spaces) — it also matches plain single-word queries ("disability",
+        # "poverty", ...) that aren't idnos at all. The fast path does an
+        # exact idno match with no fallback of its own, so a heuristic false
+        # positive would otherwise silently return zero results instead of
+        # running real search. Retry once as normal search on a miss.
+        params = dataclasses.replace(params, use_idno_fast_path=False)
+        try:
+            outcome = await s.search.search(params)
+        except Exception as e:
+            raise _search_backend_http_exception(e, s) from e
 
     _principal = await resolve_principal(x_admin_key, s) if body.include_debug_request else None
     dbg = outcome.debug_request if (body.include_debug_request and _principal is not None) else None
