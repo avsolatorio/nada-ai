@@ -107,13 +107,24 @@ flowchart LR
 
 **Requirements**: Python 3.11+, [uv](https://docs.astral.sh/uv/), Docker (for the
 vector store), and network access to a NADA catalog (defaults to the public Data
-Compass instance).
+Compass instance if you don't set one — see below).
 
 ```bash
 git clone <this repo> && cd nada-ai
 cp .env.example .env
 uv sync --extra local --extra qdrant
 ```
+
+> **macOS + Docker Desktop**: the `docker` CLI lives at `~/.docker/bin/docker` and is
+> only on `PATH` in a login shell. If `docker: command not found` in a non-login shell
+> (some editor/task-runner terminals), run `export PATH="$HOME/.docker/bin:$PATH"`
+> first, or open a login shell (`zsh -l`).
+
+**Point at a specific NADA instance (optional — skip to use the public default):** set
+`AI4DATA_METADATA_CATALOG_URL` in `.env` to your target instance's base URL (e.g.
+`https://your-nada-instance/index.php`). Left unset, `ai4data` defaults to its own
+bundled Data Compass URL, which is a fine way to try things out but is not
+necessarily the catalog you actually want.
 
 > **Set an admin credential for your NADA instance if you have one.** `.env.example`
 > enables NADA's bulk `search-metadata-extract` API by default
@@ -146,6 +157,10 @@ Search it:
 curl -s localhost:8020/search -H 'content-type: application/json' \
   -d '{"query": "poverty headcount ratio", "mode": "hybrid", "size": 5}' | jq
 ```
+
+Or open [http://localhost:8020/demo](http://localhost:8020/demo) in a browser — a
+minimal built-in UI over the same `/search` endpoint (see
+[The REST search API](#the-rest-search-api)), no curl required.
 
 Point an MCP client at `http://localhost:8020/mcp` (streamable HTTP), or run the
 standalone MCP server:
@@ -301,9 +316,12 @@ instance's metadata-extract API into the index under `metadata.filter_fields` �
 | `POST /recommendations` | "More like this" via chunk-embedding fusion (`search/vector_fusion.py`) |
 | `POST /search/explain` | Non-LLM explanation of why a result matched a filter (`search/explain_filters.py`) |
 | `GET /health`, `/ready` | Liveness/readiness, including MCP dependency probing when `NADA_MCP_READINESS_ENABLED=true` |
+| `GET /demo` | Minimal built-in browser UI that posts to `POST /search` — a query box, mode/filter controls, and results tabbed by data type. The fastest way to sanity-check a fresh ingest without writing curl — open it right after `index_from_catalog` completes. |
 
 Admin/ingest/catalog-management routes are covered in
-[Admin API](#admin-api-auth-rbac-audit-rate-limiting).
+[Admin API](#admin-api-auth-rbac-audit-rate-limiting). A CLI equivalent of a live search — `python -m nada_ai.demo_integration --max_items=5` — runs a small live catalog + search walkthrough directly in the terminal, useful for a quick end-to-end check without the browser.
+
+**Single-word queries and the idno fast path**: `/search` has a heuristic (`search/query_heuristics.py::looks_like_catalog_idno`) that fast-paths compact, space-free queries (`WDI_SP.POP.TOTL`, but also any plain single word like `poverty`) straight to an exact idno lookup, skipping full search for the common case of pasting an idno into the box. If that exact-match lookup finds nothing — the overwhelmingly common outcome for a real single-word search term, since most single words aren't idnos — the app falls back to running real search once more automatically, so this is transparent from the API/UI side; it only costs one extra round trip on the miss case, never a wrong "no results."
 
 ---
 
@@ -809,17 +827,25 @@ Unit tests (`tests/`) cover, by subsystem:
 
 | Subsystem | Test files |
 |---|---|
-| Search backends & queries | `test_queries.py`, `test_qdrant_filters.py`, `test_qdrant_sparse_and_collapse.py`, `test_index_template.py`, `test_facets_and_collapse.py` |
-| Dynamic filters/facets | `test_dynamic_filters_normalize.py`, `test_dynamic_filters_opensearch.py`, `test_dynamic_filters_qdrant.py`, `test_dynamic_facets.py`, `test_explain_dynamic_filters.py`, `test_explain_filters.py`, `test_filter_backfill.py`, `test_filter_sync.py`, `test_metadata_extract.py` |
+| Search backends & queries | `test_queries.py`, `test_qdrant_filters.py`, `test_qdrant_sparse_and_collapse.py`, `test_index_template.py`, `test_facets_and_collapse.py`, `test_embedding_dim_guard.py` (dimension-mismatch guard, both writers) |
+| Dynamic filters/facets | `test_dynamic_filters_normalize.py`, `test_dynamic_filters_opensearch.py`, `test_dynamic_filters_qdrant.py`, `test_dynamic_facets.py`, `test_explain_dynamic_filters.py`, `test_explain_filters.py`, `test_filter_backfill.py`, `test_filter_sync.py`, `test_metadata_extract.py`, `test_facet_auto_registration.py` (auto-registration + exclusion list), `test_pipeline_filters.py` (filters baked into content ingest) |
 | Ingest | `test_ingest_quality.py`, `test_microdata_enrich.py`, `test_jobs_registry.py` |
+| Search-index reconciliation | `test_search_index_sync.py` (queue client, `reconcile_once`), `test_reconcile_scheduler.py` (in-process scheduler, job-registry single-flight dedup) |
+| NADA admin credentials | `test_nada_admin_auth.py` (the one consolidated `AI4DATA_METADATA_CATALOG_*` credential source) |
 | Catalog client / NADA API | `test_catalog_search.py`, `test_timeseries_api.py`, `test_timeseries_models.py`, `test_idno_heuristic.py` |
 | MCP server | `test_analytics.py`, `test_analytics_apps.py`, `test_analytics_tools.py`, `test_mcp_resources_and_prompts.py`, `test_mcp_tool_config.py` |
-| Admin API | `test_admin_endpoints.py`, `test_auth_keys_audit.py`, `test_catalog_batch_delete_and_drift.py` |
+| Admin API | `test_admin_endpoints.py`, `test_auth_keys_audit.py`, `test_catalog_batch_delete_and_drift.py`, `test_api.py` (`/health`, `/demo`, the idno-fast-path fallback) |
 | Cross-cutting | `test_ai4data_import_boundary.py` (import-boundary enforcement), `test_canonical.py`, `test_client_factory.py`, `test_settings_backend.py`, `test_observability.py`, `test_metrics.py`, `test_embeddings_config.py`, `test_vector_fusion.py`, `test_schemas.py`, `test_demo_preview.py` |
 
-`tests/integration/` needs live services and is gated behind env flags
-(e.g. `NADA_INTEGRATION_OPENSEARCH=1`): `test_index_from_catalog_live.py`,
-`test_opensearch_live.py`, `test_qdrant_live.py`.
+`tests/integration/` needs live services and is gated behind env flags,
+skip cleanly without them:
+
+| File | Gate | Needs |
+|---|---|---|
+| `test_index_from_catalog_live.py` | `NADA_INTEGRATION_OPENSEARCH=1` | Live OpenSearch + catalog network |
+| `test_opensearch_live.py` | `NADA_INTEGRATION_OPENSEARCH=1` | Live OpenSearch |
+| `test_qdrant_live.py` | `NADA_INTEGRATION_QDRANT=1` | Live Qdrant |
+| `test_search_index_reconcile_live.py` | `NADA_INTEGRATION_NADA_API=1` | Only network to the configured NADA instance's admin API — **no Docker/backend needed**. Verified live against `nada-demo.ihsn.org`; this is the one test class that catches a live API not matching its own documented spec, which is exactly the class of bug (`dataset_type` location) found this way earlier — mocked tests structurally cannot catch that. |
 
 ---
 
@@ -831,7 +857,7 @@ src/nada_ai/
 ├── demo_integration.py   CLI demo: live catalog + OpenSearch walkthrough
 │
 ├── app/                  FastAPI service — search API, admin/ingest, jobs, mounts MCP at /mcp
-│   ├── main.py               app + lifespan + /search /recommendations /search/explain /health*
+│   ├── main.py               app + lifespan + /search /recommendations /search/explain /health* /demo
 │   ├── admin.py               admin/ingest/job endpoints (incl. GET /admin/embeddings/drift)
 │   ├── catalog_admin.py       per-idno + batch index/reindex/delete/filters endpoints
 │   ├── auth.py                principal resolution + RBAC
@@ -839,15 +865,24 @@ src/nada_ai/
 │   ├── keys_admin.py / keys_store.py   per-caller API key issuance/revocation
 │   ├── facets_admin.py        CRUD for the dynamic-facets registry
 │   ├── jobs.py                single-flight background job registry
+│   ├── _ingest.py              guarded_ingest() + content_sync_job_key() — the one canonical
+│   │                            job-registry key every content-write entry point shares
+│   ├── reconcile_scheduler.py  in-process periodic search-index queue reconciliation loop
 │   ├── metrics.py / metrics_admin.py   Prometheus-format metrics
 │   ├── rate_limit.py          in-memory fixed-window limiter
 │   ├── request_context.py     request-ID correlation
 │   └── webhooks.py            catalog lifecycle events → background reindex jobs
 │
 ├── ingest/                catalog-driven bulk indexing
-│   ├── pipeline.py             iter_langdoc_records / iter_bulk_actions / run_bulk_index
-│   ├── cli.py                  python -m nada_ai.ingest.cli {create_index, index, ...}
+│   ├── pipeline.py             iter_langdoc_records / iter_bulk_actions / run_bulk_index —
+│   │                            also fetches + bakes in filters/facets per idno
+│   ├── cli.py                  python -m nada_ai.ingest.cli {create_index, index, ...,
+│   │                            reconcile_search_index, search_index_status}
 │   ├── factory.py               create_ingest_writer() → Qdrant/OpenSearch writer
+│   ├── qdrant_writer.py / opensearch_writer.py   per-backend bulk writers, each with an
+│   │                            embedding-dimension mismatch guard before writing to an
+│   │                            existing index/collection
+│   ├── search_index_sync.py    poll NADA's search-index change queue, apply + ack
 │   ├── quality.py               non-blocking ingest quality reports
 │   └── service.py               shared *_op callables (CLI + HTTP admin)
 │
@@ -864,6 +899,8 @@ src/nada_ai/
 │
 ├── nada/                  typed httpx client for the NADA catalog + timeseries API
 │   ├── api.py / models.py
+│   └── admin_auth.py          the one AI4DATA_METADATA_CATALOG_* credential resolution,
+│                                shared by filters/ and ingest/search_index_sync.py
 │
 └── search/                 backend-agnostic search surface
     ├── ports.py / factory.py / canonical.py / documents.py
