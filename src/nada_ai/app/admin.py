@@ -33,6 +33,7 @@ from nada_ai.app.admin_schemas import (
     IndexStatsResponse,
     JobListResponse,
     JobResponse,
+    ReconcileSearchIndexResponse,
     SyncFiltersRequest,
     SyncFiltersResponse,
 )
@@ -214,7 +215,9 @@ async def admin_ingest_from_catalog(
     s: AppState = Depends(get_state),
     principal: Principal = Depends(require_role(Role.write)),
 ) -> JSONResponse:
-    _require_opensearch(s)
+    # index_from_catalog_op dispatches to whichever backend is configured
+    # (search.factory.create_ingest_writer) — it needs no OpenSearch client,
+    # so this route works the same under NADA_SEARCH_BACKEND=qdrant.
     settings = s.settings
     catalog_type = body.catalog_type
     ps = body.ps
@@ -581,6 +584,32 @@ async def admin_filters_ensure_indexes(s: AppState = Depends(get_state)) -> dict
 async def admin_filters_get(idno: str, s: AppState = Depends(get_state)) -> GetFiltersResponse:
     out = await asyncio.to_thread(get_filters_op, s.settings, idno)
     return GetFiltersResponse(**out)
+
+
+@admin_router.post(
+    "/admin/search-index/reconcile",
+    response_model=ReconcileSearchIndexResponse,
+)
+async def admin_search_index_reconcile(
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> ReconcileSearchIndexResponse:
+    """Poll one page of NADA's search-index change queue right now and submit
+    each pending item as its own job (same path as the background scheduler —
+    see ``app.reconcile_scheduler.poll_once``), rather than waiting for the
+    next ``NADA_RECONCILE_SEARCH_INDEX_INTERVAL_SECONDS`` tick.
+
+    Submission-only: this returns as soon as items are queued as jobs, not
+    once they finish indexing — poll ``GET /jobs`` for their progress. Safe to
+    call even while the background scheduler is also running or a previous
+    call's jobs are still in flight: JobRegistry single-flights on the same
+    ``content:{metadata_type}:{idno}`` key webhooks and admin routes use.
+    """
+    from nada_ai.app.reconcile_scheduler import poll_once
+
+    result = await poll_once(s)
+    await audit_log(s, principal, action="search_index.reconcile", target="-", status="submitted")
+    return ReconcileSearchIndexResponse(**result)
 
 
 @jobs_router.get("/jobs", response_model=JobListResponse, dependencies=[Depends(require_role(Role.read))])

@@ -204,6 +204,43 @@ def test_ingest_from_catalog_singleflight(monkeypatch):
         gate.set()
 
 
+def test_ingest_from_catalog_works_under_qdrant(monkeypatch):
+    """index_from_catalog_op dispatches through search.factory.create_ingest_writer,
+    which is backend-agnostic — this route must not require an OpenSearch client."""
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setattr(
+        admin_module,
+        "index_from_catalog_op",
+        lambda settings, catalog_type="timeseries", *a, **kw: {
+            "indexed": 0, "errors": [], "rows": 0, "catalog_type": catalog_type, "index": "x"
+        },
+    )
+
+    with TestClient(app) as client:
+        _fresh_state()
+        prev_settings, prev_client = state.settings, state.client
+        state.settings = Settings(search_backend="qdrant")
+        state.client = None
+        try:
+            r = client.post("/admin/ingest/from-catalog", json={"catalog_type": "timeseries"})
+        finally:
+            state.settings, state.client = prev_settings, prev_client
+    assert r.status_code == 202
+
+
+def test_search_index_reconcile_triggers_poll_once(monkeypatch):
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    mock_poll_once = AsyncMock(return_value={"polled": 3})
+    monkeypatch.setattr("nada_ai.app.reconcile_scheduler.poll_once", mock_poll_once)
+
+    with TestClient(app) as client:
+        _fresh_state()
+        r = client.post("/admin/search-index/reconcile")
+    assert r.status_code == 200
+    assert r.json() == {"polled": 3}
+    mock_poll_once.assert_awaited_once()
+
+
 def test_index_delete_requires_confirm():
     with TestClient(app) as client:
         _fresh_state()
