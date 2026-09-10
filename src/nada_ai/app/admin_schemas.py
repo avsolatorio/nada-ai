@@ -30,6 +30,10 @@ class IndexFromCatalogRequest(BaseModel):
     buffer_size: int = Field(default=1000, ge=1, le=10000)
 
 
+class ReconcileSearchIndexResponse(BaseModel):
+    polled: int = Field(description="Pending queue items seen this poll; each was submitted as its own job.")
+
+
 class JobResponse(BaseModel):
     id: str
     kind: str

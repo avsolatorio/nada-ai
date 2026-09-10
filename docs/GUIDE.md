@@ -384,7 +384,8 @@ uv run python -m nada_ai.ingest.cli setup_ingest_pipeline  # OpenSearch ML Commo
 operations as background jobs, for triggering ingestion without shell access:
 
 ```bash
-# Full catalog pull + index (role: write)
+# Full catalog pull + index (role: write) — works with either search backend,
+# Qdrant or OpenSearch
 curl -X POST localhost:8020/admin/ingest/from-catalog \
   -H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY" -H 'content-type: application/json' -d '{}'
 
@@ -456,6 +457,21 @@ single-flight against each other instead of racing with no coordination.
 | `NADA_RECONCILE_SEARCH_INDEX_ENABLED` | `false` | Run the in-process reconciliation scheduler |
 | `NADA_RECONCILE_SEARCH_INDEX_INTERVAL_SECONDS` | `300` | Seconds between polls |
 | `NADA_RECONCILE_SEARCH_INDEX_BATCH_LIMIT` | `50` | Max queue items submitted as jobs per poll |
+
+**Trigger a poll on demand over HTTP** (role: write) — runs the same logic as one
+scheduler tick right now, instead of waiting for the next interval:
+
+```bash
+curl -X POST localhost:8020/admin/search-index/reconcile \
+  -H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY"
+# => {"polled": 3}
+```
+
+This submits each pending queue item as its own job (same `JobRegistry` path as the
+scheduler) and returns immediately — it does not wait for those jobs to finish.
+Poll `GET /jobs` to watch them complete. Safe to call whether or not the background
+scheduler is enabled; single-flight on `content:{metadata_type}:{idno}` keeps it from
+racing a concurrent scheduler tick, webhook, or admin reindex for the same idno.
 
 Enabling the scheduler needs two things configured on NADA's side, not just here:
 an admin-capable credential (`AI4DATA_METADATA_CATALOG_X_API_KEY` — the same one
