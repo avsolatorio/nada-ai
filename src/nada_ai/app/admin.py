@@ -28,7 +28,6 @@ from nada_ai.app.admin_schemas import (
     EncodeRequest,
     EncodeResponse,
     GetFiltersResponse,
-    IndexByIdsRequest,
     IndexFromCatalogRequest,
     IndexStatsResponse,
     JobListResponse,
@@ -46,7 +45,6 @@ from nada_ai.app.state import AppState, ensure_embedding_initialized, get_state
 from nada_ai.ingest.service import (
     create_index_op,
     index_from_catalog_op,
-    index_ids_op,
     put_index_template_op,
     setup_ingest_pipeline_op,
 )
@@ -159,52 +157,6 @@ async def admin_setup_ingest_pipeline(
         key="setup_ingest_pipeline",
         factory=factory,
         params={},
-        principal=principal,
-    )
-
-
-@admin_router.post("/admin/ingest/by-ids")
-async def admin_ingest_by_ids(
-    body: IndexByIdsRequest,
-    s: AppState = Depends(get_state),
-    principal: Principal = Depends(require_role(Role.write)),
-) -> JSONResponse:
-    settings = s.settings
-    idnos = [i.strip() for i in body.idnos if i.strip()]
-    if not idnos:
-        raise HTTPException(status_code=400, detail="idnos must contain at least one non-empty value")
-    metadata_type = body.metadata_type
-    force = body.force
-    recreate_index = body.recreate_index
-    show_progress_bar = body.show_progress_bar
-    buffer_size = body.buffer_size
-
-    async def factory() -> dict[str, Any]:
-        return await guarded_ingest(
-            s,
-            index_ids_op,
-            settings,
-            idnos,
-            metadata_type,
-            force,
-            recreate_index,
-            show_progress_bar,
-            buffer_size,
-        )
-
-    key = f"index:{metadata_type}:{_idnos_key(idnos)}"
-    return await _submit_or_409(
-        s,
-        kind="index_by_ids",
-        key=key,
-        factory=factory,
-        params={
-            "idnos": idnos,
-            "metadata_type": metadata_type,
-            "force": force,
-            "recreate_index": recreate_index,
-            "buffer_size": buffer_size,
-        },
         principal=principal,
     )
 
@@ -587,10 +539,10 @@ async def admin_filters_get(idno: str, s: AppState = Depends(get_state)) -> GetF
 
 
 @admin_router.post(
-    "/admin/search-index/reconcile",
+    "/admin/ingest/reconcile",
     response_model=ReconcileSearchIndexResponse,
 )
-async def admin_search_index_reconcile(
+async def admin_ingest_reconcile(
     s: AppState = Depends(get_state),
     principal: Principal = Depends(require_role(Role.write)),
 ) -> ReconcileSearchIndexResponse:

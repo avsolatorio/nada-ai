@@ -231,16 +231,35 @@ async def catalog_batch_index(
         raise HTTPException(status_code=400, detail="idnos must contain at least one non-empty value")
     metadata_type = body.metadata_type
     force = body.force
+    recreate_index = body.recreate_index
+    show_progress_bar = body.show_progress_bar
+    buffer_size = body.buffer_size
 
     async def factory() -> dict[str, Any]:
-        return await guarded_ingest(s, index_ids_op, settings, idnos, metadata_type, force)
+        return await guarded_ingest(
+            s,
+            index_ids_op,
+            settings,
+            idnos,
+            metadata_type,
+            force,
+            recreate_index,
+            show_progress_bar,
+            buffer_size,
+        )
 
     return await _submit_or_409(
         s,
         kind="index_by_ids",
         key=f"index:{metadata_type}:{_idnos_key(idnos)}",
         factory=factory,
-        params={"idnos": idnos, "metadata_type": metadata_type, "force": force},
+        params={
+            "idnos": idnos,
+            "metadata_type": metadata_type,
+            "force": force,
+            "recreate_index": recreate_index,
+            "buffer_size": buffer_size,
+        },
         principal=principal,
     )
 
