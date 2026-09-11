@@ -217,6 +217,77 @@ def test_ingest_from_catalog_works_under_qdrant(monkeypatch):
     assert r.status_code == 202
 
 
+def test_ingest_from_catalog_all_submits_one_job_per_type(monkeypatch):
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    seen_types: list[str] = []
+
+    def fake(settings, catalog_type="timeseries", *a, **kw):
+        seen_types.append(catalog_type)
+        return {"indexed": 0, "errors": [], "rows": 0, "catalog_type": catalog_type, "index": "x"}
+
+    monkeypatch.setattr(admin_module, "index_from_catalog_op", fake)
+
+    with TestClient(app) as client:
+        _fresh_state()
+        r = client.post("/admin/ingest/from-catalog/all", json={})
+    assert r.status_code == 202
+    body = r.json()
+    assert body["recreated"] is False
+    assert {j["catalog_type"] for j in body["jobs"]} == {"document", "timeseries", "survey", "geospatial"}
+    assert all(not j["already_running"] for j in body["jobs"])
+    assert len({j["job"]["id"] for j in body["jobs"]}) == 4  # four distinct jobs
+
+
+def test_ingest_from_catalog_all_reports_already_running_type(monkeypatch):
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    gate = threading.Event()
+
+    def slow(settings, catalog_type="timeseries", *a, **kw):
+        gate.wait(timeout=5)
+        return {"indexed": 0, "errors": [], "rows": 0, "catalog_type": catalog_type, "index": "x"}
+
+    monkeypatch.setattr(admin_module, "index_from_catalog_op", slow)
+
+    with TestClient(app) as client:
+        _fresh_state()
+        r1 = client.post("/admin/ingest/from-catalog", json={"catalog_type": "document"})
+        assert r1.status_code == 202
+        in_flight_id = r1.json()["id"]
+
+        r2 = client.post("/admin/ingest/from-catalog/all", json={})
+        assert r2.status_code == 202
+        by_type = {j["catalog_type"]: j for j in r2.json()["jobs"]}
+        assert by_type["document"]["already_running"] is True
+        assert by_type["document"]["job"]["id"] == in_flight_id
+        assert by_type["timeseries"]["already_running"] is False
+        gate.set()
+
+
+def test_ingest_from_catalog_all_recreates_once_not_per_type(monkeypatch):
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    recreate_calls: list[bool] = []
+
+    def fake_create_index_op(settings, recreate=False):
+        recreate_calls.append(recreate)
+        return {"index": "x", "dim": 0, "recreated": recreate}
+
+    monkeypatch.setattr(admin_module, "create_index_op", fake_create_index_op)
+    monkeypatch.setattr(
+        admin_module,
+        "index_from_catalog_op",
+        lambda settings, catalog_type="timeseries", *a, **kw: {
+            "indexed": 0, "errors": [], "rows": 0, "catalog_type": catalog_type, "index": "x"
+        },
+    )
+
+    with TestClient(app) as client:
+        _fresh_state()
+        r = client.post("/admin/ingest/from-catalog/all", json={"recreate_index": True})
+    assert r.status_code == 202
+    assert r.json()["recreated"] is True
+    assert recreate_calls == [True]  # exactly one recreate call, not four
+
+
 def test_ingest_reconcile_triggers_poll_once(monkeypatch):
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
     mock_poll_once = AsyncMock(return_value={"polled": 3})

@@ -27,7 +27,10 @@ from nada_ai.app.admin_schemas import (
     DeleteDocsResponse,
     EncodeRequest,
     EncodeResponse,
+    CatalogTypeJobResult,
     GetFiltersResponse,
+    IndexFromCatalogAllRequest,
+    IndexFromCatalogAllResponse,
     IndexFromCatalogRequest,
     IndexStatsResponse,
     JobListResponse,
@@ -208,6 +211,87 @@ async def admin_ingest_from_catalog(
         },
         principal=principal,
     )
+
+
+#: The catalog_type values NADA's search API actually recognizes end to end
+#: (index_from_catalog_op accepts a couple of friendlier aliases too —
+#: "indicator" -> "timeseries", "microdata" -> "survey" — but these four are
+#: the underlying distinct types, so this is the full catalog with no overlap).
+_CATALOG_TYPES: tuple[str, ...] = ("document", "timeseries", "survey", "geospatial")
+
+
+@admin_router.post(
+    "/admin/ingest/from-catalog/all",
+    response_model=IndexFromCatalogAllResponse,
+    status_code=202,
+)
+async def admin_ingest_from_catalog_all(
+    body: IndexFromCatalogAllRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> IndexFromCatalogAllResponse:
+    """Index the full catalog — every known catalog_type in one call.
+
+    Equivalent to calling ``POST /admin/ingest/from-catalog`` once per type in
+    ``_CATALOG_TYPES``, except submitted together. Each type is still its own
+    background job, single-flighted on its own ``index_from_catalog:{catalog_type}``
+    key (same as the single-type route) — so calling this again while a type is
+    still indexing just reports that type's existing job (``already_running: true``)
+    instead of starting a duplicate for it, while any other type not currently
+    running gets a fresh job.
+    """
+    settings = s.settings
+    if body.recreate_index:
+        # Recreate once, up front, synchronously — recreating drops the WHOLE
+        # index/collection, so doing it per type inside the loop below would
+        # wipe out whichever type's documents were indexed just before it.
+        await asyncio.to_thread(create_index_op, settings, True)
+
+    results: list[CatalogTypeJobResult] = []
+    for catalog_type in _CATALOG_TYPES:
+
+        async def factory(catalog_type: str = catalog_type) -> dict[str, Any]:
+            return await guarded_ingest(
+                s,
+                index_from_catalog_op,
+                settings,
+                catalog_type,
+                body.ps,
+                body.limit,
+                body.force,
+                False,
+                body.show_progress_bar,
+                body.buffer_size,
+            )
+
+        job = await s.jobs.submit(
+            kind="index_from_catalog",
+            key=f"index_from_catalog:{catalog_type}",
+            factory=factory,
+            params={
+                "catalog_type": catalog_type,
+                "ps": body.ps,
+                "limit": body.limit,
+                "force": body.force,
+                "buffer_size": body.buffer_size,
+            },
+        )
+        results.append(
+            CatalogTypeJobResult(
+                catalog_type=catalog_type,
+                already_running=job.was_already_running,
+                job=_job_to_response(job),
+            )
+        )
+
+    await audit_log(
+        s,
+        principal,
+        action="job.submit.index_from_catalog_all",
+        target=",".join(_CATALOG_TYPES),
+        status="submitted",
+    )
+    return IndexFromCatalogAllResponse(recreated=body.recreate_index, jobs=results)
 
 
 @admin_router.get(

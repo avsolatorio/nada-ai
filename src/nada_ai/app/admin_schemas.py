@@ -25,6 +25,21 @@ class ReconcileSearchIndexResponse(BaseModel):
     polled: int = Field(description="Pending queue items seen this poll; each was submitted as its own job.")
 
 
+class IndexFromCatalogAllRequest(BaseModel):
+    ps: int = Field(default=100, ge=1, le=1000, description="Catalog page size, applied to every type.")
+    limit: int | None = Field(default=None, ge=1, description="Per-type row cap; None means no limit.")
+    force: bool = Field(default=False)
+    recreate_index: bool = Field(
+        default=False,
+        description=(
+            "Drop and recreate the index/collection ONCE before indexing any type "
+            "(not once per type, which would wipe out the previous type's documents)."
+        ),
+    )
+    show_progress_bar: bool = Field(default=False)
+    buffer_size: int = Field(default=1000, ge=1, le=10000)
+
+
 class JobResponse(BaseModel):
     id: str
     kind: str
@@ -41,6 +56,17 @@ class JobResponse(BaseModel):
 
 class JobListResponse(BaseModel):
     jobs: list[JobResponse]
+
+
+class CatalogTypeJobResult(BaseModel):
+    catalog_type: str
+    already_running: bool = Field(description="True if this type's job was already in flight from a prior call.")
+    job: JobResponse
+
+
+class IndexFromCatalogAllResponse(BaseModel):
+    recreated: bool
+    jobs: list[CatalogTypeJobResult]
 
 
 class EncodeRequest(BaseModel):
