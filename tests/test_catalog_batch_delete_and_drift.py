@@ -1,7 +1,9 @@
-"""Tests for POST /admin/catalog/delete (batch) and GET /admin/embeddings/drift."""
+"""Tests for POST /admin/catalog/index (batch), POST /admin/catalog/delete
+(batch), and GET /admin/embeddings/drift."""
 
 from __future__ import annotations
 
+import threading
 from unittest.mock import AsyncMock, MagicMock
 
 from starlette.testclient import TestClient
@@ -14,6 +16,50 @@ from nada_ai.ingest.service import delete_by_idnos_op
 
 def _fresh_state() -> None:
     state.jobs = JobRegistry()
+
+
+def test_batch_index_validates_idnos(monkeypatch):
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    with TestClient(app) as client:
+        _fresh_state()
+        r = client.post("/admin/catalog/index", json={"idnos": ["   ", ""], "metadata_type": "indicator"})
+    assert r.status_code == 400
+
+
+def test_batch_index_singleflight_and_passes_all_options(monkeypatch):
+    """This is the sole batch-by-idnos route (the former, duplicate
+    /admin/ingest/by-ids was removed) — assert it still single-flights on
+    (metadata_type, idnos) and still forwards recreate_index/show_progress_bar/
+    buffer_size through to index_ids_op, same as the route it replaced."""
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    gate = threading.Event()
+    captured: dict = {}
+
+    def slow(settings, idnos, metadata_type, force, recreate_index, show_progress_bar, buffer_size, embedding=None):
+        captured["args"] = (idnos, metadata_type, force, recreate_index, show_progress_bar, buffer_size)
+        gate.wait(timeout=5)
+        return {"indexed": 0, "errors": [], "requested": len(idnos), "metadata_type": metadata_type, "index": "x"}
+
+    monkeypatch.setattr(catalog_module, "index_ids_op", slow)
+
+    with TestClient(app) as client:
+        _fresh_state()
+        r1 = client.post(
+            "/admin/catalog/index",
+            json={
+                "idnos": ["a", "b"],
+                "metadata_type": "indicator",
+                "recreate_index": True,
+                "show_progress_bar": True,
+                "buffer_size": 250,
+            },
+        )
+        assert r1.status_code == 202
+        r2 = client.post("/admin/catalog/index", json={"idnos": ["a", "b"], "metadata_type": "indicator"})
+        assert r2.status_code == 409
+        gate.set()
+
+    assert captured["args"] == (["a", "b"], "indicator", False, True, True, 250)
 
 
 def test_batch_delete_validates_idnos(monkeypatch):

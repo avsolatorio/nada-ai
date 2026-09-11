@@ -11,15 +11,6 @@ class CreateIndexRequest(BaseModel):
     recreate: bool = Field(default=False, description="Drop and recreate the index if it already exists.")
 
 
-class IndexByIdsRequest(BaseModel):
-    idnos: list[str] = Field(..., min_length=1)
-    metadata_type: str = Field(default="indicator", description="indicator | document | microdata | geospatial")
-    force: bool = Field(default=False, description="Bypass MetadataLoader cache.")
-    recreate_index: bool = Field(default=False, description="Drop and recreate the index before bulk indexing.")
-    show_progress_bar: bool = Field(default=False, description="tqdm bars in API are usually noise; default off.")
-    buffer_size: int = Field(default=1000, ge=1, le=10000)
-
-
 class IndexFromCatalogRequest(BaseModel):
     catalog_type: str = Field(default="timeseries", description="timeseries | indicator | document | microdata | survey | geospatial")
     ps: int = Field(default=100, ge=1, le=1000, description="Catalog page size.")
@@ -111,6 +102,9 @@ class CatalogBatchIndexRequest(BaseModel):
     idnos: list[str] = Field(..., min_length=1)
     metadata_type: str = Field(default="indicator")
     force: bool = Field(default=False)
+    recreate_index: bool = Field(default=False, description="Drop and recreate the index before bulk indexing.")
+    show_progress_bar: bool = Field(default=False, description="tqdm bars in API are usually noise; default off.")
+    buffer_size: int = Field(default=1000, ge=1, le=10000)
 
 
 class CatalogBatchDeleteRequest(BaseModel):

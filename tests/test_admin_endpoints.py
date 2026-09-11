@@ -171,17 +171,6 @@ def test_jobs_get_404():
     assert r.status_code == 404
 
 
-def test_ingest_by_ids_validates_idnos(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
-    with TestClient(app) as client:
-        _fresh_state()
-        r = client.post(
-            "/admin/ingest/by-ids",
-            json={"idnos": ["   ", ""], "metadata_type": "indicator"},
-        )
-    assert r.status_code == 400
-
-
 def test_ingest_from_catalog_singleflight(monkeypatch):
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
     gate = threading.Event()
@@ -228,14 +217,14 @@ def test_ingest_from_catalog_works_under_qdrant(monkeypatch):
     assert r.status_code == 202
 
 
-def test_search_index_reconcile_triggers_poll_once(monkeypatch):
+def test_ingest_reconcile_triggers_poll_once(monkeypatch):
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
     mock_poll_once = AsyncMock(return_value={"polled": 3})
     monkeypatch.setattr("nada_ai.app.reconcile_scheduler.poll_once", mock_poll_once)
 
     with TestClient(app) as client:
         _fresh_state()
-        r = client.post("/admin/search-index/reconcile")
+        r = client.post("/admin/ingest/reconcile")
     assert r.status_code == 200
     assert r.json() == {"polled": 3}
     mock_poll_once.assert_awaited_once()

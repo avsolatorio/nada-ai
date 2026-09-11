@@ -462,7 +462,7 @@ single-flight against each other instead of racing with no coordination.
 scheduler tick right now, instead of waiting for the next interval:
 
 ```bash
-curl -X POST localhost:8020/admin/search-index/reconcile \
+curl -X POST localhost:8020/admin/ingest/reconcile \
   -H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY"
 # => {"polled": 3}
 ```
