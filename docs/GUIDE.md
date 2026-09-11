@@ -367,14 +367,16 @@ flow, which works against a public/anonymous-read catalog.
 ### Running ingestion
 
 Two equivalent entry points share the same underlying operations
-(`ingest/service.py`'s `*_op` callables) so CLI and HTTP behavior never drift apart:
+(`ingest/service.py`'s `*_op` callables) so CLI and HTTP behavior never drift apart —
+with one exception noted below (`POST /admin/ingest/from-catalog/all` is HTTP-only,
+a thin loop over the single-type operation, not a new op of its own):
 
 **CLI** (`python -m nada_ai.ingest.cli ...`):
 
 ```bash
 uv run python -m nada_ai.ingest.cli create_index
 uv run python -m nada_ai.ingest.cli put_index_template   # OpenSearch only
-uv run python -m nada_ai.ingest.cli index_from_catalog    # full catalog pull + index
+uv run python -m nada_ai.ingest.cli index_from_catalog    # pull + index ONE catalog_type (default: timeseries)
 uv run python -m nada_ai.ingest.cli index                 # index pre-fetched records
 uv run python -m nada_ai.ingest.cli index_ids --idnos idno1,idno2   # targeted re-index
 uv run python -m nada_ai.ingest.cli setup_ingest_pipeline  # OpenSearch ML Commons only
@@ -384,9 +386,21 @@ uv run python -m nada_ai.ingest.cli setup_ingest_pipeline  # OpenSearch ML Commo
 operations as background jobs, for triggering ingestion without shell access:
 
 ```bash
-# Full catalog pull + index (role: write) — works with either search backend,
-# Qdrant or OpenSearch
+# Pull + index ONE catalog type (role: write) — works with either search
+# backend, Qdrant or OpenSearch. catalog_type defaults to "timeseries";
+# accepts timeseries | indicator | document | microdata | survey | geospatial.
 curl -X POST localhost:8020/admin/ingest/from-catalog \
+  -H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY" -H 'content-type: application/json' \
+  -d '{"catalog_type": "document"}'
+
+# Pull + index EVERY catalog type in one call (role: write) — submits one
+# job per type (document, timeseries, survey, geospatial), each still
+# single-flighted on its own catalog_type, so calling this again while a
+# type is still indexing reports that type's existing job instead of
+# duplicating it. Pass "recreate_index": true to drop and rebuild the
+# index/collection once, up front, before any type is indexed (not once per
+# type — that would wipe out whichever type was indexed just before it).
+curl -X POST localhost:8020/admin/ingest/from-catalog/all \
   -H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY" -H 'content-type: application/json' -d '{}'
 
 # Targeted batch re-index by idno (role: write)
