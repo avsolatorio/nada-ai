@@ -8,7 +8,7 @@ Python package for **NADA AI**: ingest [NADA / Data Compass–style](https://dat
 
 - Python **3.11+**
 - [**uv**](https://docs.astral.sh/uv/) recommended
-- **`ai4data[discovery]`** resolved from **`[tool.uv.sources]`** — pinned to a **git revision** ([`avsolatorio/ai4data`](https://github.com/avsolatorio/ai4data.git), see `pyproject.toml`). Update the `rev` hash there (and run **`uv lock`**) when you want a newer discovery stack. To hack on a **local checkout** instead, temporarily override sources (see uv docs / `tool.uv.sources`) or clone beside the repo and point `path`.
+- **`ai4data[discovery]`** resolved from **`[tool.uv.sources]`** — pinned to a **git revision** (currently the [`mah0001/ai4data`](https://github.com/mah0001/ai4data.git) fork's `feat/discovery-additional-catalog-types` branch, which adds table/script/image/video/indicator-db support; switch back to upstream once that lands — see `pyproject.toml`). Update the `rev` hash there (and run **`uv lock`**) when you want a newer discovery stack. To hack on a **local checkout** instead, temporarily override sources (see uv docs / `tool.uv.sources`) or clone beside the repo and point `path`.
 - **Docker** (for a local Qdrant or OpenSearch instance) — on macOS with Docker Desktop, the `docker` CLI lives at `~/.docker/bin/docker` and is only on `PATH` in a **login shell**; a plain non-login shell (some editor/CI task runners) may need `export PATH="$HOME/.docker/bin:$PATH"` first.
 
 ## Install
