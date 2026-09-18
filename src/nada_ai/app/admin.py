@@ -234,10 +234,21 @@ async def admin_ingest_from_catalog(
 
 
 #: The catalog_type values NADA's search API actually recognizes end to end
-#: (index_from_catalog_op accepts a couple of friendlier aliases too —
-#: "indicator" -> "timeseries", "microdata" -> "survey" — but these four are
-#: the underlying distinct types, so this is the full catalog with no overlap).
-_CATALOG_TYPES: tuple[str, ...] = ("document", "timeseries", "survey", "geospatial")
+#: (index_from_catalog_op accepts a few friendlier aliases too —
+#: "indicator" -> "timeseries", "microdata" -> "survey",
+#: "indicator-db" -> "timeseriesdb" — but these are the underlying distinct
+#: types, so this is the full catalog with no overlap).
+_CATALOG_TYPES: tuple[str, ...] = (
+    "document",
+    "timeseries",
+    "survey",
+    "geospatial",
+    "timeseriesdb",
+    "table",
+    "script",
+    "image",
+    "video",
+)
 
 
 @admin_router.post(
@@ -326,14 +337,20 @@ async def admin_ingest_from_catalog_all(
 
 #: catalog_type (what /admin/ingest/from-catalog accepts and what NADA's own
 #: search API's `type` param expects) -> the stored `metadata.type` value
-#: langdocs actually get indexed under. These differ for two of the four —
-#: confirmed against live data, not assumed: a dashboard comparing "catalog
-#: total" against "indexed count" must filter Qdrant on the right-hand side.
+#: langdocs actually get indexed under. These differ for three of the nine
+#: (timeseries, survey, timeseriesdb) — timeseries/survey confirmed against
+#: live data, not assumed: a dashboard comparing "catalog total" against
+#: "indexed count" must filter Qdrant on the right-hand side.
 _STORED_TYPE_BY_CATALOG_TYPE: dict[str, str] = {
     "document": "document",
     "timeseries": "indicator",
     "survey": "microdata",
     "geospatial": "geospatial",
+    "timeseriesdb": "indicator-db",
+    "table": "table",
+    "script": "script",
+    "image": "image",
+    "video": "video",
 }
 
 

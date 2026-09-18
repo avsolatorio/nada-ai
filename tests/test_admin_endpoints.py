@@ -233,9 +233,12 @@ def test_ingest_from_catalog_all_submits_one_job_per_type(monkeypatch):
     assert r.status_code == 202
     body = r.json()
     assert body["recreated"] is False
-    assert {j["catalog_type"] for j in body["jobs"]} == {"document", "timeseries", "survey", "geospatial"}
+    every_type = {
+        "document", "timeseries", "survey", "geospatial", "timeseriesdb", "table", "script", "image", "video",
+    }
+    assert {j["catalog_type"] for j in body["jobs"]} == every_type
     assert all(not j["already_running"] for j in body["jobs"])
-    assert len({j["job"]["id"] for j in body["jobs"]}) == 4  # four distinct jobs
+    assert len({j["job"]["id"] for j in body["jobs"]}) == len(every_type)  # one distinct job per type
 
 
 def test_ingest_from_catalog_all_reports_already_running_type(monkeypatch):
@@ -653,8 +656,8 @@ def test_catalog_type_counts_combines_qdrant_facet_and_catalog_totals(monkeypatc
 
     def fake_search_metadata(params):
         # One "found" per catalog_type, keyed off the type param this route sends.
-        found_by_type = {"document": 969, "timeseries": 307, "survey": 460, "geospatial": 30}
-        return {"rows": [], "found": found_by_type[params["type"]]}
+        found_by_type = {"document": 969, "timeseries": 307, "survey": 460, "geospatial": 30, "timeseriesdb": 4}
+        return {"rows": [], "found": found_by_type.get(params["type"], 0)}
 
     monkeypatch.setattr("ai4data.discovery.catalog.http.search_metadata", fake_search_metadata)
 
@@ -662,7 +665,10 @@ def test_catalog_type_counts_combines_qdrant_facet_and_catalog_totals(monkeypatc
     fake_hit_indicator = MagicMock(value="indicator", count=307)
     fake_hit_microdata = MagicMock(value="microdata", count=460)
     fake_hit_geospatial = MagicMock(value="geospatial", count=37)
-    fake_facet_resp = MagicMock(hits=[fake_hit_document, fake_hit_indicator, fake_hit_microdata, fake_hit_geospatial])
+    fake_hit_indicator_db = MagicMock(value="indicator-db", count=4)
+    fake_facet_resp = MagicMock(
+        hits=[fake_hit_document, fake_hit_indicator, fake_hit_microdata, fake_hit_geospatial, fake_hit_indicator_db]
+    )
 
     with TestClient(app) as client:
         _fresh_state()
@@ -683,6 +689,9 @@ def test_catalog_type_counts_combines_qdrant_facet_and_catalog_totals(monkeypatc
     assert body["timeseries"] == {"catalog_total": 307, "indexed_documents": 307}
     assert body["survey"] == {"catalog_total": 460, "indexed_documents": 460}
     assert body["geospatial"] == {"catalog_total": 30, "indexed_documents": 37}  # not 1:1 — documents, not idnos
+    # NADA's "timeseriesdb" is stored under metadata.type "indicator-db"; types with no indexed docs report 0.
+    assert body["timeseriesdb"] == {"catalog_total": 4, "indexed_documents": 4}
+    assert body["video"] == {"catalog_total": 0, "indexed_documents": 0}
 
 
 def test_catalog_type_counts_400_when_not_qdrant_backend(monkeypatch):

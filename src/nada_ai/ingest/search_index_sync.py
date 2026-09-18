@@ -32,14 +32,15 @@ Queue item shape (``SearchIndexQueueItem`` in the spec)::
 The queue item does **not** carry NADA's ``dataset_type`` (survey, geospatial,
 timeseries, document, table, image, script, video, timeseriesdb) — only
 ``object_key``/idno. Since ``nada_ai.ingest`` needs an explicit
-``metadata_type`` (indicator, document, geospatial, microdata — see
+``metadata_type`` (indicator, indicator-db, document, geospatial, microdata,
+table, script, image, video — see
 ``ai4data.discovery.metadata.handler.MetadataLoader``) to know which loader to
 use, this module looks up each new/changed idno's ``dataset_type`` via the
 ``search-metadata-extract`` API and maps it. Items whose ``dataset_type`` has
-no known mapping (table, image, script, video) are acked as ``failed`` with a
-clear reason rather than guessed at or silently dropped — that keeps them
-visible in NADA's ``/admin/search-index/queue?status=failed`` for a human to
-resolve, instead of retrying forever or corrupting the index with a wrong type.
+no known mapping are acked as ``failed`` with a clear reason rather than
+guessed at or silently dropped — that keeps them visible in NADA's
+``/admin/search-index/queue?status=failed`` for a human to resolve, instead of
+retrying forever or corrupting the index with a wrong type.
 """
 
 from __future__ import annotations
@@ -67,10 +68,15 @@ _USER_AGENT = "nada-ai-search-index-sync/1.0"
 #: ingest path yet and is acked as failed rather than guessed at.
 _DATASET_TYPE_TO_METADATA_TYPE: dict[str, str] = {
     "timeseries": "indicator",
-    "timeseriesdb": "indicator",
+    "timeseriesdb": "indicator-db",
+    "timeseries-db": "indicator-db",
     "document": "document",
     "geospatial": "geospatial",
     "survey": "microdata",
+    "table": "table",
+    "script": "script",
+    "image": "image",
+    "video": "video",
 }
 
 

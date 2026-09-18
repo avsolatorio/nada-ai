@@ -12,7 +12,7 @@ class CreateIndexRequest(BaseModel):
 
 
 class IndexFromCatalogRequest(BaseModel):
-    catalog_type: str = Field(default="timeseries", description="timeseries | indicator | document | microdata | survey | geospatial")
+    catalog_type: str = Field(default="timeseries", description="timeseries | indicator | survey | microdata | document | geospatial | timeseriesdb | indicator-db | table | script | image | video")
     ps: int = Field(default=100, ge=1, le=1000, description="Catalog page size.")
     limit: int | None = Field(default=None, ge=1, description="Stop after first N catalog rows; None means no limit.")
     force: bool = Field(default=False)

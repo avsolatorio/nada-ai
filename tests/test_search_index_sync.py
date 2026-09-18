@@ -151,10 +151,32 @@ def test_lookup_metadata_type_reads_dataset_type_from_filters():
 
 
 def test_lookup_metadata_type_none_when_dataset_type_unmapped():
-    resp = {"status": "success", "study": {**LIVE_STUDY_RESPONSE["study"], "filters": {"dataset_type": "script"}}}
+    resp = {"status": "success", "study": {**LIVE_STUDY_RESPONSE["study"], "filters": {"dataset_type": "citation"}}}
     with patch("nada_ai.ingest.search_index_sync.catalog_extract.fetch_extract_study", return_value=resp):
-        result = lookup_metadata_type(_settings(), "SOME_SCRIPT_IDNO")
+        result = lookup_metadata_type(_settings(), "SOME_CITATION_IDNO")
     assert result is None
+
+
+@pytest.mark.parametrize(
+    ("dataset_type", "metadata_type"),
+    [
+        ("survey", "microdata"),
+        ("timeseries", "indicator"),
+        ("timeseriesdb", "indicator-db"),
+        ("timeseries-db", "indicator-db"),
+        ("document", "document"),
+        ("geospatial", "geospatial"),
+        ("table", "table"),
+        ("script", "script"),
+        ("image", "image"),
+        ("video", "video"),
+    ],
+)
+def test_lookup_metadata_type_maps_every_nada_dataset_type(dataset_type, metadata_type):
+    resp = {"status": "success", "study": {**LIVE_STUDY_RESPONSE["study"], "filters": {"dataset_type": dataset_type}}}
+    with patch("nada_ai.ingest.search_index_sync.catalog_extract.fetch_extract_study", return_value=resp):
+        result = lookup_metadata_type(_settings(), "SOME_IDNO")
+    assert result == metadata_type
 
 
 def _queue_item(idno: str, *, delete: bool = False, item_id: int = 1) -> SearchIndexQueueItem:
@@ -479,7 +501,7 @@ def test_reconcile_diff_once_passes_data_type_through_to_both_diff_calls():
 
 
 def test_reconcile_diff_once_skips_unmapped_dataset_type():
-    page = _diff_page([{"idno": "A", "type": "script"}])  # 'script' has no metadata_type mapping
+    page = _diff_page([{"idno": "A", "type": "citation"}])  # 'citation' has no metadata_type mapping
     empty_page = _diff_page([])
     with patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[page, empty_page]), \
          patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page), \

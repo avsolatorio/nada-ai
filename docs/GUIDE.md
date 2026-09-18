@@ -388,13 +388,15 @@ operations as background jobs, for triggering ingestion without shell access:
 ```bash
 # Pull + index ONE catalog type (role: write) — works with either search
 # backend, Qdrant or OpenSearch. catalog_type defaults to "timeseries";
-# accepts timeseries | indicator | document | microdata | survey | geospatial.
+# accepts timeseries | indicator | survey | microdata | document | geospatial |
+# timeseriesdb | indicator-db | table | script | image | video.
 curl -X POST localhost:8020/admin/ingest/from-catalog \
   -H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY" -H 'content-type: application/json' \
   -d '{"catalog_type": "document"}'
 
 # Pull + index EVERY catalog type in one call (role: write) — submits one
-# job per type (document, timeseries, survey, geospatial), each still
+# job per type (document, timeseries, survey, geospatial, timeseriesdb, table,
+# script, image, video), each still
 # single-flighted on its own catalog_type, so calling this again while a
 # type is still indexing reports that type's existing job instead of
 # duplicating it. Pass "recreate_index": true to drop and rebuild the

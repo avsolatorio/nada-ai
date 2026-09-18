@@ -423,6 +423,8 @@ def index_from_catalog_op(
         params["type"] = "timeseries"
     elif catalog_type == "microdata":
         params["type"] = "survey"
+    elif catalog_type in ("indicator-db", "timeseries-db"):
+        params["type"] = "timeseriesdb"
 
     rows = get_metadata_ids(
         params,

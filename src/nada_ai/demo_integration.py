@@ -87,7 +87,8 @@ def run_demo(
     index_name_suffix: str | None = None,
 ) -> None:
     """
-    :param catalog_type: Data Compass API type: ``timeseries``, ``survey``, ``document``, ``geospatial``.
+    :param catalog_type: Data Compass API type: ``timeseries``, ``survey``, ``document``, ``geospatial``,
+        ``timeseriesdb``, ``table``, ``script``, ``image``, ``video``.
     :param recreate_index: If True, delete and recreate the OpenSearch index (destructive).
     :param force_fetch: Passed through to metadata loader (refresh catalog JSON).
     :param index_name_suffix: If set, ``NADA_INDEX_NAME`` is ignored and name becomes ``nada-demo-{suffix}``.
