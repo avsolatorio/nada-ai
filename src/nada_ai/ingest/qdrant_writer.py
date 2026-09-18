@@ -12,6 +12,7 @@ from qdrant_client.models import PointStruct
 from nada_ai.filters.indexes import ensure_qdrant_filter_field_indexes
 from nada_ai.ingest.pipeline import iter_langdoc_records
 from nada_ai.ingest.ports import IngestWriterPort
+from nada_ai.ingest.progress import CancelToken, IngestProgressTracker
 from nada_ai.ingest.quality import QualityReport
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
 from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, TEXT_FIELD
@@ -47,6 +48,13 @@ def _client(settings: Settings) -> QdrantClient:
 
 def _payload_for_point(source: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in source.items() if k != EMBEDDING_FIELD}
+
+
+def _idno_of(source: dict[str, Any]) -> str | None:
+    """The catalog idno a source document belongs to, for attributing write errors to it."""
+    meta = source.get("metadata")
+    idno = meta.get("idno") if isinstance(meta, dict) else None
+    return str(idno) if idno else None
 
 
 def _ensure_payload_indexes(client: QdrantClient, collection: str) -> None:
@@ -144,9 +152,13 @@ class QdrantIngestWriter(IngestWriterPort):
         force: bool = False,
         recreate_target: bool = False,
         show_progress_bar: bool = True,
-        buffer_size: int = 1000,
+        buffer_size: int = 200,
         embedding: EmbeddingService | None = None,
         quality_report: QualityReport | None = None,
+        progress: IngestProgressTracker | None = None,
+        cancel_token: CancelToken | None = None,
+        load_errors: list[dict[str, Any]] | None = None,
+        empty_docs: list[dict[str, Any]] | None = None,
     ) -> tuple[int, list[Any] | None]:
         if self._settings.embedding_backend != "local":
             raise ValueError("Qdrant ingest requires embedding_backend=local.")
@@ -164,32 +176,45 @@ class QdrantIngestWriter(IngestWriterPort):
         sparse_name = self._settings.qdrant_sparse_vector_name
         model_id = self._settings.qdrant_sparse_model_id
 
+        def _point(did: str, v: list[float], src: dict[str, Any], sv: Any = None) -> PointStruct:
+            vector: Any = {"": v, sparse_name: sv} if sv is not None else v
+            return PointStruct(id=str(did), vector=vector, payload=_payload_for_point(src))
+
         def flush_buf() -> None:
             nonlocal success
             if not batch_buf:
                 return
-            try:
-                if sparse_on:
+            sparse_vecs: list[Any] | None = None
+            if sparse_on:
+                try:
                     texts = [str(s.get("page_content") or "") for _, _, s in batch_buf]
                     sparse_vecs = embed_documents_sparse(texts, model_id=model_id)
-                    points = [
-                        PointStruct(
-                            id=str(did),
-                            vector={"": v, sparse_name: sv},
-                            payload=_payload_for_point(src),
-                        )
-                        for (did, v, src), sv in zip(batch_buf, sparse_vecs, strict=True)
-                    ]
-                else:
-                    points = [
-                        PointStruct(id=str(did), vector=v, payload=_payload_for_point(src)) for did, v, src in batch_buf
-                    ]
+                except Exception as e:
+                    logger.warning(
+                        "Sparse embedding failed for a batch of %d; indexing dense-only: %s", len(batch_buf), e
+                    )
+            if sparse_vecs is not None:
+                points = [_point(did, v, src, sv) for (did, v, src), sv in zip(batch_buf, sparse_vecs, strict=True)]
+            else:
+                points = [_point(did, v, src) for did, v, src in batch_buf]
+            idno_by_point_id = {str(did): _idno_of(src) for did, _, src in batch_buf}
+            batch_buf.clear()
+
+            try:
                 client.upsert(collection_name=coll, points=points, wait=True)
                 success += len(points)
             except Exception as e:
-                errors.append({"error": str(e), "batch_size": len(batch_buf)})
-            finally:
-                batch_buf.clear()
+                # Retry one-at-a-time so a single bad point (e.g. a payload
+                # value Qdrant rejects) doesn't blank out the whole batch as
+                # one opaque "batch_size: 128" error with no way to tell which
+                # of the many documents in it actually failed.
+                logger.warning("Batch upsert of %d points failed (%s); retrying individually", len(points), e)
+                for point in points:
+                    try:
+                        client.upsert(collection_name=coll, points=[point], wait=True)
+                        success += 1
+                    except Exception as point_exc:
+                        errors.append({"id": point.id, "idno": idno_by_point_id.get(str(point.id)), "error": str(point_exc)})
 
         try:
             for doc_id, vec, source in iter_langdoc_records(
@@ -200,14 +225,24 @@ class QdrantIngestWriter(IngestWriterPort):
                 show_progress_bar=show_progress_bar,
                 buffer_size=buffer_size,
                 quality_report=quality_report,
+                progress=progress,
+                cancel_token=cancel_token,
+                load_errors=load_errors,
+                empty_docs=empty_docs,
             ):
                 if not vec:
-                    errors.append({"id": doc_id, "error": "missing vector (opensearch_ml is not supported on Qdrant)"})
+                    errors.append(
+                        {
+                            "id": doc_id,
+                            "idno": _idno_of(source),
+                            "error": "missing vector (opensearch_ml is not supported on Qdrant)",
+                        }
+                    )
                     continue
                 try:
                     batch_buf.append((doc_id, vec, source))
                 except Exception as e:
-                    errors.append({"id": doc_id, "error": str(e)})
+                    errors.append({"id": doc_id, "idno": _idno_of(source), "error": str(e)})
                     continue
                 if len(batch_buf) >= batch_size:
                     flush_buf()

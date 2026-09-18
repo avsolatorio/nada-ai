@@ -1,10 +1,11 @@
 """Embedding behavior without loading large models."""
 
+import os
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from nada_ai.search.backend.opensearch.embeddings import EmbeddingService, _load_model
+from nada_ai.search.backend.opensearch.embeddings import EmbeddingService, _cap_native_thread_pools, _load_model
 from nada_ai.settings import Settings
 
 
@@ -98,6 +99,31 @@ def test_encode_query_request_override_prompt_name():
 
     assert mock_model.encode.call_args.kwargs.get("prompt_name") == "web_search_query"
     assert "prompt" not in mock_model.encode.call_args.kwargs
+
+
+def test_cap_native_thread_pools_sets_all_expected_vars(monkeypatch):
+    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "TOKENIZERS_PARALLELISM"):
+        monkeypatch.delenv(var, raising=False)
+
+    _cap_native_thread_pools(4)
+
+    assert os.environ["OMP_NUM_THREADS"] == "4"
+    assert os.environ["MKL_NUM_THREADS"] == "4"
+    assert os.environ["OPENBLAS_NUM_THREADS"] == "4"
+    assert os.environ["TOKENIZERS_PARALLELISM"] == "false"
+
+
+def test_cap_native_thread_pools_respects_operators_own_setting(monkeypatch):
+    """An operator's own explicit env var (set independently of
+    NADA_EMBEDDING_NUM_THREADS in their deployment) must win — this only
+    fills in a default, never overrides."""
+    monkeypatch.setenv("OMP_NUM_THREADS", "8")
+    monkeypatch.delenv("TOKENIZERS_PARALLELISM", raising=False)
+
+    _cap_native_thread_pools(4)
+
+    assert os.environ["OMP_NUM_THREADS"] == "8"
+    assert os.environ["TOKENIZERS_PARALLELISM"] == "false"
 
 
 def test_encode_query_request_override_literal_prompt():
