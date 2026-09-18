@@ -34,7 +34,13 @@ services:
       # NADA_EMBEDDING_MODEL_ID: microsoft/harrier-oss-v1-270m
       NADA_QUERY_PROMPT_NAME: web_search_query
       HF_HOME: /models/huggingface
-      SENTENCE_TRANSFORMERS_HOME: /models/sentence_transformers
+      # Reuse the Hugging Face hub cache. A separate SENTENCE_TRANSFORMERS_HOME
+      # forces a second download via hf-xet (cas-server.xethub.hf.co), which hangs
+      # behind corporate TLS (UnknownIssuer) while warmup holds the request.
+      SENTENCE_TRANSFORMERS_HOME: /models/huggingface/hub
+      HF_HUB_OFFLINE: "1"
+      HF_HUB_DISABLE_XET: "1"
+      TRANSFORMERS_OFFLINE: "1"
       AI4DATA_DISCOVERY_DATA_PATH: /workspace/data/nada-discovery
       NADA_EMBEDDING_DEVICE: cpu
       # Optional: override Data Compass URL for ai4data discovery (see ai4data MetadataCatalogConfig).

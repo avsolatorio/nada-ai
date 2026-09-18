@@ -103,6 +103,19 @@ class QdrantSearchBackend:
             prefer_grpc=settings.qdrant_prefer_grpc,
         )
 
+    @property
+    def client(self) -> AsyncQdrantClient:
+        """Public accessor for the underlying Qdrant client.
+
+        Admin routes (``GET /admin/qdrant/collection``, the Qdrant branch of
+        ``GET /admin/embeddings/drift``) reach into this from ``app/admin.py``
+        via ``getattr(s.search, "client", None)`` — without this property that
+        always returned ``None`` (the real attribute is ``_client``), so those
+        routes permanently 503'd with "Qdrant search backend has no client"
+        regardless of whether Qdrant was actually reachable.
+        """
+        return self._client
+
     async def aclose(self) -> None:
         await self._client.close()
 

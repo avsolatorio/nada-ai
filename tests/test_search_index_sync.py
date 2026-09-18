@@ -13,9 +13,14 @@ from nada_ai.ingest.search_index_sync import (
     ack_item,
     apply_and_ack_queue_item,
     get_status,
+    list_diff_missing,
+    list_diff_stale,
     list_queue,
+    list_type_breakdown,
     lookup_metadata_type,
+    reconcile_diff_once,
     reconcile_once,
+    report_state_bulk,
 )
 from nada_ai.settings import Settings
 
@@ -256,3 +261,343 @@ def test_apply_and_ack_queue_item_falls_back_to_lookup_when_type_omitted():
 
     mock_lookup.assert_called_once()
     assert mock_index.call_args.kwargs["metadata_type"] == "indicator"
+
+
+# ---------------------------------------------------------------------------
+# report_state_bulk
+# ---------------------------------------------------------------------------
+
+
+def test_report_state_bulk_empty_items_is_a_noop():
+    with patch("nada_ai.ingest.search_index_sync.httpx.Client") as mock_client_cls:
+        result = report_state_bulk(_settings(), [])
+    mock_client_cls.assert_not_called()
+    assert result == {"applied": 0, "results": []}
+
+
+def test_report_state_bulk_single_chunk():
+    items = [{"object_type": "survey", "object_key": "A", "status": "indexed"}]
+    payload = {"status": "success", "applied": 1, "results": [{"object_key": "A", "applied": True}]}
+    client = _mock_sync_client(post=_resp(payload))
+    with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
+        result = report_state_bulk(_settings(), items)
+    client.post.assert_called_once()
+    assert client.post.call_args.args[0] == "/admin/search-index/state/bulk"
+    assert client.post.call_args.kwargs["json"] == {"items": items}
+    assert result == {"applied": 1, "results": [{"object_key": "A", "applied": True}]}
+
+
+def test_report_state_bulk_splits_into_multiple_chunks():
+    import nada_ai.ingest.search_index_sync as mod
+
+    items = [{"object_type": "survey", "object_key": f"I{i}", "status": "indexed"} for i in range(3)]
+    responses = [
+        _resp({"status": "success", "applied": 1, "results": [{"object_key": f"I{i}", "applied": True}]})
+        for i in range(3)
+    ]
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.__exit__.return_value = None
+    client.post.side_effect = responses
+
+    with patch.object(mod, "_STATE_BULK_CHUNK_SIZE", 1), \
+         patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
+        result = report_state_bulk(_settings(), items)
+
+    assert client.post.call_count == 3
+    assert result["applied"] == 3
+    assert len(result["results"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# list_diff_missing / list_diff_stale
+# ---------------------------------------------------------------------------
+
+
+def test_list_diff_missing_parses_page():
+    payload = {"status": "success", "items": [{"idno": "A", "type": "survey"}], "total": 5}
+    client = _mock_sync_client(get=_resp(payload))
+    with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
+        page = list_diff_missing(_settings(), object_type="survey", limit=10, offset=0)
+    assert page.total == 5
+    assert page.items[0].idno == "A"
+    assert page.items[0].type == "survey"
+    assert client.get.call_args.kwargs["params"] == {"object_type": "survey", "limit": 10, "offset": 0}
+
+
+def test_list_diff_missing_parses_last_error():
+    payload = {"status": "success", "items": [{"idno": "A", "type": "survey", "last_error": "boom"}, {"idno": "B", "type": "survey"}], "total": 2}
+    client = _mock_sync_client(get=_resp(payload))
+    with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
+        page = list_diff_missing(_settings(), object_type="survey", limit=10, offset=0)
+    assert page.items[0].last_error == "boom"
+    assert page.items[1].last_error is None
+
+
+def test_list_diff_missing_total_can_exceed_items_when_nothing_indexed():
+    """Empty catalog coverage must still report the real total, not look like 'nothing missing'."""
+    payload = {"status": "success", "items": [{"idno": "A", "type": "survey"}], "total": 8000}
+    client = _mock_sync_client(get=_resp(payload))
+    with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
+        page = list_diff_missing(_settings(), object_type="survey", limit=1)
+    assert page.total == 8000
+    assert len(page.items) == 1
+
+
+def test_list_type_breakdown_parses_items():
+    payload = {
+        "status": "success",
+        "object_type": "survey",
+        "items": [
+            {"data_type": "survey", "catalog_total": 1200, "indexed": 120, "missing": 1080, "stale": 0, "errors": 5},
+            {"data_type": "geospatial", "catalog_total": 40, "indexed": 38, "missing": 2, "stale": 1, "errors": 2},
+        ],
+    }
+    client = _mock_sync_client(get=_resp(payload))
+    with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
+        items = list_type_breakdown(_settings(), "survey")
+    assert len(items) == 2
+    assert items[0].data_type == "survey"
+    assert items[0].catalog_total == 1200
+    assert items[0].errors == 5
+    assert items[1].data_type == "geospatial"
+    assert items[1].stale == 1
+    assert items[1].errors == 2
+    assert client.get.call_args.kwargs["params"] == {"object_type": "survey"}
+
+
+def test_list_diff_stale_parses_page():
+    payload = {"status": "success", "items": [{"idno": "Z"}], "total": 1}
+    client = _mock_sync_client(get=_resp(payload))
+    with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
+        page = list_diff_stale(_settings(), object_type="survey")
+    assert page.total == 1
+    assert page.items[0].idno == "Z"
+    assert page.items[0].type is None
+
+
+def test_list_diff_missing_sends_data_type_when_given():
+    payload = {"status": "success", "items": [], "total": 0}
+    client = _mock_sync_client(get=_resp(payload))
+    with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
+        list_diff_missing(_settings(), object_type="survey", limit=10, offset=0, data_type="geospatial")
+    assert client.get.call_args.kwargs["params"] == {
+        "object_type": "survey",
+        "limit": 10,
+        "offset": 0,
+        "data_type": "geospatial",
+    }
+
+
+def test_list_diff_missing_omits_data_type_when_not_given():
+    payload = {"status": "success", "items": [], "total": 0}
+    client = _mock_sync_client(get=_resp(payload))
+    with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
+        list_diff_missing(_settings(), object_type="survey", limit=10, offset=0)
+    assert "data_type" not in client.get.call_args.kwargs["params"]
+
+
+def test_list_diff_missing_sends_has_error_when_true():
+    payload = {"status": "success", "items": [], "total": 0}
+    client = _mock_sync_client(get=_resp(payload))
+    with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
+        list_diff_missing(_settings(), object_type="survey", limit=10, offset=0, has_error=True)
+    assert client.get.call_args.kwargs["params"]["has_error"] == "1"
+
+
+def test_list_diff_missing_omits_has_error_when_false():
+    payload = {"status": "success", "items": [], "total": 0}
+    client = _mock_sync_client(get=_resp(payload))
+    with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
+        list_diff_missing(_settings(), object_type="survey", limit=10, offset=0)
+    assert "has_error" not in client.get.call_args.kwargs["params"]
+
+
+# ---------------------------------------------------------------------------
+# reconcile_diff_once
+# ---------------------------------------------------------------------------
+
+
+def _diff_page(items, total=None):
+    from nada_ai.ingest.search_index_sync import DiffItem, DiffPage
+
+    return DiffPage(items=[DiffItem(**i) for i in items], total=total if total is not None else len(items))
+
+
+def test_reconcile_diff_once_indexes_each_missing_item_with_resolved_type():
+    page = _diff_page([{"idno": "A", "type": "survey"}, {"idno": "B", "type": "geospatial"}])
+    empty_page = _diff_page([])
+    with patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[page, empty_page]), \
+         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page), \
+         patch(
+             "nada_ai.ingest.search_index_sync.index_ids_op",
+             return_value={"indexed": 1, "errors": [], "load_errors": [], "empty_docs": []},
+         ) as mock_index:
+        summary = reconcile_diff_once(_settings())
+
+    assert mock_index.call_count == 2
+    calls_by_idno = {c.kwargs["idnos"][0]: c.kwargs["metadata_type"] for c in mock_index.call_args_list}
+    assert calls_by_idno == {"A": "microdata", "B": "geospatial"}
+    assert summary["missing_total"] == 2
+    assert summary["indexed"] == 2
+    assert summary["failed"] == 0
+    assert summary["skipped"] == 0
+
+
+def test_reconcile_diff_once_counts_soft_failure_as_failed_not_indexed():
+    """index_ids_op doesn't raise for a per-idno failure (load error, empty
+    doc, backend write error) — it reports those in its return value. A call
+    that returns without raising must not be assumed to mean the idno was
+    actually indexed."""
+    page = _diff_page([{"idno": "BAD", "type": "geospatial"}])
+    empty_page = _diff_page([])
+    with patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[page, empty_page]), \
+         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page), \
+         patch(
+             "nada_ai.ingest.search_index_sync.index_ids_op",
+             return_value={
+                 "indexed": 0,
+                 "errors": [],
+                 "load_errors": [{"idno": "BAD", "metadata_type": "geospatial", "stage": "load", "error": "boom"}],
+                 "empty_docs": [],
+             },
+         ):
+        summary = reconcile_diff_once(_settings())
+
+    assert summary["indexed"] == 0
+    assert summary["failed"] == 1
+
+
+def test_reconcile_diff_once_passes_data_type_through_to_both_diff_calls():
+    empty_page = _diff_page([])
+    with patch("nada_ai.ingest.search_index_sync.list_diff_missing", return_value=empty_page) as mock_missing, \
+         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page) as mock_stale:
+        reconcile_diff_once(_settings(), data_type="geospatial")
+
+    assert mock_missing.call_args.kwargs["data_type"] == "geospatial"
+    assert mock_stale.call_args.kwargs["data_type"] == "geospatial"
+
+
+def test_reconcile_diff_once_skips_unmapped_dataset_type():
+    page = _diff_page([{"idno": "A", "type": "script"}])  # 'script' has no metadata_type mapping
+    empty_page = _diff_page([])
+    with patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[page, empty_page]), \
+         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page), \
+         patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index:
+        summary = reconcile_diff_once(_settings())
+
+    mock_index.assert_not_called()
+    assert summary["skipped"] == 1
+    assert summary["indexed"] == 0
+
+
+def test_reconcile_diff_once_deletes_stale_items_in_one_batch_call():
+    empty_missing = _diff_page([])
+    stale_page = _diff_page([{"idno": "X"}, {"idno": "Y"}])
+    empty_stale = _diff_page([])
+    with patch("nada_ai.ingest.search_index_sync.list_diff_missing", return_value=empty_missing), \
+         patch("nada_ai.ingest.search_index_sync.list_diff_stale", side_effect=[stale_page, empty_stale]), \
+         patch("nada_ai.ingest.search_index_sync.delete_by_idnos_op") as mock_delete:
+        summary = reconcile_diff_once(_settings())
+
+    mock_delete.assert_called_once()
+    assert set(mock_delete.call_args.args[1]) == {"X", "Y"}
+    assert summary["stale_total"] == 2
+    assert summary["deleted"] == 2
+
+
+def test_reconcile_diff_once_terminates_when_an_item_keeps_failing():
+    """The 'missing' diff re-fetches from offset 0 every iteration (the set
+    shrinks as items succeed) — an item that keeps failing stays in NADA's
+    diff forever (correctly: it's genuinely still not indexed), so this must
+    not loop forever retrying it. Simulates 200 re-fetches all returning the
+    exact same permanently-broken item, plus one that succeeds and should
+    disappear next iteration."""
+    stuck_page = _diff_page([{"idno": "STUCK", "type": "survey"}])
+    empty_page = _diff_page([])
+
+    with patch(
+        "nada_ai.ingest.search_index_sync.list_diff_missing",
+        side_effect=[stuck_page] * 200 + [empty_page],
+    ), \
+         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page), \
+         patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=RuntimeError("permanently broken")):
+        summary = reconcile_diff_once(_settings())
+
+    # Attempted exactly once despite appearing on every re-fetch, and terminated.
+    assert summary["failed"] == 1
+    assert summary["indexed"] == 0
+
+
+def test_reconcile_diff_once_summary_shape():
+    empty_page = _diff_page([])
+    with patch("nada_ai.ingest.search_index_sync.list_diff_missing", return_value=empty_page), \
+         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page):
+        summary = reconcile_diff_once(_settings())
+
+    assert summary == {
+        "missing_total": 0,
+        "stale_total": 0,
+        "indexed": 0,
+        "deleted": 0,
+        "failed": 0,
+        "skipped": 0,
+    }
+
+
+def test_reconcile_diff_once_reports_progress_per_idno():
+    """Jobs reads progress.total/processed/percent/failed/current_idno — the
+    same snapshot shape ingest already emits via IngestProgressTracker."""
+    missing = _diff_page([{"idno": "A", "type": "survey"}, {"idno": "B", "type": "geospatial"}])
+    stale = _diff_page([{"idno": "X"}])
+    empty = _diff_page([])
+    snapshots: list[dict] = []
+
+    with patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[missing, empty]), \
+         patch("nada_ai.ingest.search_index_sync.list_diff_stale", side_effect=[stale, empty]), \
+         patch(
+             "nada_ai.ingest.search_index_sync.index_ids_op",
+             return_value={"indexed": 1, "errors": [], "load_errors": [], "empty_docs": []},
+         ), \
+         patch("nada_ai.ingest.search_index_sync.delete_by_idnos_op"):
+        summary = reconcile_diff_once(_settings(), progress_cb=snapshots.append)
+
+    assert summary["indexed"] == 2
+    assert summary["deleted"] == 1
+    assert snapshots[0] == {
+        "processed": 0,
+        "total": 3,
+        "failed": 0,
+        "current_idno": None,
+        "percent": 0.0,
+        "phase": "missing",
+    }
+    assert [s["current_idno"] for s in snapshots[1:]] == ["A", "B", "X"]
+    assert snapshots[-1]["processed"] == 3
+    assert snapshots[-1]["percent"] == 100.0
+    assert snapshots[-1]["phase"] == "stale"
+    assert all("total" in s and "failed" in s for s in snapshots)
+
+
+def test_reconcile_diff_once_stops_when_cancel_token_is_set():
+    from nada_ai.ingest.progress import CancelToken
+
+    missing = _diff_page([{"idno": "A", "type": "survey"}, {"idno": "B", "type": "geospatial"}])
+    empty = _diff_page([])
+    token = CancelToken()
+    indexed: list[str] = []
+
+    def index_one(settings, idnos, **kwargs):
+        indexed.append(idnos[0])
+        token.set()
+        return {"indexed": 1, "errors": [], "load_errors": [], "empty_docs": []}
+
+    with patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[missing, empty]), \
+         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty), \
+         patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=index_one):
+        summary = reconcile_diff_once(_settings(), cancel_token=token)
+
+    assert indexed == ["A"]
+    assert summary["indexed"] == 1
+    assert summary["cancelled"] is True
+    assert summary["deleted"] == 0

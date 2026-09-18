@@ -8,6 +8,7 @@ from ai4data.discovery.catalog import get_langdoc_uuid
 from ai4data.discovery.metadata.handler import MetadataLoader
 from tqdm.auto import tqdm
 
+from nada_ai.ingest.progress import CancelToken, IngestProgressTracker
 from nada_ai.ingest.quality import QualityReport
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
 from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, index_body
@@ -89,14 +90,40 @@ def iter_langdoc_records(
     pairs: Iterable[tuple[str, str]],
     force: bool = False,
     show_progress_bar: bool = True,
-    buffer_size: int = 1000,
+    buffer_size: int = 200,
     quality_report: QualityReport | None = None,
+    progress: IngestProgressTracker | None = None,
+    cancel_token: CancelToken | None = None,
+    load_errors: list[dict[str, Any]] | None = None,
+    empty_docs: list[dict[str, Any]] | None = None,
 ) -> Iterator[tuple[str, list[float] | None, dict[str, Any]]]:
     """Yield ``(document_id, embedding_or_none_if_ml_backend, source_payload)`` for each langdoc row.
 
     ``quality_report``, if given, observes every ``source`` payload as it's
     built (see ``ingest/quality.py``) — purely additive, never skips or
     rejects a document.
+
+    ``progress``, if given, is stepped once per ``(idno, metadata_type)`` row
+    (after that row's documents are loaded/skipped, regardless of outcome) —
+    this is also what persists the resume checkpoint (see ``ingest/progress.py``).
+
+    ``cancel_token``, if given, is checked once per row; when set, the loop
+    stops yielding immediately (whatever is already buffered still gets
+    flushed by the caller) instead of running the remaining rows to
+    completion — see ``CancelToken`` for why this matters more than it looks.
+
+    ``load_errors``, if given, collects one entry per row whose
+    ``MetadataLoader`` call itself raised — previously these were silently
+    logged and skipped, so a job's ``indexed`` count could be lower than
+    ``requested``/``rows`` with no record anywhere of which idno or why.
+
+    ``empty_docs``, if given, collects one entry per row that loaded without
+    error but produced zero indexable content (no langdocs at all, or every
+    langdoc's ``page_content`` was empty/whitespace) — distinct from
+    ``load_errors`` (the loader itself failed) and from ``quality`` (observes
+    documents that *were* built). Without this, these rows counted as
+    "processed" with no trace anywhere of why they contributed nothing to
+    ``indexed``.
 
     Also fetches and bakes in NADA's dynamic ``filter_fields``/``filter_facets``
     for each idno (see ``_fetch_filter_payload``), so bulk-indexed documents
@@ -148,17 +175,32 @@ def iter_langdoc_records(
         pairs_iter = tqdm(pairs, total=total_rows, unit="row", desc="Load metadata")
 
     for idno, metadata_type in pairs_iter:
+        if cancel_token is not None and cancel_token.is_set():
+            logger.info("Ingest cancelled before idno=%s %s; stopping early", metadata_type, idno)
+            break
         try:
             loader = MetadataLoader(idno=idno, metadata_type=metadata_type, force=force, include_resources=True)
             raw = loader.metadata
             docs = loader.get_metadata_handler().get_langdocs()
         except Exception as e:
             logger.warning("Skip %s %s: %s", metadata_type, idno, e)
+            if load_errors is not None:
+                load_errors.append({"idno": idno, "metadata_type": metadata_type, "stage": "load", "error": str(e)})
+            if progress is not None:
+                progress.mark(idno, ok=False, error=str(e))
             continue
         if not docs:
+            if empty_docs is not None:
+                empty_docs.append({"idno": idno, "metadata_type": metadata_type, "reason": "no_langdocs"})
+            if progress is not None:
+                progress.mark(idno, ok=True)
             continue
         non_empty = [d for d in docs if d.page_content and str(d.page_content).strip()]
         if not non_empty:
+            if empty_docs is not None:
+                empty_docs.append({"idno": idno, "metadata_type": metadata_type, "reason": "empty_page_content"})
+            if progress is not None:
+                progress.mark(idno, ok=True)
             continue
         raw_meta = raw if metadata_type == "microdata" else None
         filter_fields, filter_facets = _fetch_filter_payload(settings, idno, raw)
@@ -166,6 +208,8 @@ def iter_langdoc_records(
             buffer.append((doc, raw_meta, filter_fields, filter_facets))
             if len(buffer) >= buffer_size:
                 yield from flush()
+        if progress is not None:
+            progress.mark(idno, ok=True)
 
     yield from flush()
 
@@ -176,8 +220,12 @@ def iter_bulk_actions(
     pairs: Iterable[tuple[str, str]],
     force: bool = False,
     show_progress_bar: bool = True,
-    buffer_size: int = 1000,
+    buffer_size: int = 200,
     quality_report: QualityReport | None = None,
+    progress: IngestProgressTracker | None = None,
+    cancel_token: CancelToken | None = None,
+    load_errors: list[dict[str, Any]] | None = None,
+    empty_docs: list[dict[str, Any]] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """pairs: (idno, metadata_type).
 
@@ -193,6 +241,10 @@ def iter_bulk_actions(
         show_progress_bar=show_progress_bar,
         buffer_size=buffer_size,
         quality_report=quality_report,
+        progress=progress,
+        cancel_token=cancel_token,
+        load_errors=load_errors,
+        empty_docs=empty_docs,
     ):
         if use_ml:
             yield {
@@ -217,9 +269,13 @@ def run_bulk_index(
     force: bool = False,
     recreate_index: bool = False,
     show_progress_bar: bool = True,
-    buffer_size: int = 1000,
+    buffer_size: int = 200,
     embedding: EmbeddingService | None = None,
     quality_report: QualityReport | None = None,
+    progress: IngestProgressTracker | None = None,
+    cancel_token: CancelToken | None = None,
+    load_errors: list[dict[str, Any]] | None = None,
+    empty_docs: list[dict[str, Any]] | None = None,
 ) -> tuple[int, list | None]:
     from nada_ai.ingest.factory import create_ingest_writer
 
@@ -232,6 +288,10 @@ def run_bulk_index(
         buffer_size=buffer_size,
         quality_report=quality_report,
         embedding=embedding,
+        progress=progress,
+        cancel_token=cancel_token,
+        load_errors=load_errors,
+        empty_docs=empty_docs,
     )
 
 

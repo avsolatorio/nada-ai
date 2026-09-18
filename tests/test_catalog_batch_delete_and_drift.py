@@ -116,6 +116,7 @@ def test_delete_by_idnos_op_dispatches_by_backend(monkeypatch):
 
     class FakeSettings:
         search_backend = "qdrant"
+        report_search_index_state_enabled = False
 
     delete_by_idnos_op(FakeSettings(), ["X", "Y"])
     assert calls == [("qdrant", ["X", "Y"])]
@@ -124,6 +125,7 @@ def test_delete_by_idnos_op_dispatches_by_backend(monkeypatch):
 
     class FakeSettingsOS:
         search_backend = "opensearch"
+        report_search_index_state_enabled = False
 
     delete_by_idnos_op(FakeSettingsOS(), ["Z"])
     assert calls == [("opensearch", ["Z"])]

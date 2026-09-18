@@ -9,7 +9,6 @@ from typing import Any
 
 from nada_ai.ingest.quality import QualityReport, check_source_document
 
-
 # ── pure function / accumulator tests ──────────────────────────────────────
 
 
@@ -176,6 +175,7 @@ def test_index_ids_op_includes_quality_report(monkeypatch):
     class FakeSettings:
         search_backend = "qdrant"
         qdrant_collection = "test-coll"
+        report_search_index_state_enabled = False
 
     result = service_module.index_ids_op(FakeSettings(), ["A", "B"], "indicator")
 

@@ -14,20 +14,23 @@ Mutating operations write an entry to the audit trail (``app/audit.py``).
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import logging
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from opensearchpy.exceptions import NotFoundError
 
+from nada_ai.app._ingest import guarded_ingest
 from nada_ai.app.admin_schemas import (
+    CatalogTypeJobResult,
     CreateIndexRequest,
     DeleteDocsResponse,
     EncodeRequest,
     EncodeResponse,
-    CatalogTypeJobResult,
     GetFiltersResponse,
     IndexFromCatalogAllRequest,
     IndexFromCatalogAllResponse,
@@ -39,22 +42,23 @@ from nada_ai.app.admin_schemas import (
     SyncFiltersRequest,
     SyncFiltersResponse,
 )
-from nada_ai.app._ingest import guarded_ingest
 from nada_ai.app.audit import audit_log
 from nada_ai.app.auth import ADMIN_API_KEY_ENV, Principal, require_role
 from nada_ai.app.jobs import Job, JobStatus
 from nada_ai.app.keys_store import Role
 from nada_ai.app.state import AppState, ensure_embedding_initialized, get_state
+from nada_ai.filters.service import (
+    ensure_filter_indexes_op_service,
+    get_filters_op,
+    sync_filters_op,
+)
+from nada_ai.ingest.progress import CancelToken
+from nada_ai.ingest.search_index_sync import SearchIndexStatus
 from nada_ai.ingest.service import (
     create_index_op,
     index_from_catalog_op,
     put_index_template_op,
     setup_ingest_pipeline_op,
-)
-from nada_ai.filters.service import (
-    ensure_filter_indexes_op_service,
-    get_filters_op,
-    sync_filters_op,
 )
 from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, metadata_field
 from nada_ai.search.backend.opensearch.ml.setup import ingest_pipeline_definition
@@ -95,8 +99,10 @@ async def _submit_or_409(
     factory,
     params: dict[str, Any],
     principal: Principal | None = None,
+    job_id: str | None = None,
+    cancel_token: CancelToken | None = None,
 ) -> JSONResponse:
-    job = await s.jobs.submit(kind=kind, key=key, factory=factory, params=params)
+    job = await s.jobs.submit(kind=kind, key=key, factory=factory, params=params, job_id=job_id, cancel_token=cancel_token)
     payload = _job_envelope(job)
     if principal is not None:
         await audit_log(
@@ -181,6 +187,14 @@ async def admin_ingest_from_catalog(
     recreate_index = body.recreate_index
     show_progress_bar = body.show_progress_bar
     buffer_size = body.buffer_size
+    resume = body.resume
+
+    # Pre-generated so the factory can report progress against this job's id,
+    # and so a cancel_token exists to hand JobRegistry before we know whether
+    # this job will actually be the one that runs (single-flight may instead
+    # return an already-running job under a different id — see submit()).
+    job_id = uuid.uuid4().hex
+    cancel_token = CancelToken()
 
     async def factory() -> dict[str, Any]:
         return await guarded_ingest(
@@ -194,6 +208,9 @@ async def admin_ingest_from_catalog(
             recreate_index,
             show_progress_bar,
             buffer_size,
+            resume=resume,
+            progress_cb=functools.partial(s.jobs.set_progress, job_id),
+            cancel_token=cancel_token,
         )
 
     return await _submit_or_409(
@@ -208,8 +225,11 @@ async def admin_ingest_from_catalog(
             "force": force,
             "recreate_index": recreate_index,
             "buffer_size": buffer_size,
+            "resume": resume,
         },
         principal=principal,
+        job_id=job_id,
+        cancel_token=cancel_token,
     )
 
 
@@ -249,8 +269,12 @@ async def admin_ingest_from_catalog_all(
 
     results: list[CatalogTypeJobResult] = []
     for catalog_type in _CATALOG_TYPES:
+        job_id = uuid.uuid4().hex
+        cancel_token = CancelToken()
 
-        async def factory(catalog_type: str = catalog_type) -> dict[str, Any]:
+        async def factory(
+            catalog_type: str = catalog_type, job_id: str = job_id, cancel_token: CancelToken = cancel_token
+        ) -> dict[str, Any]:
             return await guarded_ingest(
                 s,
                 index_from_catalog_op,
@@ -262,6 +286,9 @@ async def admin_ingest_from_catalog_all(
                 False,
                 body.show_progress_bar,
                 body.buffer_size,
+                resume=body.resume,
+                progress_cb=functools.partial(s.jobs.set_progress, job_id),
+                cancel_token=cancel_token,
             )
 
         job = await s.jobs.submit(
@@ -274,7 +301,10 @@ async def admin_ingest_from_catalog_all(
                 "limit": body.limit,
                 "force": body.force,
                 "buffer_size": body.buffer_size,
+                "resume": body.resume,
             },
+            job_id=job_id,
+            cancel_token=cancel_token,
         )
         results.append(
             CatalogTypeJobResult(
@@ -292,6 +322,88 @@ async def admin_ingest_from_catalog_all(
         status="submitted",
     )
     return IndexFromCatalogAllResponse(recreated=body.recreate_index, jobs=results)
+
+
+#: catalog_type (what /admin/ingest/from-catalog accepts and what NADA's own
+#: search API's `type` param expects) -> the stored `metadata.type` value
+#: langdocs actually get indexed under. These differ for two of the four —
+#: confirmed against live data, not assumed: a dashboard comparing "catalog
+#: total" against "indexed count" must filter Qdrant on the right-hand side.
+_STORED_TYPE_BY_CATALOG_TYPE: dict[str, str] = {
+    "document": "document",
+    "timeseries": "indicator",
+    "survey": "microdata",
+    "geospatial": "geospatial",
+}
+
+
+def _fetch_catalog_totals() -> dict[str, int | None]:
+    """One lightweight ``ps=1`` search per catalog_type against NADA's own catalog API.
+
+    Reuses the same ``search_metadata`` call ``index_from_catalog_op`` already
+    makes to fetch rows — but here only for its ``found`` field (the catalog's
+    own total count for that type), which every backend (classic search and
+    extract mode) already returns and pagination already relies on internally;
+    it was just never surfaced past that point until now. No full page/row
+    fetch needed to get a total.
+    """
+    from ai4data.discovery.catalog.http import search_metadata
+
+    totals: dict[str, int | None] = {}
+    for catalog_type in _CATALOG_TYPES:
+        try:
+            data = search_metadata({"type": catalog_type, "ps": 1})
+            totals[catalog_type] = int(data.get("found") or 0)
+        except Exception as e:  # noqa: BLE001 - one type's catalog being unreachable must not blank the rest
+            logger.warning("catalog total fetch failed for catalog_type=%s: %s", catalog_type, e)
+            totals[catalog_type] = None
+    return totals
+
+
+@admin_router.get("/admin/catalog/type-counts", dependencies=[Depends(require_role(Role.read))])
+async def admin_catalog_type_counts(s: AppState = Depends(get_state)) -> dict[str, Any]:
+    """Per catalog_type: how many entries NADA's catalog has vs. how many
+    documents are indexed for that type — the "is my catalog actually
+    searchable" number the dashboard has no way to show today.
+
+    ``indexed_documents`` counts Qdrant *documents*, not catalog entries — an
+    idno can produce more than one document (e.g. multiple resource files per
+    document/geospatial record), so this is not a 1:1 comparison against
+    ``catalog_total``; it is the closest cheap proxy without a distinct-idno
+    count, which Qdrant has no efficient primitive for on top of ~1700+ points.
+    """
+    if s.settings.search_backend != "qdrant":
+        raise HTTPException(
+            status_code=400,
+            detail="This route is only available when NADA_SEARCH_BACKEND=qdrant.",
+        )
+    client = getattr(s.search, "client", None)
+    if client is None:
+        raise HTTPException(status_code=503, detail="Qdrant search backend has no client")
+
+    from nada_ai.search.canonical import stored_filter_field_name
+
+    try:
+        facet_resp = await client.facet(
+            collection_name=s.settings.qdrant_collection,
+            key=stored_filter_field_name("type"),
+            limit=200,
+        )
+    except Exception as e:
+        logger.error("catalog type-counts facet query failed: %s", e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
+    indexed_by_stored_type = {h.value: int(h.count) for h in (facet_resp.hits or [])}
+
+    catalog_totals = await asyncio.to_thread(_fetch_catalog_totals)
+
+    types: dict[str, dict[str, Any]] = {}
+    for catalog_type in _CATALOG_TYPES:
+        stored_type = _STORED_TYPE_BY_CATALOG_TYPE[catalog_type]
+        types[catalog_type] = {
+            "catalog_total": catalog_totals.get(catalog_type),
+            "indexed_documents": indexed_by_stored_type.get(stored_type, 0),
+        }
+    return {"types": types}
 
 
 @admin_router.get(
@@ -506,6 +618,39 @@ async def admin_qdrant_collection(s: AppState = Depends(get_state)) -> dict[str,
     return {"collection": coll, "info": payload}
 
 
+@admin_router.delete("/admin/qdrant/collection")
+async def admin_qdrant_collection_delete(
+    confirm: bool = Query(default=False, description="Must be true to actually drop the collection."),
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.admin)),
+) -> dict[str, Any]:
+    """Drop the Qdrant collection — no reindex. Parity with ``DELETE /admin/index``
+    (OpenSearch), which previously had no Qdrant equivalent (this route 501'd
+    the same way every other OpenSearch-only admin route does under
+    ``NADA_SEARCH_BACKEND=qdrant``, so "delete the index" was only reachable
+    bundled inside ``recreate_index=True`` on a full reindex call).
+    """
+    if s.settings.search_backend != "qdrant":
+        raise HTTPException(
+            status_code=400,
+            detail="This route is only available when NADA_SEARCH_BACKEND=qdrant.",
+        )
+    if not confirm:
+        raise HTTPException(status_code=400, detail="add ?confirm=true to drop the collection")
+    client = getattr(s.search, "client", None)
+    if client is None:
+        raise HTTPException(status_code=503, detail="Qdrant search backend has no client")
+    coll = s.settings.qdrant_collection
+    try:
+        await client.delete_collection(collection_name=coll)
+    except Exception as e:
+        logger.error("qdrant delete_collection failed: %s", e)
+        await audit_log(s, principal, action="qdrant_collection.delete", target=coll, status="error", detail=str(e))
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
+    await audit_log(s, principal, action="qdrant_collection.delete", target=coll, status="ok")
+    return {"collection": coll, "deleted": True}
+
+
 @admin_router.get("/admin/embeddings/drift", dependencies=[Depends(require_role(Role.read))])
 async def admin_embedding_drift(s: AppState = Depends(get_state)) -> dict[str, Any]:
     """Compare the configured embedding model's dimension against what's stored in the index/collection.
@@ -646,6 +791,210 @@ async def admin_ingest_reconcile(
     result = await poll_once(s)
     await audit_log(s, principal, action="search_index.reconcile", target="-", status="submitted")
     return ReconcileSearchIndexResponse(**result)
+
+
+@admin_router.get(
+    "/admin/search-index/status",
+    response_model=SearchIndexStatus,
+    dependencies=[Depends(require_role(Role.read))],
+)
+async def admin_search_index_status(s: AppState = Depends(get_state)) -> SearchIndexStatus:
+    """NADA's search-index queue/tracking status for this instance.
+
+    HTTP wrapper around the same ``get_status`` call the ``search_index_status``
+    CLI command and the in-process reconciliation scheduler already use (see
+    ``ingest/search_index_sync.py``) — lets a dashboard show ``tracking_enabled``
+    and queue/state counts without shelling into the CLI.
+    """
+    from nada_ai.ingest.search_index_sync import SearchIndexSyncError, get_status
+
+    try:
+        return await asyncio.to_thread(get_status, s.settings)
+    except SearchIndexSyncError as e:
+        # Not configured (e.g. no catalog/search-index URL) — a client error, not a backend outage.
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.error("search-index status check failed: %s", e)
+        raise HTTPException(status_code=503, detail="search-index status check failed") from e
+
+
+@admin_router.get(
+    "/admin/search-index/diff/missing",
+    dependencies=[Depends(require_role(Role.read))],
+)
+async def admin_search_index_diff_missing_list(
+    object_type: str = Query(default="survey", description="NADA object_type — 'survey' or 'citation'."),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    data_type: str | None = Query(default=None, description="Narrow to one surveys.type value, e.g. 'geospatial'."),
+    has_error: bool = Query(default=False, description="Only rows with a recorded last_error (genuinely failed, not just never attempted)."),
+    s: AppState = Depends(get_state),
+) -> dict[str, Any]:
+    """Paginated list of catalog entries with no current 'indexed' state row —
+    the actual idnos behind ``diff-summary``'s ``missing_total``. Thin HTTP
+    wrapper around ``ingest.search_index_sync.list_diff_missing``, which
+    ``reconcile_diff_once`` already uses internally; this exposes the same
+    data for a dashboard to browse rather than just act on."""
+    from nada_ai.ingest.search_index_sync import SearchIndexSyncError, list_diff_missing
+
+    try:
+        page = await asyncio.to_thread(
+            list_diff_missing,
+            s.settings,
+            object_type=object_type,
+            limit=limit,
+            offset=offset,
+            data_type=data_type,
+            has_error=has_error,
+        )
+    except SearchIndexSyncError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.error("search-index diff/missing list failed: %s", e)
+        raise HTTPException(status_code=503, detail="search-index diff/missing failed") from e
+    return page.model_dump()
+
+
+@admin_router.get(
+    "/admin/search-index/diff/stale",
+    dependencies=[Depends(require_role(Role.read))],
+)
+async def admin_search_index_diff_stale_list(
+    object_type: str = Query(default="survey", description="NADA object_type — 'survey' or 'citation'."),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    data_type: str | None = Query(default=None, description="Narrow to one surveys.type value, e.g. 'geospatial'."),
+    s: AppState = Depends(get_state),
+) -> dict[str, Any]:
+    """Paginated list of 'indexed' state rows whose catalog entry is gone entirely —
+    the actual idnos behind ``diff-summary``'s ``stale_total``."""
+    from nada_ai.ingest.search_index_sync import SearchIndexSyncError, list_diff_stale
+
+    try:
+        page = await asyncio.to_thread(
+            list_diff_stale, s.settings, object_type=object_type, limit=limit, offset=offset, data_type=data_type
+        )
+    except SearchIndexSyncError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.error("search-index diff/stale list failed: %s", e)
+        raise HTTPException(status_code=503, detail="search-index diff/stale failed") from e
+    return page.model_dump()
+
+
+@admin_router.get(
+    "/admin/search-index/diff-summary",
+    dependencies=[Depends(require_role(Role.read))],
+)
+async def admin_search_index_diff_summary(
+    object_type: str = Query(default="survey", description="NADA object_type — 'survey' or 'citation'."),
+    s: AppState = Depends(get_state),
+) -> dict[str, Any]:
+    """Missing/stale counts plus the catalog-vs-index totals for object_type —
+    one ``limit=1`` page from each of NADA's diff endpoints (read only for
+    ``total``), plus NADA's own catalog/state summary. Distinct from
+    ``POST .../reconcile-diff`` below, which actually resolves the diff; this
+    just reports its size, e.g. for a dashboard to show before triggering
+    that (or to confirm a previous run actually cleared it)."""
+    from nada_ai.ingest.search_index_sync import (
+        SearchIndexSyncError,
+        get_object_type_summary,
+        list_diff_missing,
+        list_diff_stale,
+    )
+
+    try:
+        missing = await asyncio.to_thread(list_diff_missing, s.settings, object_type=object_type, limit=1)
+        stale = await asyncio.to_thread(list_diff_stale, s.settings, object_type=object_type, limit=1)
+        summary = await asyncio.to_thread(get_object_type_summary, s.settings, object_type)
+    except SearchIndexSyncError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.error("search-index diff-summary failed: %s", e)
+        raise HTTPException(status_code=503, detail="search-index diff-summary failed") from e
+    return {
+        "object_type": object_type,
+        "catalog_total": summary.catalog_total,
+        "state": summary.state,
+        "missing_total": missing.total,
+        "stale_total": stale.total,
+    }
+
+
+@admin_router.get(
+    "/admin/search-index/type-breakdown",
+    dependencies=[Depends(require_role(Role.read))],
+)
+async def admin_search_index_type_breakdown(
+    object_type: str = Query(default="survey", description="NADA object_type — 'survey' or 'citation'."),
+    s: AppState = Depends(get_state),
+) -> dict[str, Any]:
+    """Per-surveys.type (microdata/geospatial/document/timeseries/...) catalog
+    vs. index coverage — what ``diff-summary`` above can't show since it lumps
+    every type under one 'survey' total."""
+    from nada_ai.ingest.search_index_sync import SearchIndexSyncError, list_type_breakdown
+
+    try:
+        items = await asyncio.to_thread(list_type_breakdown, s.settings, object_type)
+    except SearchIndexSyncError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.error("search-index type-breakdown failed: %s", e)
+        raise HTTPException(status_code=503, detail="search-index type-breakdown failed") from e
+    return {"object_type": object_type, "items": [i.model_dump() for i in items]}
+
+
+@admin_router.post("/admin/search-index/reconcile-diff")
+async def admin_search_index_reconcile_diff(
+    object_type: str = Query(default="survey", description="NADA object_type — 'survey' or 'citation'."),
+    data_type: str | None = Query(
+        default=None, description="Narrow to one surveys.type value, e.g. 'geospatial' — omit to reconcile all of object_type."
+    ),
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
+    """Resolve NADA's DB-vs-index diff for object_type (optionally narrowed to
+    one data_type): index everything NADA's catalog has that isn't currently
+    indexed, delete everything indexed that's no longer in NADA's catalog —
+    see ``ingest.search_index_sync.reconcile_diff_once``.
+
+    This is the same call whether it's a first-ever run against a fresh
+    deployment (where "missing" is simply the whole catalog — this doubles as
+    a backfill) or a routine later reconciliation (only genuine drift
+    surfaces). Runs as a background job (unlike the queue-driven
+    ``/admin/ingest/reconcile`` above, which only *submits* work — this one
+    does the indexing/deleting itself and can take a while against a large
+    diff), single-flighted per (object_type, data_type) so reconciling one
+    data type doesn't block or collide with another running concurrently.
+    Live progress is written to the job the same way as ``index_from_catalog``.
+    """
+    from nada_ai.ingest.search_index_sync import reconcile_diff_once
+
+    settings = s.settings
+    job_id = uuid.uuid4().hex
+    cancel_token = CancelToken()
+
+    async def factory() -> dict[str, Any]:
+        return await guarded_ingest(
+            s,
+            reconcile_diff_once,
+            settings,
+            object_type=object_type,
+            data_type=data_type,
+            progress_cb=functools.partial(s.jobs.set_progress, job_id),
+            cancel_token=cancel_token,
+        )
+
+    return await _submit_or_409(
+        s,
+        kind="search_index_reconcile_diff",
+        key=f"search_index_reconcile_diff:{object_type}:{data_type or 'all'}",
+        factory=factory,
+        params={"object_type": object_type, "data_type": data_type},
+        principal=principal,
+        job_id=job_id,
+        cancel_token=cancel_token,
+    )
 
 
 @jobs_router.get("/jobs", response_model=JobListResponse, dependencies=[Depends(require_role(Role.read))])

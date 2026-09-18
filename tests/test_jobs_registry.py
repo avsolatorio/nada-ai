@@ -6,8 +6,11 @@ Tests use ``asyncio.run`` to avoid a pytest-asyncio dependency.
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 
 from nada_ai.app.jobs import JobRegistry, JobStatus
+from nada_ai.ingest.progress import CancelToken
 
 
 async def _wait_status(registry: JobRegistry, job_id: str, status: JobStatus, timeout: float = 2.0) -> None:
@@ -167,6 +170,100 @@ def test_get_unknown_id_returns_none():
         registry = JobRegistry()
         assert registry.get("nope") is None
         assert (await registry.cancel("nope")) is None
+
+    asyncio.run(main())
+
+
+def test_submit_with_explicit_job_id_uses_it():
+    async def main():
+        registry = JobRegistry()
+
+        async def factory():
+            return {"ok": True}
+
+        job = await registry.submit("k", "key", factory, params={}, job_id="my-fixed-id")
+        assert job.id == "my-fixed-id"
+        await _wait_status(registry, "my-fixed-id", JobStatus.succeeded)
+
+    asyncio.run(main())
+
+
+def test_set_progress_updates_job_snapshot():
+    async def main():
+        registry = JobRegistry()
+        gate = asyncio.Event()
+
+        async def factory():
+            await gate.wait()
+            return {"ok": True}
+
+        job = await registry.submit("k", "key", factory, params={}, job_id="job-1")
+        registry.set_progress("job-1", {"processed": 5, "total": 10})
+        snap = registry.get("job-1")
+        assert snap is not None
+        assert snap.progress == {"processed": 5, "total": 10}
+
+        gate.set()
+        await _wait_status(registry, job.id, JobStatus.succeeded)
+
+    asyncio.run(main())
+
+
+def test_set_progress_on_unknown_job_is_a_noop():
+    registry = JobRegistry()
+    registry.set_progress("nope", {"processed": 1})  # must not raise
+
+
+def test_cancel_signals_cancel_token_for_thread_backed_work():
+    """The realistic shape: work runs synchronously in a worker thread via
+    ``asyncio.to_thread`` (as every ingest job does), not as a plain coroutine.
+
+    ``task.cancel()`` alone cancels the *wrapping* coroutine almost
+    immediately — the job's status flips to ``cancelled`` right away — but
+    does nothing to the OS thread still executing ``slow_sync`` in the
+    background; that thread only stops promptly because it's checking
+    ``cancel_token`` itself. This is exactly why ``JobRegistry.cancel``
+    signals both.
+    """
+
+    async def main():
+        registry = JobRegistry()
+        started = threading.Event()
+        finished = threading.Event()
+        token = CancelToken()
+
+        def slow_sync():
+            started.set()
+            for _ in range(200):
+                if token.is_set():
+                    finished.set()
+                    return {"stopped_early": True}
+                time.sleep(0.01)
+            finished.set()
+            return {"never": True}
+
+        async def factory():
+            return await asyncio.to_thread(slow_sync)
+
+        j = await registry.submit("k", "key", factory, params={}, cancel_token=token)
+
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + 1.0
+        while not started.is_set() and loop.time() < deadline:
+            await asyncio.sleep(0.01)
+        assert started.is_set()
+
+        await registry.cancel(j.id)
+        # The wrapping asyncio.Task is cancelled promptly...
+        await _wait_status(registry, j.id, JobStatus.cancelled)
+        # ...but the still-running background thread only stops because the
+        # cancel_token was set, not because of task.cancel() itself.
+        assert token.is_set()
+
+        deadline = loop.time() + 1.0
+        while not finished.is_set() and loop.time() < deadline:
+            await asyncio.sleep(0.01)
+        assert finished.is_set()
 
     asyncio.run(main())
 

@@ -45,6 +45,7 @@ resolve, instead of retrying forever or corrupting the index with a wrong type.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any, Literal
 
 import ai4data.discovery.catalog.extract as catalog_extract
@@ -52,7 +53,8 @@ import httpx
 from ai4data.discovery.config import metadata_catalog
 from pydantic import BaseModel
 
-from nada_ai.ingest.service import delete_by_idno_op, index_ids_op
+from nada_ai.ingest.progress import CancelToken
+from nada_ai.ingest.service import delete_by_idno_op, delete_by_idnos_op, index_ids_op
 from nada_ai.nada.admin_auth import resolve_admin_cookies, resolve_admin_headers
 from nada_ai.settings import Settings
 
@@ -110,6 +112,40 @@ class SearchIndexStatus(BaseModel):
     state: dict[str, int] = {}
 
 
+class DiffItem(BaseModel):
+    idno: str
+    type: str | None = None  # only present on diff_missing; NADA's surveys.type for this idno
+    last_error: str | None = None  # the reported error, if this idno's last attempt failed
+
+
+class ObjectTypeSummary(BaseModel):
+    """How many catalog entries of object_type exist vs. their
+    search_index_state breakdown — scoped to one object_type, unlike
+    :class:`SearchIndexStatus` above (a global total across every type)."""
+
+    object_type: str
+    catalog_total: int
+    state: dict[str, int] = {}
+
+
+class DiffPage(BaseModel):
+    items: list[DiffItem]
+    total: int
+
+
+class TypeBreakdownItem(BaseModel):
+    """Catalog-vs-index coverage for one surveys.type value (microdata,
+    geospatial, document, timeseries, ...) — what ObjectTypeSummary can't show
+    since it lumps every type under NADA's single 'survey' object_type."""
+
+    data_type: str
+    catalog_total: int
+    indexed: int
+    missing: int
+    stale: int
+    errors: int = 0  # rows with a recorded last_error — genuinely attempted and failed
+
+
 def _base_url(settings: Settings) -> str:
     if settings.search_index_base_url:
         return settings.search_index_base_url.rstrip("/")
@@ -135,6 +171,26 @@ def get_status(settings: Settings) -> SearchIndexStatus:
         resp = client.get("/admin/search-index/status")
         resp.raise_for_status()
     return SearchIndexStatus.model_validate(resp.json())
+
+
+def get_object_type_summary(settings: Settings, object_type: str) -> ObjectTypeSummary:
+    """How many catalog entries of object_type exist vs. their
+    search_index_state breakdown — this is the "records in DB vs in index"
+    number a dashboard summary needs, scoped to one object_type (``get_status``
+    above is a global total blended across every tracked type)."""
+    with _client(settings) as client:
+        resp = client.get("/admin/search-index/summary", params={"object_type": object_type})
+        resp.raise_for_status()
+    return ObjectTypeSummary.model_validate(resp.json())
+
+
+def list_type_breakdown(settings: Settings, object_type: str = "survey") -> list[TypeBreakdownItem]:
+    """Per-surveys.type catalog-vs-index coverage — see :class:`TypeBreakdownItem`."""
+    with _client(settings) as client:
+        resp = client.get("/admin/search-index/type-breakdown", params={"object_type": object_type})
+        resp.raise_for_status()
+    data = resp.json()
+    return [TypeBreakdownItem.model_validate(i) for i in data.get("items", [])]
 
 
 def list_queue(
@@ -189,6 +245,100 @@ def requeue_failed(settings: Settings) -> dict[str, Any]:
         resp = client.post("/admin/search-index/requeue", json={"status": "failed"})
         resp.raise_for_status()
     return resp.json()
+
+
+_STATE_BULK_CHUNK_SIZE = 500
+
+#: NADA's search_index_state.object_type is 'survey' for every dataset type
+#: nada_ai indexes (document/timeseries/microdata/geospatial all live in
+#: NADA's own `surveys` table, discriminated by its own `type` column — see
+#: the design discussion this constant closes out). 'citation' is a distinct,
+#: separate NADA content type nada_ai doesn't index at all yet.
+STATE_OBJECT_TYPE_SURVEY = "survey"
+
+
+def report_state_bulk(settings: Settings, items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Best-effort: report indexing/deletion outcomes to NADA's search_index_state.
+
+    ``items``: ``[{"object_type": "survey", "object_key": idno, "status": "indexed"|"failed"|"deleted", "error": str|None}, ...]``.
+    ``error`` is optional and only meaningful (and only stored by NADA) when
+    ``status == "failed"`` — the message from whatever raised, for a human
+    checking the diff dashboard later without digging through logs.
+    Chunked automatically (NADA's endpoint has no documented size limit, but a
+    single admin-triggered full-catalog run can produce tens of thousands of
+    these — sending them all in one request body isn't a good idea regardless).
+
+    Callers should catch and log failures rather than let them fail the
+    ingest job — by the time this is called, the actual index/delete already
+    happened; this only affects NADA's bookkeeping of that fact, not the
+    indexed content itself.
+    """
+    if not items:
+        return {"applied": 0, "results": []}
+    applied = 0
+    results: list[dict[str, Any]] = []
+    with _client(settings) as client:
+        for start in range(0, len(items), _STATE_BULK_CHUNK_SIZE):
+            chunk = items[start : start + _STATE_BULK_CHUNK_SIZE]
+            resp = client.post("/admin/search-index/state/bulk", json={"items": chunk})
+            resp.raise_for_status()
+            data = resp.json()
+            applied += int(data.get("applied") or 0)
+            results.extend(data.get("results") or [])
+    return {"applied": applied, "results": results}
+
+
+def list_diff_missing(
+    settings: Settings,
+    *,
+    object_type: str = STATE_OBJECT_TYPE_SURVEY,
+    limit: int = 100,
+    offset: int = 0,
+    data_type: str | None = None,
+    has_error: bool = False,
+) -> DiffPage:
+    """NADA catalog entries with no current 'indexed' search_index_state row
+    (published or not — NADA's diff doesn't filter on that, see its docblock).
+
+    ``total`` is a separate count, independent of ``limit``/``offset`` — an
+    empty ``items`` page never means "nothing missing", check ``total``.
+    ``data_type``, when given, narrows to one surveys.type value (microdata
+    aka 'survey', geospatial, document, timeseries, ...) — for reconciling
+    one data type at a time instead of the whole object_type at once.
+    ``has_error``, when true, narrows to rows with a recorded last_error —
+    genuinely attempted and failed, as opposed to simply never attempted yet.
+    """
+    params: dict[str, Any] = {"object_type": object_type, "limit": limit, "offset": offset}
+    if data_type:
+        params["data_type"] = data_type
+    if has_error:
+        params["has_error"] = "1"
+    with _client(settings) as client:
+        resp = client.get("/admin/search-index/diff/missing", params=params)
+        resp.raise_for_status()
+    return DiffPage.model_validate(resp.json())
+
+
+def list_diff_stale(
+    settings: Settings,
+    *,
+    object_type: str = STATE_OBJECT_TYPE_SURVEY,
+    limit: int = 100,
+    offset: int = 0,
+    data_type: str | None = None,
+) -> DiffPage:
+    """search_index_state rows marked 'indexed' whose catalog entry is gone
+    entirely (published or not — see list_diff_missing's docstring).
+
+    ``data_type`` narrows to one surveys.type value, same as list_diff_missing.
+    """
+    params: dict[str, Any] = {"object_type": object_type, "limit": limit, "offset": offset}
+    if data_type:
+        params["data_type"] = data_type
+    with _client(settings) as client:
+        resp = client.get("/admin/search-index/diff/stale", params=params)
+        resp.raise_for_status()
+    return DiffPage.model_validate(resp.json())
 
 
 def lookup_metadata_type(settings: Settings, idno: str) -> str | None:
@@ -319,5 +469,180 @@ def reconcile_once(
             summary["deleted"] += 1
         else:
             summary["indexed"] += 1
+
+    return summary
+
+
+#: Absolute circuit breaker on reconcile_diff_once's re-fetch loop — real
+#: termination is guaranteed by the seen-idno tracking below regardless of
+#: page_size or how many items are stuck failing; this only guards against an
+#: unforeseen bug turning that into an infinite loop.
+_DIFF_RECONCILE_MAX_ITERATIONS = 10_000
+
+
+def reconcile_diff_once(
+    settings: Settings,
+    *,
+    object_type: str = STATE_OBJECT_TYPE_SURVEY,
+    page_size: int = 200,
+    embedding: Any | None = None,
+    data_type: str | None = None,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_token: CancelToken | None = None,
+) -> dict[str, Any]:
+    """Pull NADA's missing/stale diff for object_type and resolve all of it:
+    index every missing idno, delete every stale one.
+
+    ``data_type``, when given, narrows the whole run to one surveys.type
+    value (microdata aka 'survey', geospatial, document, timeseries, ...) —
+    for reconciling one data type at a time from the per-type breakdown
+    instead of the whole object_type in one go.
+
+    This is deliberately the *same* call whether it's the first run ever (on
+    a fresh deployment "missing" is simply the whole catalog — this doubles as
+    backfill) or a routine later reconciliation (only genuine drift surfaces).
+
+    Re-fetches each diff from offset 0 on every iteration rather than paging
+    through a fixed snapshot: a successfully indexed/deleted item drops out of
+    the "missing"/"stale" result on the *next* fetch (NADA's own diff query,
+    not a local cache), which would silently skip entries under naive
+    offset-incrementing pagination as the underlying set shrinks mid-run. An
+    in-memory ``seen`` set is what actually guarantees termination — an idno
+    that keeps failing stays in NADA's diff forever (correctly: it's still not
+    indexed), so it must be attempted once and then skipped on later fetches,
+    not retried in an infinite loop within this single call.
+
+    ``progress_cb``, if given, is called with a Jobs-shaped snapshot
+    (``processed``/``total``/``percent``/``failed``/``current_idno``) after
+    totals are known and again after every idno — same shape as
+    ``IngestProgressTracker`` so ``GET /jobs/{id}`` can render a bar.
+    ``cancel_token`` is checked once per idno so Stop actually stops the
+    worker thread (``asyncio.Task.cancel`` alone cannot).
+    """
+    summary: dict[str, Any] = {
+        "missing_total": 0,
+        "stale_total": 0,
+        "indexed": 0,
+        "deleted": 0,
+        "failed": 0,
+        "skipped": 0,
+    }
+
+    # Peek both sides first so Jobs has a stable denominator from tick 0
+    # instead of a missing-only total that jumps when stale work starts.
+    # These first pages also seed the loops below — no extra HTTP vs. the
+    # previous "fetch inside the loop" shape.
+    missing_page = list_diff_missing(
+        settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type
+    )
+    stale_page = list_diff_stale(settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type)
+    summary["missing_total"] = missing_page.total
+    summary["stale_total"] = stale_page.total
+    total = missing_page.total + stale_page.total
+    processed = 0
+
+    def _emit(current_idno: str | None = None, *, phase: str) -> None:
+        if progress_cb is None:
+            return
+        progress_cb(
+            {
+                "processed": processed,
+                "total": total,
+                "failed": summary["failed"],
+                "current_idno": current_idno,
+                "percent": round(100 * processed / total, 1) if total else 100.0,
+                "phase": phase,
+            }
+        )
+
+    def _cancelled() -> bool:
+        return cancel_token is not None and cancel_token.is_set()
+
+    _emit(phase="missing")
+
+    seen_missing: set[str] = set()
+    page = missing_page
+    for i in range(_DIFF_RECONCILE_MAX_ITERATIONS):
+        if _cancelled():
+            summary["cancelled"] = True
+            _emit(phase="missing")
+            return summary
+        if i > 0:
+            page = list_diff_missing(
+                settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type
+            )
+        new_items = [it for it in page.items if it.idno not in seen_missing]
+        if not new_items:
+            break
+        for item in new_items:
+            if _cancelled():
+                summary["cancelled"] = True
+                _emit(current_idno=item.idno, phase="missing")
+                return summary
+            seen_missing.add(item.idno)
+            resolved_type = _DATASET_TYPE_TO_METADATA_TYPE.get(item.type) if item.type else None
+            if resolved_type is None:
+                summary["skipped"] += 1
+                logger.warning(
+                    "diff reconcile: no metadata_type mapping for idno=%s dataset_type=%s", item.idno, item.type
+                )
+                processed += 1
+                _emit(item.idno, phase="missing")
+                continue
+            try:
+                result = index_ids_op(
+                    settings,
+                    idnos=[item.idno],
+                    metadata_type=resolved_type,
+                    force=True,
+                    show_progress_bar=False,
+                    embedding=embedding,
+                )
+            except Exception as e:  # noqa: BLE001 - one idno's failure must not stop the reconcile run
+                logger.warning("diff reconcile: index failed for idno=%s: %s", item.idno, e)
+                summary["failed"] += 1
+                processed += 1
+                _emit(item.idno, phase="missing")
+                continue
+
+            # index_ids_op never raises for a per-idno failure (metadata failed to
+            # load/parse, or loaded but produced no documents, or a backend write
+            # error) — those are reported in its return value instead, so a call
+            # that didn't raise does not by itself mean this idno got indexed.
+            # Since this call is scoped to exactly one idno, any of these being
+            # non-empty can only be about *this* idno.
+            if result.get("load_errors") or result.get("empty_docs") or result.get("errors"):
+                summary["failed"] += 1
+                logger.warning("diff reconcile: index reported no success for idno=%s: %s", item.idno, result)
+            else:
+                summary["indexed"] += 1
+            processed += 1
+            _emit(item.idno, phase="missing")
+
+    seen_stale: set[str] = set()
+    page = stale_page
+    for i in range(_DIFF_RECONCILE_MAX_ITERATIONS):
+        if _cancelled():
+            summary["cancelled"] = True
+            _emit(phase="stale")
+            return summary
+        if i > 0:
+            page = list_diff_stale(settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type)
+        new_idnos = [it.idno for it in page.items if it.idno not in seen_stale]
+        if not new_idnos:
+            break
+        seen_stale.update(new_idnos)
+        try:
+            delete_by_idnos_op(settings, new_idnos)
+            summary["deleted"] += len(new_idnos)
+        except Exception as e:  # noqa: BLE001 - report and move on, same as the indexing loop above
+            logger.warning("diff reconcile: delete failed for idnos=%s: %s", new_idnos, e)
+            summary["failed"] += len(new_idnos)
+        for idno in new_idnos:
+            processed += 1
+            _emit(idno, phase="stale")
+            if _cancelled():
+                summary["cancelled"] = True
+                return summary
 
     return summary

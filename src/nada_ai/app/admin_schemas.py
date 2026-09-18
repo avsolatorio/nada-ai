@@ -18,7 +18,25 @@ class IndexFromCatalogRequest(BaseModel):
     force: bool = Field(default=False)
     recreate_index: bool = Field(default=False)
     show_progress_bar: bool = Field(default=False)
-    buffer_size: int = Field(default=1000, ge=1, le=10000)
+    buffer_size: int = Field(
+        default=200,
+        ge=1,
+        le=10000,
+        description=(
+            "How many documents accumulate in memory before one encode+write batch. "
+            "Not the model's own inference batch size (see NADA_EMBEDDING_BATCH_SIZE) — "
+            "this is also the checkpoint/progress granularity, so smaller means more "
+            "frequent progress updates and less lost work if the job is stopped."
+        ),
+    )
+    resume: bool = Field(
+        default=False,
+        description=(
+            "Skip idnos already completed by a previous run of this catalog_type that "
+            "was stopped/cancelled or crashed partway through (see GET checkpoint file "
+            "under NADA_INGEST_CHECKPOINT_DIR). Has no effect if there is no checkpoint."
+        ),
+    )
 
 
 class ReconcileSearchIndexResponse(BaseModel):
@@ -37,7 +55,11 @@ class IndexFromCatalogAllRequest(BaseModel):
         ),
     )
     show_progress_bar: bool = Field(default=False)
-    buffer_size: int = Field(default=1000, ge=1, le=10000)
+    buffer_size: int = Field(default=200, ge=1, le=10000)
+    resume: bool = Field(
+        default=False,
+        description="Applied per catalog_type — see IndexFromCatalogRequest.resume.",
+    )
 
 
 class JobResponse(BaseModel):
@@ -130,7 +152,7 @@ class CatalogBatchIndexRequest(BaseModel):
     force: bool = Field(default=False)
     recreate_index: bool = Field(default=False, description="Drop and recreate the index before bulk indexing.")
     show_progress_bar: bool = Field(default=False, description="tqdm bars in API are usually noise; default off.")
-    buffer_size: int = Field(default=1000, ge=1, le=10000)
+    buffer_size: int = Field(default=200, ge=1, le=10000)
 
 
 class CatalogBatchDeleteRequest(BaseModel):
