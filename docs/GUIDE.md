@@ -425,6 +425,49 @@ idnos per issue code so it stays small on large catalogs. Use it to spot upstrea
 catalog data problems without adding a blocking validation layer that could stall
 ingestion on data you don't control.
 
+### Progress, cancellation, and resuming a full-catalog ingest
+
+`POST /admin/ingest/from-catalog` and `.../from-catalog/all` report live progress
+and can be stopped and resumed instead of running as an opaque, unstoppable block:
+
+- **Progress**: `GET /jobs/{id}` (and `GET /jobs`) includes a `progress` object —
+  `{"processed", "total", "failed", "current_idno", "percent"}` — updated once per
+  idno as the run goes, not just once at the end.
+- **Stop**: `DELETE /jobs/{id}` (role `write`) sets a cancel token the ingest loop
+  checks once per idno. Note the asymmetry this implies: the job's *status* flips
+  to `cancelled` almost immediately (the wrapping coroutine really is cancelled),
+  but the worker thread doing the actual embedding/writing keeps running until it
+  next checks the token — `asyncio.to_thread` cannot forcibly kill a thread, so
+  cancelling only *asks* the loop to stop at its next opportunity, one idno later.
+- **Resume**: pass `"resume": true` in the request body. This loads a per-`catalog_type`
+  checkpoint file (`NADA_INGEST_CHECKPOINT_DIR`, default `config/ingest_checkpoints/`)
+  recording which idnos already completed, and skips them — so a stopped or crashed
+  run continues instead of reindexing the whole catalog again. The checkpoint is
+  cleared automatically once a run finishes without being cancelled; there's nothing
+  to clean up by hand.
+- **Per-idno failures**: the job result's `load_errors` list records idnos whose
+  metadata itself failed to fetch/parse (previously only a server log line, with no
+  record anywhere of which idno or why) — distinct from `errors` (write-time
+  failures against the search backend) and `quality` (non-blocking content-shape
+  observations, see above).
+
+**Resource usage**: `NADA_EMBEDDING_NUM_THREADS` caps `torch.set_num_threads` for
+the local embedding backend — unset (default), PyTorch uses every visible CPU
+core, which is the single biggest cause of "reindexing pegs the whole machine."
+Set it to leave headroom for anything else running alongside nada-ai.
+`buffer_size` (per-request, default 200 — previously 1000) is unrelated to the
+model's own inference batch size (`NADA_EMBEDDING_BATCH_SIZE`, default 32, applied
+regardless); it only controls how many documents accumulate in memory before one
+encode+write batch, which also sets how often progress/checkpoint updates happen —
+smaller means more frequent updates and less lost work if a run is stopped, at a
+small cost in per-call overhead.
+
+**Dropping the index without reindexing**: previously the only way to delete a
+Qdrant collection was bundled inside `recreate_index=True` on a full reindex call
+(`DELETE /admin/index` only ever worked for OpenSearch, 501ing under
+`NADA_SEARCH_BACKEND=qdrant`). `DELETE /admin/qdrant/collection?confirm=true`
+(role `admin`) drops the collection on its own, with no reindex attached.
+
 ### Embedding drift detection
 
 `GET /admin/embeddings/drift` (role `read`) compares the dimension of the currently
@@ -486,6 +529,19 @@ scheduler) and returns immediately — it does not wait for those jobs to finish
 Poll `GET /jobs` to watch them complete. Safe to call whether or not the background
 scheduler is enabled; single-flight on `content:{metadata_type}:{idno}` keeps it from
 racing a concurrent scheduler tick, webhook, or admin reindex for the same idno.
+
+**Check queue/tracking status over HTTP** (role: read) — the same data the
+`search_index_status` CLI command prints, for a dashboard that can't shell out:
+
+```bash
+curl -s localhost:8020/admin/search-index/status \
+  -H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY"
+# => {"status": "ok", "search_provider": "nada-ai", "tracking_enabled": true,
+#     "queue": {"pending": 2, "failed": 0}, "state": {"indexed": 100}}
+```
+
+Returns `400` if no search-index base URL is configured (`NADA_SEARCH_INDEX_BASE_URL`
+or `AI4DATA_METADATA_CATALOG_URL`), `503` if NADA's status endpoint is unreachable.
 
 Enabling the scheduler needs two things configured on NADA's side, not just here:
 an admin-capable credential (`AI4DATA_METADATA_CATALOG_X_API_KEY` — the same one

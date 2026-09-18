@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     embedding_model_kwargs_json: str | None = Field(default='{"dtype": "auto"}')
     embedding_device: str | None = Field(default=None)
     embedding_batch_size: int = Field(default=32)
+    #: Caps ``torch.set_num_threads`` for the local SentenceTransformers backend.
+    #: Unset (default) leaves PyTorch's own default, which is every visible CPU
+    #: core — on a shared/local machine this is what turns "index the catalog"
+    #: into "peg every core for hours with no other process getting a look in".
+    #: Set explicitly (e.g. 2-4) to leave headroom for the rest of the system.
+    embedding_num_threads: int | None = Field(default=None, ge=1, le=128)
 
     #: Deployed ML Commons model id (``_plugins/_ml/models``). Required when ``embedding_backend=opensearch_ml``.
     opensearch_ml_model_id: str | None = Field(default=None)
@@ -147,6 +153,24 @@ class Settings(BaseSettings):
     reconcile_search_index_interval_seconds: int = Field(default=300, ge=30, le=3600)
     #: Max queue items to submit as jobs per poll (mirrors list_queue's own cap).
     reconcile_search_index_batch_limit: int = Field(default=50, ge=1, le=100)
+
+    #: Report indexing/deletion outcomes back to NADA's search_index_state
+    #: (POST {base}/admin/search-index/state/bulk) after index_ids_op,
+    #: index_from_catalog_op, delete_by_idno_op, and delete_by_idnos_op —
+    #: independent of the queue/ack flow above, since bulk/admin-triggered
+    #: operations never go through enqueue() and so have no queue row to ack
+    #: against. Off by default, same rationale as reconcile_search_index_enabled:
+    #: needs the same admin credential and NADA's search-index tracking enabled.
+    #: Always best-effort — a reporting failure never affects what was already
+    #: indexed/deleted in Qdrant/OpenSearch, only NADA's own bookkeeping of it.
+    report_search_index_state_enabled: bool = Field(default=False)
+
+    #: Directory for per-catalog_type ingest checkpoint files (default
+    #: ``config/ingest_checkpoints``). Each file records which idnos a
+    #: full-catalog ``index_from_catalog`` run has already completed, so a
+    #: cancelled/crashed run can resume instead of restarting from scratch —
+    #: see ``ingest/progress.py``.
+    ingest_checkpoint_dir: str | None = Field(default=None)
 
     #: Override path to the API keys store (default ``config/api_keys.json``).
     #: Contains only key hashes/prefixes, never raw key values — still keep out of version control.

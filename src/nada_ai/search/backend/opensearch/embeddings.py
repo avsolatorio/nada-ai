@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import Any
 
@@ -8,8 +9,36 @@ import numpy as np
 from nada_ai.settings import Settings
 
 
+def _cap_native_thread_pools(num_threads: int) -> None:
+    """Cap every thread pool involved in local embedding inference, not just PyTorch's.
+
+    ``torch.set_num_threads`` only controls PyTorch's own ATen/intra-op thread
+    pool. The OpenMP/MKL/OpenBLAS backend underneath it and the HuggingFace
+    ``tokenizers`` library (Rust, via Rayon) each keep their own independent
+    thread pool that defaults to every visible CPU core regardless of that
+    call — confirmed live: with only ``torch.set_num_threads`` capped, a
+    4-thread budget still measured 700-1000%+ CPU during a real reindex,
+    because these two were still using every core underneath it.
+
+    Must run before the first import of ``sentence_transformers``/``torch`` in
+    this process: these are native libraries read at load/first-use time, not
+    something a later Python-level call can retroactively constrain.
+    ``setdefault`` so an operator's own explicit env var (set in their
+    deployment, decoupled from ``NADA_EMBEDDING_NUM_THREADS``) still wins.
+    """
+    n = str(num_threads)
+    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        os.environ.setdefault(var, n)
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+
 @lru_cache(maxsize=8)
-def _load_model(model_id: str, model_kwargs_tuple: tuple[tuple[str, str], ...], device: str | None) -> Any:
+def _load_model(
+    model_id: str, model_kwargs_tuple: tuple[tuple[str, str], ...], device: str | None, num_threads: int | None
+) -> Any:
+    if num_threads is not None:
+        _cap_native_thread_pools(num_threads)
+
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError as e:
@@ -17,6 +46,17 @@ def _load_model(model_id: str, model_kwargs_tuple: tuple[tuple[str, str], ...], 
             "sentence-transformers is required for embedding_backend=local. "
             "Install: uv sync --extra local (or pip install 'nada-ai[local]')."
         ) from e
+
+    if num_threads is not None:
+        # Also set torch's own thread count explicitly: even though the env
+        # vars above are the ones that actually stopped the 700%+ CPU usage,
+        # torch.set_num_threads still matters for its ATen/interop pool and
+        # for a torch that was already imported elsewhere in this process
+        # before this function ran (env vars set here would be too late for
+        # a thread pool that already initialized).
+        import torch
+
+        torch.set_num_threads(num_threads)
 
     kwargs = dict(model_kwargs_tuple)
     if kwargs:
@@ -34,6 +74,7 @@ class EmbeddingService:
             self._settings.embedding_model_id,
             t,
             self._settings.embedding_device,
+            self._settings.embedding_num_threads,
         )
 
     @property

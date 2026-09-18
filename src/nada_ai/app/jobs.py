@@ -101,6 +101,7 @@ class JobRegistry:
         self._jobs: OrderedDict[str, Job] = OrderedDict()
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self._key_to_id: dict[str, str] = {}
+        self._cancel_tokens: dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self._max_history = max_history
 
@@ -110,11 +111,23 @@ class JobRegistry:
         key: str,
         factory: CoroFactory,
         params: dict[str, Any] | None = None,
+        job_id: str | None = None,
+        cancel_token: Any | None = None,
     ) -> Job:
         """Schedule ``factory`` as a background task, single-flighted by ``key``.
 
         If a job with the same ``key`` is already active, that existing job is
-        returned with :attr:`Job.was_already_running` set to ``True``.
+        returned with :attr:`Job.was_already_running` set to ``True`` — in that
+        case any ``job_id``/``cancel_token`` the caller pre-created are simply
+        never registered (nothing to clean up; they're just discarded).
+
+        ``job_id``, if given, is used instead of a freshly generated id — lets a
+        caller create a :class:`~nada_ai.ingest.progress.CancelToken` and start
+        reporting progress via :meth:`set_progress` for this job's id *before*
+        the job is known to actually run (see ``app/admin.py``'s full-catalog
+        ingest routes). ``cancel_token`` is stashed so :meth:`cancel` can signal
+        it in addition to cancelling the ``asyncio.Task`` (see its docstring for
+        why both are needed).
         """
         async with self._lock:
             existing_id = self._key_to_id.get(key)
@@ -126,7 +139,7 @@ class JobRegistry:
                     return snap
 
             job = Job(
-                id=uuid.uuid4().hex,
+                id=job_id or uuid.uuid4().hex,
                 kind=kind,
                 key=key,
                 params=dict(params or {}),
@@ -135,11 +148,25 @@ class JobRegistry:
             )
             self._jobs[job.id] = job
             self._key_to_id[key] = job.id
+            if cancel_token is not None:
+                self._cancel_tokens[job.id] = cancel_token
 
             task = asyncio.create_task(self._run(job, factory), name=f"job:{kind}:{job.id}")
             self._tasks[job.id] = task
             self._evict_finished()
             return self._snapshot(job)
+
+    def set_progress(self, job_id: str, progress: dict[str, Any]) -> None:
+        """Best-effort progress update, safe to call from a worker thread.
+
+        No lock: this is a plain attribute assignment on a dict CPython already
+        treats atomically, and progress is purely informational (unlike
+        status/result transitions in :meth:`_run`, nothing downstream depends
+        on ordering between two progress updates).
+        """
+        job = self._jobs.get(job_id)
+        if job is not None:
+            job.progress = dict(progress)
 
     async def _run(self, job: Job, factory: CoroFactory) -> None:
         job.status = JobStatus.running
@@ -163,6 +190,7 @@ class JobRegistry:
             if current == job.id:
                 self._key_to_id.pop(job.key, None)
             self._tasks.pop(job.id, None)
+            self._cancel_tokens.pop(job.id, None)
 
     def _snapshot(self, job: Job) -> Job:
         snap = Job(
@@ -192,11 +220,27 @@ class JobRegistry:
         return [self._snapshot(j) for j in items[:limit]]
 
     async def cancel(self, job_id: str) -> Job | None:
+        """Cancel a job.
+
+        Two independent signals, because one alone isn't enough for a job
+        whose actual work runs in a worker thread via ``asyncio.to_thread``:
+        ``task.cancel()`` only stops *this* coroutine from awaiting the
+        thread's result — the thread itself keeps running the synchronous
+        ingest loop to completion regardless (Python cannot forcibly kill a
+        thread). Setting the job's ``cancel_token`` (a plain
+        ``threading.Event`` under the hood — see ``ingest/progress.CancelToken``)
+        is what the loop itself checks once per document, so cancelling
+        actually stops CPU/RAM usage promptly instead of silently finishing
+        the whole run in the background.
+        """
         job = self._jobs.get(job_id)
         if job is None:
             return None
         if job.status in _TERMINAL:
             return self._snapshot(job)
+        token = self._cancel_tokens.get(job_id)
+        if token is not None:
+            token.set()
         task = self._tasks.get(job_id)
         if task is not None and not task.done():
             task.cancel()
