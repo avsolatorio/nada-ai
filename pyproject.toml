@@ -54,7 +54,7 @@ packages = ["src/nada_ai"]
 # Pin standalone discovery package to a reproducible revision (Docker + CI use this; no sibling checkout required).
 [tool.uv.sources]
 # Fork branch feat/discovery-additional-catalog-types: table/script/image/video/indicator-db support, pending upstream PR.
-ai4data = { git = "https://github.com/mah0001/ai4data.git", rev = "6b93f03878822d224115b270276acfbf71dab96b" }
+ai4data = { git = "https://github.com/mah0001/ai4data.git", rev = "ef77b5ca9c15be6da6411ab477099d0c3116f5e9" }
 # ai4data = { git = "https://github.com/avsolatorio/ai4data.git", rev = "4f91d68ae3c9d8b3b4173fd62053eeaf4d790bd1" }
 # ai4data = { git = "https://github.com/avsolatorio/ai4data.git", branch = "search/improve-filter" }
 # ai4data = { git = "https://github.com/avsolatorio/ai4data.git", rev = "97f226fff2f1af630c2c253c82302ac03aa40258" }
