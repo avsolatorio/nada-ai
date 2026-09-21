@@ -1,7 +1,11 @@
 # OpenSearch option and standard study search — plan
 
 Branch: `feat/opensearch` (created from `feat/additional-catalog-types`).
-Status: steps 0-8 done (the hybrid-test milestone is reached and the defaults are tuned). Step 9 (docs and compose) is next.
+Status: steps 0-8 done (the hybrid-test milestone is reached and the defaults are tuned), and the NADA driver is done
+(NADA `Catalog_search_semantic_studies.php`, selected with the site setting `semantic_search_engine` = `opensearch`).
+Step 9 (docs, compose profile, OpenAPI snapshot) is partly done: `scripts/local-opensearch.sh` runs the local setup
+(OpenSearch 3.6 in Docker on port 9201, nada-ai from this checkout on port 8021). Still open: the compose profile with
+its own ports and volumes, the env docs, the OpenAPI snapshot in CI.
 Contract: `docs/studies-search-contract.md` (approved).
 
 ## Goal
@@ -230,7 +234,11 @@ each study is written; decide when the semantic leg is built (step 7).
 
 - Extract additions: subtitle, aliases. Steps 2-3 work without them.
 - State reports by id instead of idno. Until then nada-ai sends both.
-- The `semantic_search_engine` setting and the new thin NADA driver (after step 7).
+- The `semantic_search_engine` setting and the new thin NADA driver: **done** (NADA commits `eb367194`, `1d0611fe`).
+- Open on the NADA side before OpenSearch is the main engine: show a note when a result is truncated at the cap of 100
+  (the response has `truncated`; the driver only puts it in the debug output), decide the keyword cutoff for broad
+  words (`education` returns 19 studies against the database's 267), the gibberish review, and the index sync
+  (`state/bulk` reporting by id).
 
 ## Guardrails while testing
 
