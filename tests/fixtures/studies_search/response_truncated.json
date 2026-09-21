@@ -1,41 +1,40 @@
 {
   "engine": "opensearch",
-  "found": 100,
+  "found": 12340,
   "limit": 3,
-  "offset": 97,
+  "offset": 9997,
   "truncated": true,
-  "result_cap": 100,
   "search_counts_by_type": {
-    "document": 70,
-    "survey": 20,
-    "timeseries": 10
+    "document": 9000,
+    "survey": 3000,
+    "timeseries": 340
   },
   "hits": [
     {
       "sid": 24,
       "idno": "timeseries-unique-idno",
-      "rank": 98,
-      "score": 0.0051,
+      "rank": 9998,
+      "score": 1.9,
       "matched_by": [
-        "semantic"
+        "lexical"
       ]
     },
     {
       "sid": 4,
       "idno": "PC11_A02-28-v22",
-      "rank": 99,
-      "score": 0.005,
+      "rank": 9999,
+      "score": 1.8999,
       "matched_by": [
-        "semantic"
+        "lexical"
       ]
     },
     {
       "sid": 18,
       "idno": "GEMS_BDI_9780136",
-      "rank": 100,
-      "score": 0.0049,
+      "rank": 10000,
+      "score": 1.8998,
       "matched_by": [
-        "semantic"
+        "lexical"
       ]
     }
   ],

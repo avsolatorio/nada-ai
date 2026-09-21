@@ -3,7 +3,7 @@
 Talks to OpenSearch directly (no API server), so the ranking policy can be varied per run:
 
     uv run python eval/run_golden.py                      # lexical / semantic / hybrid with the configured defaults
-    uv run python eval/run_golden.py --sweep              # also sweep the hybrid policy
+    uv run python eval/run_golden.py --sweep              # also sweep the semantic floor, cutoff and window
     uv run python eval/run_golden.py --json out.json      # machine-readable results
 
 Reads the same ``NADA_*`` environment as the server (OpenSearch URL, index names, embedding model). Relevance
@@ -61,13 +61,16 @@ async def run_variant(
             sort_order=SortOrder.desc,
             limit=100,
             offset=0,
-            result_cap=settings.studies_result_cap,
             policy=variant.policy,
             embed=embed,
         )
         page = await EXECUTORS[variant.mode](job)
         sids = [h["sid"] for h in page.hits]
-        rows.append({"id": q["id"], "category": q["category"], "sids": sids, "m": score_query(q, sids)})
+        metrics = score_query(q, sids)
+        metrics["returned"] = page.found  # the size of the whole result, not of the 100 studies fetched
+        if q["expect"] == "empty":
+            metrics["pass"] = page.found == 0
+        rows.append({"id": q["id"], "category": q["category"], "sids": sids, "found": page.found, "m": metrics})
     return rows
 
 
@@ -89,17 +92,10 @@ def variants(base: StudyPolicy, sweep: bool) -> list[Variant]:
         Variant("hybrid", EffectiveMode.hybrid, base),
     ]
     if sweep:
-        grid = itertools.product((0.68, 0.70, 0.72), (0.9, 0.94, 0.98), (0.0, 0.4, 0.7), (0.5, 1.0, 2.0))
-        for floor, cutoff, lex_cutoff, weight in grid:
-            policy = replace(
-                base,
-                semantic_min_score=floor,
-                semantic_relative_cutoff=cutoff,
-                lexical_relative_cutoff=lex_cutoff,
-                semantic_weight=weight,
-            )
-            name = f"hybrid floor={floor} sem-cutoff={cutoff} lex-cutoff={lex_cutoff} w={weight}"
-            out.append(Variant(name, EffectiveMode.hybrid, policy))
+        grid = itertools.product((0.68, 0.70, 0.72), (0.90, 0.94, 0.98), (25, 50, 100))
+        for floor, cutoff, window in grid:
+            policy = replace(base, semantic_min_score=floor, semantic_relative_cutoff=cutoff, semantic_window=window)
+            out.append(Variant(f"hybrid floor={floor} cutoff={cutoff} window={window}", EffectiveMode.hybrid, policy))
     return out
 
 

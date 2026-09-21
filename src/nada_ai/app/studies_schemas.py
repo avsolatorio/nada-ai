@@ -286,11 +286,12 @@ class StudySearchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     engine: Engine
-    found: int = Field(ge=0, description="Studies in the pageable result set (see spec)")
+    found: int = Field(ge=0, description="Studies in the result: all the keyword matches plus the semantic block")
     limit: int
     offset: int
-    truncated: bool = Field(description="True when more relevant studies exist beyond ``result_cap``")
-    result_cap: int | None = Field(description="Cap in force for relevance searches; null for browse")
+    truncated: bool = Field(
+        description="True when ``found`` exceeds ``limits.max_offset``: only that many can be paged"
+    )
     search_counts_by_type: dict[str, int] = Field(
         description="Distinct studies per NADA dataset type, ignoring the ``types`` filter"
     )
@@ -321,14 +322,10 @@ class StudySearchResponse(BaseModel):
         elif sum(self.search_counts_by_type.values()) != self.found:
             problems.append("search_counts_by_type must add up to found when no types filter is applied")
 
-        if self.truncated and self.result_cap is None:
-            problems.append("truncated requires result_cap")
-        if self.result_cap is not None and self.found > self.result_cap:
-            problems.append("found exceeds result_cap")
+        if self.truncated != (self.found > MAX_OFFSET):
+            problems.append("truncated must be true exactly when found exceeds max_offset")
 
         if self.applied.mode == EffectiveMode.browse:
-            if self.result_cap is not None or self.truncated:
-                problems.append("browse has no result cap and is never truncated")
             if any(h.score is not None or h.matched_by for h in self.hits):
                 problems.append("browse hits have no score and no matched_by")
         elif any(not h.matched_by for h in self.hits):
@@ -378,7 +375,7 @@ class Limits(BaseModel):
 
     max_limit: int
     max_offset: int
-    query_result_cap: int
+    semantic_window: int = Field(description="The most studies the semantic side adds to a relevance search")
     max_query_length: int
 
 

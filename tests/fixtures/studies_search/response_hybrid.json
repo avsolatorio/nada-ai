@@ -4,7 +4,6 @@
   "limit": 15,
   "offset": 0,
   "truncated": false,
-  "result_cap": 100,
   "search_counts_by_type": {
     "survey": 1,
     "geospatial": 1,

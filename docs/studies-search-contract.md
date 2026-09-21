@@ -42,7 +42,7 @@ Describes the running engine. Example: `info_opensearch.json`, `info_qdrant.json
 | `id_key` | Always `"sid"` |
 | `filters` | Supported filter keys (see 5.2); empty when `studies_search` is false |
 | `sort_fields` | Supported sort fields; empty when `studies_search` is false |
-| `limits` | `max_limit`, `max_offset`, `query_result_cap`, `max_query_length`; null when `studies_search` is false |
+| `limits` | `max_limit`, `max_offset`, `semantic_window`, `max_query_length`; null when `studies_search` is false |
 | `index` | `name`, `generation` (changes when the index is rebuilt or the engine switched), `studies` (distinct studies), `embedding_model`, `embedding_dim` |
 
 Phase 1: OpenSearch reports `studies_search: true`; Qdrant reports `studies_search: false` and NADA keeps using the
@@ -121,8 +121,7 @@ Examples: `response_hybrid.json`, `response_browse.json`, `response_types_filter
 | `engine` | Engine that answered |
 | `found` | Studies in the pageable result set (6.1) |
 | `limit`, `offset` | Echo of the paging window |
-| `truncated` | True when more relevant studies exist beyond `result_cap` |
-| `result_cap` | Cap in force for relevance searches; null for browse |
+| `truncated` | True when `found` exceeds `limits.max_offset`: only that many results can be paged |
 | `search_counts_by_type` | Distinct studies per NADA dataset type in the result set, **ignoring the `types` filter** (tab counts) |
 | `hits[]` | `sid`, `idno`, `rank` (1-based across the whole set), `score`, `matched_by`, optional `passages` |
 | `applied` | Effective `query`, `mode`, `filters`, `sort`, `limit`, `offset` |
@@ -130,26 +129,36 @@ Examples: `response_hybrid.json`, `response_browse.json`, `response_types_filter
 | `timing_ms` | Optional timings |
 | `debug` | Present only when requested |
 
-`hits[].score` is an opaque fused relevance score, comparable only within one response, and null in browse.
+`hits[].score` is the engine's score for the mode that ran (keyword score in `lexical`, vector score in `semantic`,
+comparable only within one response). It is null in browse, in `hybrid` (the fused head and the keyword matches after it
+are ordered by different rules, so their scores could not be compared) and when the results are ordered by another sort.
 `matched_by` is `["lexical"]`, `["semantic"]` or both; empty in browse. `passages` lists matching pages for document
 studies (`page` is 1-based, `excerpt` is whitespace-normalised text); it replaces parsing raw engine hits.
 
 ### 6.1 What `found` means
 
-| Mode that ran | `found` | Cap |
+| Mode that ran | `found` | Bound |
 |---|---|---|
-| `browse` (no query) | Studies matching the filters, exact | None. `offset + limit` must be at most 10,000. |
-| `lexical` | Studies matching the query and filters | `result_cap` |
-| `semantic` | Studies above the relevance floor and cutoff | `result_cap` |
-| `hybrid` | Distinct studies in the union of both legs after floor, cutoff and dedupe by `sid` | `result_cap` |
+| `browse` (no query) | Studies matching the filters, exact | None |
+| `lexical` | Every study matching the query and filters, exact | None |
+| `semantic` | Studies above the relevance floor and cutoff | `semantic_window` |
+| `hybrid` | Every keyword match plus the semantic studies that are not keyword matches, deduped by `sid`, exact | The semantic side only: `semantic_window` |
 
-- `found` never exceeds `result_cap` in relevance modes. `truncated` says whether the cap hid more matches.
-- The relevance cutoff is computed across all types, so choosing a tab does not change which studies are relevant.
-  With a `types` filter, `found` equals the sum of `search_counts_by_type` over those types.
-- Without a `types` filter, `search_counts_by_type` adds up to `found`.
+- **Nothing is cut.** The keyword matches are never capped: `found` counts all of them. Only the semantic side is bounded
+  (`limits.semantic_window`, starting at 50), because a vector search always has nearest studies.
+- **Paging depth.** `offset + limit` must be at most `limits.max_offset` (10,000) in every mode, and a larger request is
+  `offset_out_of_range`. `truncated` is true when `found` exceeds that depth, so the last results cannot be paged.
+- **Order in `hybrid` with a relevance sort.** The best keyword matches (`fusion_window`, starting at 50) and the semantic
+  studies are fused by rank (reciprocal rank fusion, equal weights): a study found by both comes first and the two lists
+  otherwise alternate, so an exact keyword match is not buried under related studies. The other keyword matches follow,
+  best first. With any other sort, the union of the semantic studies and the keyword matches is ordered by that sort, so
+  `found` is the same whatever the sort.
+- There is **no score cutoff on keyword matches**: every study the match rules accept is a keyword match, and a study that
+  mentions the word only in a low-weight field simply ranks after the ones with it in the title.
+- Choosing a tab (`types`) never changes which studies are in the result or their order. With a `types` filter, `found`
+  equals the sum of `search_counts_by_type` over those types; without one, the counts add up to `found`.
 - A query matching nothing returns `found: 0`, empty hits and empty counts. It is not an error.
-- `result_cap` starts at 100 and is a server setting reported by `GET /info` (`limits.query_result_cap`). The relevance
-  floor, relative cutoff and per-leg candidate window (starting at 200) are server settings, not request parameters.
+- The relevance floor and cutoff of the semantic side, and the two windows, are server settings, not request parameters.
 
 ### 6.2 Mode handling
 
@@ -195,8 +204,8 @@ Encoded in `StudySearchResponse.invariant_violations()` and reused by the implem
 
 - Hit ranks are contiguous from `offset + 1`; `len(hits) <= limit`; `offset + len(hits) <= found`; no duplicate `sid`.
 - Counts add up to `found` without a `types` filter; with one, `found` equals the sum over the selected types.
-- `truncated` requires `result_cap`; `found <= result_cap` when a cap applies.
-- Browse: no cap, never truncated, no score or `matched_by`. Relevance: every hit has `matched_by`.
+- `truncated` is true exactly when `found` exceeds `max_offset`.
+- Browse: no score or `matched_by`. Relevance: every hit has `matched_by`.
 - A nonsense query returns `found: 0` (acceptance test in step 7).
 
 ## 10. Out of scope for this contract
@@ -211,9 +220,9 @@ clean-up (including moving `{idno}` admin paths to `{sid}`).
 |---|---|---|
 | 1 | Auth header (`Authorization: Bearer` as well as `X-NADA-Admin-Key`; `POST /search` currently has no authentication) | **Later** (reminder) |
 | 2 | Query syntax: plain text plus quoted phrases; `+must -exclude` and `field:value`. When a query uses quotes or `+`/`-`, decide whether it still runs semantic/hybrid or switches to lexical | **Later** (reminder) |
-| 3 | Cap of 100 for broad keyword queries (`truncated` / "Top 100") | **Later** |
+| 3 | Cap of 100 for broad keyword queries | **Removed**: keyword matches are all returned and paged; only the semantic side is bounded (50). `truncated` now means `found` exceeds the paging depth |
 | 4 | Index field names for step 3: follow the NADA extract keys (`countries`, `formid`, `repositories`, `fq_<name>`, ...) | **Agreed** |
 | 5 | Tab counts field name `search_counts_by_type` | **Agreed** |
-| 6 | Browse deep paging limit: `offset + limit <= 10,000` | **Agreed** |
+| 6 | Deep paging limit: `offset + limit <= 10,000`, for browse and for queries | **Agreed** (unchanged) |
 | 7 | Unknown `types` return zero results, not an error | **Keep as is for now**, decide later |
 | 8 | `include_debug`: admin role only | **Agreed** (default proposed) |

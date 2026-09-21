@@ -76,7 +76,7 @@ def limits_for(settings: Settings) -> Limits:
     return Limits(
         max_limit=MAX_LIMIT,
         max_offset=MAX_OFFSET,
-        query_result_cap=settings.studies_result_cap,
+        semantic_window=settings.studies_semantic_window,
         max_query_length=MAX_QUERY_LENGTH,
     )
 

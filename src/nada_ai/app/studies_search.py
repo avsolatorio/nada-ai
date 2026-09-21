@@ -140,9 +140,7 @@ def classify_validation_error(exc: RequestValidationError) -> StudiesApiError:
             details = {"filter": str(loc[2])} if len(loc) > 2 else {}
             return StudiesApiError(ErrorCode.invalid_filter_value, message(error), details or None)
         if loc[:2] == ("body", "offset"):
-            return StudiesApiError(
-                ErrorCode.offset_out_of_range, message(error), {"max_offset": MAX_OFFSET}
-            )
+            return StudiesApiError(ErrorCode.offset_out_of_range, message(error), {"max_offset": MAX_OFFSET})
     first = errors[0]
     where = ".".join(str(part) for part in first["loc"] if part != "body") or "body"
     return StudiesApiError(
@@ -202,7 +200,6 @@ async def _execute(
         sort_order=sort.order,
         limit=body.limit,
         offset=body.offset,
-        result_cap=s.settings.studies_result_cap,
         policy=StudyPolicy.from_settings(s.settings),
         embed=_embedder(s),
     )
@@ -249,10 +246,10 @@ async def studies_search(
 
     mode = resolve_mode(body, engine, implemented)
     sort, warnings = resolve_sort(body, mode)
-    if mode is EffectiveMode.browse and body.offset + body.limit > MAX_OFFSET:
+    if body.offset + body.limit > MAX_OFFSET:
         raise StudiesApiError(
             ErrorCode.offset_out_of_range,
-            f"offset + limit must be at most {MAX_OFFSET} when browsing",
+            f"offset + limit must be at most {MAX_OFFSET}",
             {"max_offset": MAX_OFFSET},
         )
 
@@ -273,13 +270,9 @@ async def studies_search(
         found=page.found,
         limit=body.limit,
         offset=body.offset,
-        truncated=page.truncated,
-        result_cap=page.result_cap,
+        truncated=page.found > MAX_OFFSET,
         search_counts_by_type=page.counts_by_type,
-        hits=[
-            StudyHit(rank=body.offset + i + 1, **hit)
-            for i, hit in enumerate(page.hits)
-        ],
+        hits=[StudyHit(rank=body.offset + i + 1, **hit) for i, hit in enumerate(page.hits)],
         applied=Applied(
             query=body.query,
             mode=mode,

@@ -1,4 +1,4 @@
-"""POST /studies/search, lexical mode (step 6 of the OpenSearch plan): query building, the cut set, and the endpoint."""
+"""POST /studies/search, lexical mode: the keyword query, every match paged with exact totals, and the endpoint."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from starlette.testclient import TestClient
 
 from nada_ai.app.main import app, state
 from nada_ai.app.studies_schemas import (
+    MAX_OFFSET,
     EffectiveMode,
     ErrorResponse,
     SortField,
@@ -27,9 +28,10 @@ from nada_ai.search.backend.opensearch.studies_search import (
     LEXICAL_FIELDS,
     IndexNotReady,
     SearchJob,
+    keyword_body,
     lexical,
-    lexical_body,
     lexical_query,
+    relevance_sort,
 )
 from nada_ai.search.backend.opensearch.studies_semantic import StudyPolicy
 from nada_ai.settings import Settings
@@ -83,15 +85,48 @@ def test_query_text_is_data_not_syntax() -> None:
     assert lexical_query(text)["multi_match"]["query"] == text
 
 
-def test_body_takes_the_top_cap_across_all_types_ordered_by_score_then_sid() -> None:
-    body = lexical_body("poverty", StudyFilters(types=["survey"], countries=[16]), 100)
-    assert (body["from"], body["size"], body["track_total_hits"]) == (0, 100, True)
-    assert body["sort"] == [{"_score": {"order": "desc"}}, {"sid": {"order": "asc"}}]
+def test_the_keyword_query_has_no_score_cutoff() -> None:
+    """Every study the match rules accept is a keyword match; the best simply score highest."""
+    body = keyword_body("poverty", StudyFilters(), sort=relevance_sort(SortOrder.desc), limit=15, offset=0)
+    assert "min_score" not in body
+    assert "min_score" not in str(body["query"])
+
+
+def test_relevance_sort_orders_by_score_then_sid() -> None:
+    assert relevance_sort(SortOrder.desc) == [{"_score": {"order": "desc"}}, {"sid": {"order": "asc"}}]
+    assert relevance_sort(SortOrder.asc) == [{"_score": {"order": "asc"}}, {"sid": {"order": "asc"}}]
+
+
+def test_body_pages_in_opensearch_and_counts_every_match() -> None:
+    body = keyword_body(
+        "poverty",
+        StudyFilters(types=["survey"], countries=[16]),
+        sort=relevance_sort(SortOrder.desc),
+        limit=15,
+        offset=30,
+    )
+    assert (body["from"], body["size"], body["track_total_hits"]) == (30, 15, True)
     assert body["query"]["bool"]["must"] == [lexical_query("poverty")]
-    filters = body["query"]["bool"]["filter"]
-    assert {"terms": {"filter_facets.countries": [16]}} in filters
-    assert "dataset_type" not in str(filters)  # `types` is applied after the cut, not before
-    assert "post_filter" not in body
+    assert {"terms": {"filter_facets.countries": [16]}} in body["query"]["bool"]["filter"]
+    # `types` narrows the hits and the total but not the per-type counts, which are an aggregation over all matches
+    assert "dataset_type" not in str(body["query"])
+    assert body["post_filter"] == {"terms": {"filter_facets.dataset_type": ["survey"]}}
+    assert body["aggs"]["by_type"]["terms"]["field"] == "filter_facets.dataset_type"
+
+
+def test_body_can_leave_studies_out() -> None:
+    body = keyword_body(
+        "x", StudyFilters(), sort=relevance_sort(SortOrder.desc), limit=15, offset=0, exclude_sids=[4, 2]
+    )
+    assert body["query"]["bool"]["must_not"] == [{"terms": {"sid": [4, 2]}}]
+    assert "must_not" not in keyword_body("x", StudyFilters(), sort=[], limit=1, offset=0)["query"]["bool"]
+
+
+def test_body_can_add_studies_that_match_without_the_keyword() -> None:
+    body = keyword_body("x", StudyFilters(), sort=[], limit=15, offset=0, union_sids=[4, 2])
+    assert body["query"]["bool"]["must"] == [
+        {"bool": {"should": [lexical_query("x"), {"terms": {"sid": [4, 2]}}], "minimum_should_match": 1}}
+    ]
 
 
 # ---------------------------------------------------------------------------------------
@@ -99,26 +134,31 @@ def test_body_takes_the_top_cap_across_all_types_ordered_by_score_then_sid() -> 
 # ---------------------------------------------------------------------------------------
 
 
-def _hit(sid: int, score: float, dataset_type: str = "survey") -> dict[str, Any]:
+def _hit(sid: int, score: float | None, dataset_type: str = "survey") -> dict[str, Any]:
     return {
         "_score": score,
         "_source": {"sid": sid, "idno": f"IDNO_{sid}", "filter_facets": {"dataset_type": [dataset_type]}},
     }
 
 
-def _response(hits: list[dict[str, Any]], total: int | None = None, took: int = 3) -> dict[str, Any]:
-    return {"took": took, "hits": {"total": {"value": len(hits) if total is None else total}, "hits": hits}}
-
-
-def _browse_response(rows: list[tuple[int, str]], found: int, counts: dict[str, int], took: int = 2) -> dict[str, Any]:
+def _response(
+    hits: list[dict[str, Any]], total: int | None = None, counts: dict[str, int] | None = None, took: int = 3
+) -> dict[str, Any]:
+    """A keyword search response: the page's hits, the total of all matches, and the per-type counts."""
+    by_type = counts if counts is not None else _count_types(hits)
     return {
         "took": took,
-        "hits": {
-            "total": {"value": found},
-            "hits": [{"_source": {"sid": sid, "idno": idno}} for sid, idno in rows],
-        },
-        "aggregations": {"by_type": {"buckets": [{"key": k, "doc_count": v} for k, v in counts.items()]}},
+        "hits": {"total": {"value": len(hits) if total is None else total}, "hits": hits},
+        "aggregations": {"by_type": {"buckets": [{"key": k, "doc_count": v} for k, v in by_type.items()]}},
     }
+
+
+def _count_types(hits: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for h in hits:
+        kind = h["_source"]["filter_facets"]["dataset_type"][0]
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
 
 
 def _job(client: Any, **overrides: Any) -> SearchJob:
@@ -126,14 +166,13 @@ def _job(client: Any, **overrides: Any) -> SearchJob:
         "client": client,
         "index": "studies",
         "chunk_index": "chunks",
-        "policy": StudyPolicy.from_settings(Settings(studies_lexical_relative_cutoff=0.0)),
+        "policy": StudyPolicy.from_settings(Settings()),
         "query": "poverty",
         "filters": StudyFilters(),
         "sort_by": SortField.relevance,
         "sort_order": SortOrder.desc,
         "limit": 15,
         "offset": 0,
-        "result_cap": 100,
     }
     fields.update(overrides)
     return SearchJob(**fields)
@@ -150,100 +189,79 @@ def _run(job: SearchJob):
     return asyncio.run(lexical(job))
 
 
-CUT = [_hit(4, 9.5, "survey"), _hit(2, 7.25, "document"), _hit(9, 7.25, "survey"), _hit(1, 3.0, "table")]
+PAGE = [_hit(4, 9.5, "survey"), _hit(2, 7.25, "document"), _hit(9, 7.25, "survey"), _hit(1, 3.0, "table")]
 
 
 def test_relevance_order_is_the_score_order_with_scores_and_matched_by() -> None:
-    page = _run(_job(_client(_response(CUT))))
+    page = _run(_job(_client(_response(PAGE))))
     assert [h["sid"] for h in page.hits] == [4, 2, 9, 1]
     assert [h["score"] for h in page.hits] == [9.5, 7.25, 7.25, 3.0]
     assert all(h["matched_by"] == ["lexical"] for h in page.hits)
-    assert (page.found, page.truncated, page.result_cap) == (4, False, 100)
-    assert page.counts_by_type == {"survey": 2, "document": 1, "table": 1}
+    assert (page.found, page.counts_by_type) == (4, {"survey": 2, "document": 1, "table": 1})
     assert len(page.request_bodies) == 1
 
 
-def test_ascending_relevance_reverses_the_cut_set() -> None:
-    page = _run(_job(_client(_response(CUT)), sort_order=SortOrder.asc))
+def test_found_and_the_counts_cover_every_match_not_just_the_page() -> None:
+    """Two hundred and seventy-one studies match: the page shows three, and nothing else is cut."""
+    response = _response(PAGE[:3], total=271, counts={"survey": 200, "document": 60, "table": 11})
+    client = _client(response)
+    page = _run(_job(client, limit=3, offset=0))
+    assert (page.found, page.counts_by_type) == (271, {"survey": 200, "document": 60, "table": 11})
+    assert [h["sid"] for h in page.hits] == [4, 2, 9]
+
+
+def test_paging_is_done_by_opensearch() -> None:
+    client = _client(_response(PAGE[1:3], total=271))
+    page = _run(_job(client, limit=2, offset=1))
+    body = client.search.call_args.kwargs["body"]
+    assert (body["from"], body["size"]) == (1, 2)
+    assert [h["sid"] for h in page.hits] == [2, 9]
+    assert page.found == 271
+
+
+def test_ascending_relevance_asks_for_the_lowest_scores_first() -> None:
+    client = _client(_response(PAGE[::-1]))
+    page = _run(_job(client, sort_order=SortOrder.asc))
+    assert client.search.call_args.kwargs["body"]["sort"] == relevance_sort(SortOrder.asc)
     assert [h["sid"] for h in page.hits] == [1, 9, 2, 4]
 
 
-def test_paging_slices_the_cut_set() -> None:
-    client = _client(_response(CUT))
-    page = _run(_job(client, limit=2, offset=1))
-    assert [h["sid"] for h in page.hits] == [2, 9]
-    assert page.found == 4
-    beyond = _run(_job(_client(_response(CUT)), limit=2, offset=10))
-    assert (beyond.hits, beyond.found) == ([], 4)
-
-
 def test_types_filter_narrows_found_and_hits_but_not_the_tab_counts() -> None:
-    page = _run(_job(_client(_response(CUT)), filters=StudyFilters(types=["survey"])))
+    surveys = [PAGE[0], PAGE[2]]
+    response = _response(surveys, total=2, counts={"survey": 2, "document": 1, "table": 1})
+    client = _client(response)
+    page = _run(_job(client, filters=StudyFilters(types=["survey"])))
+    assert client.search.call_args.kwargs["body"]["post_filter"] == {
+        "terms": {"filter_facets.dataset_type": ["survey"]}
+    }
     assert [h["sid"] for h in page.hits] == [4, 9]
     assert page.found == 2
     assert page.counts_by_type == {"survey": 2, "document": 1, "table": 1}
 
 
-def test_more_matches_than_the_cap_are_reported_as_truncated() -> None:
-    cut = [_hit(i, 10.0 - i) for i in range(1, 4)]
-    page = _run(_job(_client(_response(cut, total=250)), result_cap=3))
-    assert (page.found, page.truncated, page.result_cap) == (3, True, 3)
-    assert page.counts_by_type == {"survey": 3}
-
-
-def test_weak_keyword_matches_are_cut_off_by_the_relative_cutoff() -> None:
-    policy = StudyPolicy.from_settings(Settings(studies_lexical_relative_cutoff=0.4))
-    page = _run(_job(_client(_response(CUT)), policy=policy))  # 3.0 is under 40% of 9.5
-    assert [h["sid"] for h in page.hits] == [4, 2, 9]
-    assert (page.found, page.counts_by_type) == (3, {"survey": 2, "document": 1})
-
-
-def test_truncated_means_strong_matches_beyond_the_cap_not_a_cut_tail() -> None:
-    policy = StudyPolicy.from_settings(Settings(studies_lexical_relative_cutoff=0.4))
-    strong = [_hit(i, 10.0 - i * 0.1) for i in range(1, 4)]
-    assert _run(_job(_client(_response(strong, total=250)), result_cap=3, policy=policy)).truncated is True
-    with_tail = [*strong[:2], _hit(3, 0.5)]  # the cutoff removed the tail, so nothing strong was left behind
-    assert _run(_job(_client(_response(with_tail, total=250)), result_cap=3, policy=policy)).truncated is False
-
-
-def test_exactly_the_cap_is_not_truncated() -> None:
-    cut = [_hit(i, 10.0 - i) for i in range(1, 4)]
-    assert _run(_job(_client(_response(cut, total=3)), result_cap=3)).truncated is False
-
-
-def test_another_sort_re_sorts_the_same_set_inside_opensearch() -> None:
-    cut = [_hit(4, 9.5, "survey"), _hit(2, 7.25, "document"), _hit(9, 7.25, "survey")]
-    resorted = _browse_response(
-        [(2, "IDNO_2"), (4, "IDNO_4"), (9, "IDNO_9")], found=2, counts={"survey": 2, "document": 1}
-    )
-    client = _client(_response(cut), resorted)
-    page = _run(
-        _job(client, sort_by=SortField.title, sort_order=SortOrder.asc, filters=StudyFilters(types=["survey"]), limit=3)
-    )
-
-    first, second = (call.kwargs["body"] for call in client.search.call_args_list)
-    assert second["query"]["bool"]["filter"][-1] == {"terms": {"sid": [4, 2, 9]}}  # pins the cut set
-    assert second["post_filter"] == {"terms": {"filter_facets.dataset_type": ["survey"]}}  # types narrows found only
-    assert second["sort"][0] == {"title_sort": {"order": "asc", "missing": "_last"}}
-    assert "must" not in second["query"]["bool"]  # no second relevance query
-    # the order and totals come from the re-sort; each hit keeps its relevance score
-    assert [h["sid"] for h in page.hits] == [2, 4, 9]
-    assert [h["score"] for h in page.hits] == [7.25, 9.5, 7.25]
-    assert (page.found, page.counts_by_type) == (2, {"survey": 2, "document": 1})
-    assert len(page.request_bodies) == 2 and first["size"] == 100
+def test_another_sort_orders_all_the_matches_by_that_sort_in_one_request() -> None:
+    rows = [_hit(2, None, "document"), _hit(4, None, "survey")]
+    client = _client(_response(rows, total=40))
+    page = _run(_job(client, sort_by=SortField.title, sort_order=SortOrder.asc, limit=2))
+    body = client.search.call_args.kwargs["body"]
+    assert body["sort"][0] == {"title_sort": {"order": "asc", "missing": "_last"}}
+    assert client.search.call_count == 1  # no second query: the matches are the whole set
+    assert [h["sid"] for h in page.hits] == [2, 4]
+    assert [h["score"] for h in page.hits] == [None, None]  # ordered by title, so there is no relevance score
+    assert page.found == 40
 
 
 def test_no_match_returns_nothing_and_asks_nothing_more() -> None:
-    client = _client(_response([]))
+    client = _client(_response([], counts={}), indexed=5)
     page = _run(_job(client, sort_by=SortField.title, sort_order=SortOrder.asc))
-    assert (page.found, page.hits, page.counts_by_type, page.truncated) == (0, [], {}, False)
+    assert (page.found, page.hits, page.counts_by_type) == (0, [], {})
     assert client.search.call_count == 1
 
 
 def test_an_empty_index_is_not_ready_but_no_match_in_a_populated_index_is_fine() -> None:
     with pytest.raises(IndexNotReady):
-        _run(_job(_client(_response([]), indexed=0)))
-    assert _run(_job(_client(_response([]), indexed=5))).found == 0
+        _run(_job(_client(_response([], counts={}), indexed=0)))
+    assert _run(_job(_client(_response([], counts={}), indexed=5))).found == 0
 
 
 def test_a_missing_index_is_not_ready() -> None:
@@ -265,7 +283,6 @@ def test_lexical_is_registered() -> None:
 @contextmanager
 def _running(monkeypatch: pytest.MonkeyPatch, client_mock: Any) -> Iterator[TestClient]:
     monkeypatch.setenv("NADA_SEARCH_BACKEND", "opensearch")
-    monkeypatch.setenv("NADA_STUDIES_LEXICAL_RELATIVE_CUTOFF", "0")  # the fixtures score a weak tail on purpose
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
     with TestClient(app) as client:
         previous = state.client
@@ -281,7 +298,7 @@ def _post(client: TestClient, body: dict[str, Any]):
 
 
 def test_a_query_runs_lexical_and_returns_scored_ids(monkeypatch: pytest.MonkeyPatch) -> None:
-    os_client = _client(_response(CUT))
+    os_client = _client(_response(PAGE[:3], total=4, counts={"survey": 2, "document": 1, "table": 1}))
     with _running(monkeypatch, os_client) as client:
         response = _post(client, {"query": "  poverty  ", "limit": 3, "mode": "lexical"})
     assert response.status_code == 200
@@ -293,24 +310,31 @@ def test_a_query_runs_lexical_and_returns_scored_ids(monkeypatch: pytest.MonkeyP
     assert [h.sid for h in body.hits] == [4, 2, 9]
     assert [h.rank for h in body.hits] == [1, 2, 3]
     assert all(h.matched_by[0].value == "lexical" and h.score is not None for h in body.hits)
-    assert (body.found, body.truncated, body.result_cap) == (4, False, Settings().studies_result_cap)
+    assert (body.found, body.truncated) == (4, False)
     assert body.search_counts_by_type == {"survey": 2, "document": 1, "table": 1}
-    assert os_client.search.call_args.kwargs["body"]["size"] == Settings().studies_result_cap
+    assert os_client.search.call_args.kwargs["body"]["size"] == 3
 
 
-def test_the_result_cap_and_truncation_reach_the_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    cut = [_hit(i, 10.0 - i) for i in range(1, 4)]
-    monkeypatch.setenv("NADA_STUDIES_RESULT_CAP", "3")
-    with _running(monkeypatch, _client(_response(cut, total=50))) as client:
+def test_more_matches_than_can_be_paged_are_reported_as_truncated(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [_hit(i, 10.0 - i * 0.01) for i in range(1, 4)]
+    with _running(
+        monkeypatch, _client(_response(rows, total=MAX_OFFSET + 5, counts={"survey": MAX_OFFSET + 5}))
+    ) as client:
         body = StudySearchResponse.model_validate(_post(client, {"query": "survey", "mode": "lexical"}).json())
-    assert (body.found, body.truncated, body.result_cap) == (3, True, 3)
+    assert (body.found, body.truncated) == (MAX_OFFSET + 5, True)
     assert body.invariant_violations() == []
 
 
+def test_a_page_beyond_the_paging_depth_is_out_of_range_for_a_query_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _running(monkeypatch, _client(_response([]))) as client:
+        response = _post(client, {"query": "x", "mode": "lexical", "limit": 100, "offset": MAX_OFFSET - 99})
+    assert response.status_code == 422
+    assert ErrorResponse.model_validate(response.json()).error.code.value == "offset_out_of_range"
+
+
 def test_explicit_lexical_and_another_sort(monkeypatch: pytest.MonkeyPatch) -> None:
-    cut = [_hit(4, 9.5), _hit(2, 7.25, "document")]
-    resorted = _browse_response([(2, "IDNO_2"), (4, "IDNO_4")], found=2, counts={"survey": 1, "document": 1})
-    with _running(monkeypatch, _client(_response(cut), resorted)) as client:
+    rows = [_hit(2, None, "document"), _hit(4, None)]
+    with _running(monkeypatch, _client(_response(rows, total=2))) as client:
         body = StudySearchResponse.model_validate(
             _post(client, {"query": "x", "mode": "lexical", "sort": {"by": "title", "order": "asc"}}).json()
         )
@@ -320,7 +344,8 @@ def test_explicit_lexical_and_another_sort(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_types_filter_over_a_query_keeps_the_contract_counts(monkeypatch: pytest.MonkeyPatch) -> None:
-    with _running(monkeypatch, _client(_response(CUT))) as client:
+    response = _response([PAGE[0], PAGE[2]], total=2, counts={"survey": 2, "document": 1, "table": 1})
+    with _running(monkeypatch, _client(response)) as client:
         body = StudySearchResponse.model_validate(
             _post(client, {"query": "x", "mode": "lexical", "filters": {"types": ["survey"]}}).json()
         )
@@ -330,7 +355,7 @@ def test_types_filter_over_a_query_keeps_the_contract_counts(monkeypatch: pytest
 
 
 def test_a_query_that_matches_nothing_is_an_empty_result_not_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    with _running(monkeypatch, _client(_response([]), indexed=11)) as client:
+    with _running(monkeypatch, _client(_response([], counts={}), indexed=11)) as client:
         response = _post(client, {"query": "xyzzy qwerty flurbo", "mode": "lexical"})
     assert response.status_code == 200
     body = StudySearchResponse.model_validate(response.json())
@@ -339,17 +364,13 @@ def test_a_query_that_matches_nothing_is_an_empty_result_not_an_error(monkeypatc
 
 
 def test_an_empty_index_is_index_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
-    with _running(monkeypatch, _client(_response([]), indexed=0)) as client:
+    with _running(monkeypatch, _client(_response([], counts={}), indexed=0)) as client:
         response = _post(client, {"query": "x", "mode": "lexical"})
     assert response.status_code == 503
     assert ErrorResponse.model_validate(response.json()).error.code.value == "index_not_ready"
 
 
 def test_debug_lists_every_opensearch_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    cut = [_hit(4, 9.5)]
-    resorted = _browse_response([(4, "IDNO_4")], found=1, counts={"survey": 1})
-    with _running(monkeypatch, _client(_response(cut), resorted)) as client:
-        body = _post(
-            client, {"query": "x", "mode": "lexical", "sort": {"by": "year", "order": "desc"}, "include_debug": True}
-        ).json()
-    assert len(body["debug"]["opensearch_requests"]) == 2
+    with _running(monkeypatch, _client(_response([_hit(4, 9.5)]))) as client:
+        body = _post(client, {"query": "x", "mode": "lexical", "include_debug": True}).json()
+    assert len(body["debug"]["opensearch_requests"]) == 1

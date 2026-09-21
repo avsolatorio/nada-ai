@@ -191,16 +191,22 @@ def test_invariants_flag_counts_that_do_not_add_up() -> None:
     assert StudySearchResponse.model_validate(data).invariant_violations()
 
 
-def test_invariants_flag_found_above_the_cap() -> None:
+def test_truncated_means_more_matches_than_can_be_paged() -> None:
+    """``found`` is never cut: ``truncated`` only says it exceeds ``max_offset``, so the last pages are out of reach."""
+    data = _load("response_truncated.json")
+    assert data["found"] > MAX_OFFSET and data["truncated"] is True
+    assert StudySearchResponse.model_validate(data).invariant_violations() == []
+
+
+def test_invariants_flag_truncated_when_everything_can_be_paged() -> None:
     data = _hybrid()
-    data["found"] = 101
-    data["result_cap"] = 100
+    data["truncated"] = True
     assert StudySearchResponse.model_validate(data).invariant_violations()
 
 
-def test_invariants_flag_truncated_without_a_cap() -> None:
-    data = _load("response_browse.json")
-    data["truncated"] = True
+def test_invariants_flag_a_missing_truncated_when_found_exceeds_max_offset() -> None:
+    data = _load("response_truncated.json")
+    data["truncated"] = False
     assert StudySearchResponse.model_validate(data).invariant_violations()
 
 

@@ -4,9 +4,11 @@
 mode is advertised exactly when its executor exists.
 
 * ``browse``: no query, filters and sort only, on the study index.
-* ``lexical``: keyword search on the study index.
-* ``semantic``: vector search on the chunk index, collapsed to one hit per study.
-* ``hybrid``: both legs, fused by rank.
+* ``lexical``: keyword search on the study index. Every matching study is returned and paged, best match first.
+* ``semantic``: vector search on the chunk index, collapsed to one hit per study, at most ``semantic_window`` studies.
+* ``hybrid``: the semantic studies (at most ``semantic_window``) fused, by rank, with the best ``fusion_window`` keyword
+  matches, followed by all the other keyword matches in score order. Any other sort orders the union of the two by
+  that sort.
 
 The study index (one document per study) is the source of truth for what a study is: its NADA idno, its type, the
 counts. Filters are the flat ``filter_facets.<key>`` fields written at ingest on both indexes (see
@@ -33,7 +35,6 @@ from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, METADAT
 from nada_ai.search.backend.opensearch.studies_semantic import (
     Ranked,
     StudyPolicy,
-    apply_lexical_cutoff,
     apply_semantic_policy,
     knn_body,
     parse_semantic,
@@ -151,11 +152,16 @@ def browse_body(filters: StudyFilters, by: SortField, order: SortOrder, limit: i
         "_source": ["sid", "idno"],
         "query": {"bool": {"filter": filter_clauses(filters)}},
         "sort": sort_clause(by, order),
-        "aggs": {"by_type": {"terms": {"field": f"{FILTER_FACETS_KEY}.dataset_type", "size": _TYPE_BUCKETS}}},
+        "aggs": _type_aggregation(),
     }
     if (post := types_post_filter(filters)) is not None:
         body["post_filter"] = post
     return body
+
+
+def _type_aggregation() -> dict[str, Any]:
+    """Distinct studies per dataset type. Aggregations run before ``post_filter``, so the counts ignore ``types``."""
+    return {"by_type": {"terms": {"field": f"{FILTER_FACETS_KEY}.dataset_type", "size": _TYPE_BUCKETS}}}
 
 
 # ---------------------------------------------------------------------------------------
@@ -187,8 +193,6 @@ class SearchJob:
     sort_order: SortOrder
     limit: int
     offset: int
-    #: The most studies a relevance search makes pageable (``settings.studies_result_cap``).
-    result_cap: int
     policy: StudyPolicy
     #: Turns the query into a vector; ``None`` when no local embedding backend exists.
     embed: EmbedFn | None = None
@@ -203,9 +207,6 @@ class StudyPage:
     hits: list[dict[str, Any]]  # each {"sid", "idno", "score", "matched_by", optional "passages"}
     took_ms: float | None = None
     request_bodies: list[dict[str, Any]] = field(default_factory=list)
-    #: True when more studies matched than ``result_cap`` allows; ``result_cap`` is set for relevance searches only.
-    truncated: bool = False
-    result_cap: int | None = None
 
 
 def _total(response: dict[str, Any]) -> int:
@@ -229,19 +230,26 @@ async def _search(client: Any, index: str, body: dict[str, Any]) -> dict[str, An
 # ---------------------------------------------------------------------------------------
 
 
+def _by_type(response: dict[str, Any]) -> dict[str, int]:
+    return {str(b["key"]): int(b["doc_count"]) for b in response["aggregations"]["by_type"]["buckets"]}
+
+
+async def _raise_if_index_empty(job: SearchJob) -> None:
+    """Zero results is either "nothing matches" or "nothing is indexed"; only the second is an error."""
+    if int((await job.client.count(index=job.index))["count"]) == 0:
+        raise IndexNotReady(job.index)
+
+
 async def browse(job: SearchJob) -> StudyPage:
     """Filter-only listing: exact ``found``, exact per-type counts, deterministic order."""
     body = browse_body(job.filters, job.sort_by, job.sort_order, job.limit, job.offset)
     response = await _search(job.client, job.index, body)
     found = _total(response)
-    # zero results is either "nothing matches" or "nothing is indexed"; only the second is an error
-    if found == 0 and int((await job.client.count(index=job.index))["count"]) == 0:
-        raise IndexNotReady(job.index)
+    if found == 0:
+        await _raise_if_index_empty(job)
     return StudyPage(
         found=found,
-        counts_by_type={
-            str(bucket["key"]): int(bucket["doc_count"]) for bucket in response["aggregations"]["by_type"]["buckets"]
-        },
+        counts_by_type=_by_type(response),
         hits=[
             {"sid": int(h["_source"]["sid"]), "idno": h["_source"]["idno"], "score": None, "matched_by": []}
             for h in response["hits"]["hits"]
@@ -252,7 +260,124 @@ async def browse(job: SearchJob) -> StudyPage:
 
 
 # ---------------------------------------------------------------------------------------
-# Relevance searches: the shared tail
+# Keyword query
+# ---------------------------------------------------------------------------------------
+
+# Fields searched by keyword search and their boosts: the ones NADA's own search has always used.
+LEXICAL_FIELDS = (
+    "idno.text^60",
+    "title^40",
+    "nation^30",
+    "authoring_entity^10",
+    "keywords^10",
+    "abstract",
+    "methodology",
+    "var_keywords^15",
+)
+
+
+def lexical_query(text: str) -> dict[str, Any]:
+    """Keyword match over the study text fields.
+
+    ``minimum_should_match: 2<75%``: one or two terms must all match, otherwise at least 75% of them (per field, as in
+    NADA's own search). ``fuzziness: AUTO:5,9`` forgives one typo in words of 5-8 letters and two in longer ones,
+    and none in shorter words (with ``AUTO``, 3-4 letter words and long variable-label fields matched unrelated
+    words); ``prefix_length: 2`` keeps the first two letters exact.
+
+    Every study this matches is a keyword match: there is no score cutoff. The best matches (title, idno) simply
+    score highest, and a study that mentions the word only in a low-weight field comes after them.
+    """
+    return {
+        "multi_match": {
+            "query": text,
+            "fields": list(LEXICAL_FIELDS),
+            "type": "most_fields",
+            "minimum_should_match": "2<75%",
+            "fuzziness": "AUTO:5,9",
+            "prefix_length": 2,
+        }
+    }
+
+
+def relevance_sort(order: SortOrder) -> list[dict[str, Any]]:
+    """Order by keyword score, ties by ``sid`` so that every page of a result is stable."""
+    return [{"_score": {"order": order.value}}, {"sid": {"order": "asc"}}]
+
+
+def keyword_body(
+    text: str,
+    filters: StudyFilters,
+    *,
+    sort: list[dict[str, Any]],
+    limit: int,
+    offset: int,
+    exclude_sids: list[int] | None = None,
+    union_sids: list[int] | None = None,
+) -> dict[str, Any]:
+    """The keyword matches that pass ``filters``, paged, with per-type counts over all of them.
+
+    ``exclude_sids`` leaves studies out (they are shown elsewhere in the result); ``union_sids`` adds studies that
+    match without the keyword. The ``types`` filter narrows the hits and ``hits.total`` but not the counts.
+    """
+    keyword: dict[str, Any] = lexical_query(text)
+    if union_sids:
+        keyword = {"bool": {"should": [keyword, {"terms": {"sid": union_sids}}], "minimum_should_match": 1}}
+    query: dict[str, Any] = {"bool": {"must": [keyword], "filter": filter_clauses(filters)}}
+    if exclude_sids:
+        query["bool"]["must_not"] = [{"terms": {"sid": exclude_sids}}]
+    body: dict[str, Any] = {
+        "from": offset,
+        "size": limit,
+        "track_total_hits": True,
+        "_source": ["sid", "idno", f"{FILTER_FACETS_KEY}.dataset_type"],
+        "query": query,
+        "sort": sort,
+        "aggs": _type_aggregation(),
+    }
+    if (post := types_post_filter(filters)) is not None:
+        body["post_filter"] = post
+    return body
+
+
+def _dataset_type(hit: dict[str, Any]) -> str:
+    values = (hit["_source"].get(FILTER_FACETS_KEY) or {}).get("dataset_type") or []
+    return str(values[0]) if values else "unknown"
+
+
+def _keyword_hit(hit: dict[str, Any]) -> dict[str, Any]:
+    score = hit.get("_score")
+    return {
+        "sid": int(hit["_source"]["sid"]),
+        "idno": hit["_source"]["idno"],
+        "score": None if score is None else float(score),
+        "matched_by": ["lexical"],
+    }
+
+
+async def lexical(job: SearchJob) -> StudyPage:
+    """Keyword search: every matching study, best match first (or in the chosen sort), paged."""
+    assert job.query is not None
+    sort = (
+        relevance_sort(job.sort_order)
+        if job.sort_by is SortField.relevance
+        else sort_clause(job.sort_by, job.sort_order)
+    )
+    body = keyword_body(job.query, job.filters, sort=sort, limit=job.limit, offset=job.offset)
+    response = await _search(job.client, job.index, body)
+    found = _total(response)
+    if found == 0:
+        await _raise_if_index_empty(job)
+    return StudyPage(
+        found=found,
+        counts_by_type=_by_type(response),
+        hits=[_keyword_hit(h) for h in response["hits"]["hits"]],
+        took_ms=_took(response),
+        request_bodies=[body],
+    )
+
+
+# ---------------------------------------------------------------------------------------
+# Semantic
 # ---------------------------------------------------------------------------------------
 
 
@@ -268,44 +393,22 @@ def _hit(ranked: Ranked) -> dict[str, Any]:
     return hit
 
 
-async def _page(job: SearchJob, ranked: list[Ranked], *, truncated: bool, took: float, bodies: list[dict]) -> StudyPage:
-    """Turn a best-first ranking into the page: the cut set, the counts, the types filter, the sort, the paging.
+def _debug_body(body: dict[str, Any]) -> dict[str, Any]:
+    """The vector request without the vector itself (hundreds of numbers no one reads)."""
+    knn = next(iter(body["query"]["knn"].values()))
+    shown = {**knn, "vector": f"<{len(knn['vector'])}-dimensional query vector>"}
+    return {**body, "query": {"knn": {next(iter(body["query"]["knn"])): shown}}}
 
-    The cut set is the best ``result_cap`` studies across ALL types, so choosing a tab (``types``) never changes
-    which studies are relevant, and ``search_counts_by_type`` describes the cut set. Sorting by relevance orders that
-    set by score; any other sort re-sorts the same set inside OpenSearch.
-    """
-    cut = ranked[: job.result_cap]
-    truncated = truncated or len(ranked) > job.result_cap
 
-    if not cut:
-        if int((await job.client.count(index=job.index))["count"]) == 0:
-            raise IndexNotReady(job.index)
-        return StudyPage(0, {}, [], took, bodies, truncated=False, result_cap=job.result_cap)
-
-    types = job.filters.types
-    if job.sort_by is SortField.relevance:
-        counts = dict(Counter(r.dataset_type or "unknown" for r in cut))
-        ordered = cut if job.sort_order is SortOrder.desc else cut[::-1]
-        kept = [r for r in ordered if not types or (r.dataset_type or "unknown") in types]
-        page_hits = kept[job.offset : job.offset + job.limit]
-        found = len(kept)
-    else:
-        # the sids pin the set; `types` narrows `found` only, exactly as in browse
-        by_sid = {r.sid: r for r in cut}
-        resorted = await browse(replace(job, query=None, filters=StudyFilters(sids=list(by_sid), types=types)))
-        counts, found = resorted.counts_by_type, resorted.found
-        took += resorted.took_ms or 0.0
-        bodies = [*bodies, *resorted.request_bodies]
-        page_hits = [by_sid[h["sid"]] for h in resorted.hits]
-
-    return StudyPage(
-        found, counts, [_hit(r) for r in page_hits], took, bodies, truncated=truncated, result_cap=job.result_cap
-    )
+async def _embed(job: SearchJob) -> list[float]:
+    assert job.query is not None
+    if job.embed is None:
+        raise EmbeddingUnavailable("semantic search needs the local embedding backend")
+    return await job.embed(job.query)
 
 
 async def _enrich(job: SearchJob, ranked: list[Ranked]) -> tuple[list[Ranked], float, list[dict[str, Any]]]:
-    """Look up studies that only the vector leg found in the study index, with the full filters.
+    """Look up studies that only the vector search found in the study index, with the full filters.
 
     The study index is the source of truth: it supplies NADA's own idno (a chunk carries the record's schema idno,
     which can differ) and the type, and it drops studies that are no longer indexed or that a filter excludes.
@@ -330,136 +433,188 @@ async def _enrich(job: SearchJob, ranked: list[Ranked]) -> tuple[list[Ranked], f
     return kept, _took(response), [body]
 
 
-# ---------------------------------------------------------------------------------------
-# lexical
-# ---------------------------------------------------------------------------------------
-
-# Fields searched by keyword search and their boosts: the ones NADA's own search has always used.
-LEXICAL_FIELDS = (
-    "idno.text^60",
-    "title^40",
-    "nation^30",
-    "authoring_entity^10",
-    "keywords^10",
-    "abstract",
-    "methodology",
-    "var_keywords^15",
-)
-
-
-def lexical_query(text: str) -> dict[str, Any]:
-    """Keyword match over the study text fields.
-
-    ``minimum_should_match: 2<75%``: one or two terms must all match, otherwise at least 75% of them (per field, as in
-    NADA's own search). ``fuzziness: AUTO:5,9`` forgives one typo in words of 5-8 letters and two in longer ones,
-    and none in shorter words (with ``AUTO``, 3-4 letter words and long variable-label fields matched unrelated
-    words); ``prefix_length: 2`` keeps the first two letters exact.
-    """
-    return {
-        "multi_match": {
-            "query": text,
-            "fields": list(LEXICAL_FIELDS),
-            "type": "most_fields",
-            "minimum_should_match": "2<75%",
-            "fuzziness": "AUTO:5,9",
-            "prefix_length": 2,
-        }
-    }
-
-
-def lexical_body(text: str, filters: StudyFilters, size: int) -> dict[str, Any]:
-    """The best ``size`` keyword matches across ALL types (the ``types`` filter is applied afterwards)."""
-    return {
-        "from": 0,
-        "size": size,
-        "track_total_hits": True,
-        "_source": ["sid", "idno", f"{FILTER_FACETS_KEY}.dataset_type"],
-        "query": {"bool": {"must": [lexical_query(text)], "filter": filter_clauses(filters)}},
-        "sort": [{"_score": {"order": "desc"}}, {"sid": {"order": "asc"}}],
-    }
-
-
-def _dataset_type(hit: dict[str, Any]) -> str:
-    values = (hit["_source"].get(FILTER_FACETS_KEY) or {}).get("dataset_type") or []
-    return str(values[0]) if values else "unknown"
-
-
-async def _lexical_hits(job: SearchJob, size: int) -> tuple[list[Ranked], bool, float, dict[str, Any]]:
-    """``(best-first keyword matches within the relative cutoff, whether more studies matched than were returned,
-    took, request)``."""
-    assert job.query is not None
-    body = lexical_body(job.query, job.filters, size)
-    response = await _search(job.client, job.index, body)
-    fetched = [
-        Ranked(
-            sid=int(h["_source"]["sid"]),
-            score=float(h["_score"]),
-            matched_by=["lexical"],
-            idno=h["_source"]["idno"],
-            dataset_type=_dataset_type(h),
-        )
-        for h in response["hits"]["hits"]
-    ]
-    hits = apply_lexical_cutoff(fetched, job.policy)
-    # the cutoff drops the weak tail; only when it drops nothing can the studies beyond ``size`` still be strong ones
-    more = _total(response) > size and len(hits) == len(fetched)
-    return hits, more, _took(response), body
-
-
-async def lexical(job: SearchJob) -> StudyPage:
-    """Keyword search: the best ``result_cap`` matches; ``truncated`` says whether more studies matched."""
-    hits, more, took, body = await _lexical_hits(job, job.result_cap)
-    return await _page(job, hits, truncated=more, took=took, bodies=[body])
-
-
-# ---------------------------------------------------------------------------------------
-# semantic and hybrid
-# ---------------------------------------------------------------------------------------
-
-
-def _debug_body(body: dict[str, Any]) -> dict[str, Any]:
-    """The vector request without the vector itself (hundreds of numbers no one reads)."""
-    knn = next(iter(body["query"]["knn"].values()))
-    shown = {**knn, "vector": f"<{len(knn['vector'])}-dimensional query vector>"}
-    return {**body, "query": {"knn": {next(iter(body["query"]["knn"])): shown}}}
-
-
-async def _embed(job: SearchJob) -> list[float]:
-    assert job.query is not None
-    if job.embed is None:
-        raise EmbeddingUnavailable("semantic search needs the local embedding backend")
-    return await job.embed(job.query)
-
-
-async def _semantic_hits(job: SearchJob, vector: list[float]) -> tuple[list[Ranked], float, dict[str, Any]]:
-    """Vector matches that clear the floor and the relative cutoff, one per study, best first."""
+async def _semantic_block(job: SearchJob) -> tuple[list[Ranked], float, list[dict[str, Any]]]:
+    """The studies the vector search finds (at most ``semantic_window``, after the floor and the relative cutoff),
+    best first, each with NADA's idno and type. Raises ``EmbeddingUnavailable`` before any search runs."""
+    vector = await _embed(job)
     body = knn_body(vector, filter_clauses(job.filters, CHUNK_FIELDS), job.policy)
     response = await _search(job.client, job.chunk_index, body)
     hits = apply_semantic_policy(parse_semantic(response, job.policy), job.policy)
-    return hits, _took(response), _debug_body(body)
+    hits, took_lookup, lookup = await _enrich(job, hits)
+    return hits, _took(response) + took_lookup, [_debug_body(body), *lookup]
 
 
 async def semantic(job: SearchJob) -> StudyPage:
-    """Vector search only: studies whose best chunk clears the floor and the cutoff."""
-    vector = await _embed(job)
-    hits, took, body = await _semantic_hits(job, vector)
-    hits, took_lookup, lookup = await _enrich(job, hits)
-    return await _page(job, hits, truncated=False, took=took + took_lookup, bodies=[body, *lookup])
+    """Vector search only: the semantic block, and nothing else. Any sort but relevance re-sorts the block."""
+    block, took, bodies = await _semantic_block(job)
+    if not block:
+        await _raise_if_index_empty(job)
+        return StudyPage(0, {}, [], took, bodies)
+
+    types = job.filters.types
+    counts = dict(Counter(r.dataset_type or "unknown" for r in block))
+    if job.sort_by is SortField.relevance:
+        ordered = block if job.sort_order is SortOrder.desc else block[::-1]
+        kept = [r for r in ordered if not types or (r.dataset_type or "unknown") in types]
+        return StudyPage(len(kept), counts, [_hit(r) for r in kept[job.offset : job.offset + job.limit]], took, bodies)
+
+    # the sids pin the set; `types` narrows `found` only, exactly as in browse
+    by_sid = {r.sid: r for r in block}
+    resorted = await browse(replace(job, query=None, filters=StudyFilters(sids=list(by_sid), types=types)))
+    return StudyPage(
+        resorted.found,
+        resorted.counts_by_type,
+        [_hit(by_sid[h["sid"]]) for h in resorted.hits],
+        took + (resorted.took_ms or 0.0),
+        [*bodies, *resorted.request_bodies],
+    )
+
+
+# ---------------------------------------------------------------------------------------
+# Hybrid
+# ---------------------------------------------------------------------------------------
+
+
+async def _keyword_matches_among(job: SearchJob, sids: list[int]) -> tuple[set[int], float, dict[str, Any]]:
+    """Which of ``sids`` are also keyword matches (with the filters)."""
+    assert job.query is not None
+    body = {
+        "size": len(sids),
+        "track_total_hits": False,
+        "_source": ["sid"],
+        "query": {
+            "bool": {
+                "must": [lexical_query(job.query)],
+                "filter": [*filter_clauses(job.filters), {"terms": {"sid": sids}}],
+            }
+        },
+    }
+    response = await _search(job.client, job.index, body)
+    return {int(h["_source"]["sid"]) for h in response["hits"]["hits"]}, _took(response), body
+
+
+def _keyword_ranked(hit: dict[str, Any]) -> Ranked:
+    return Ranked(
+        sid=int(hit["_source"]["sid"]),
+        score=float(hit["_score"]),
+        matched_by=["lexical"],
+        idno=hit["_source"]["idno"],
+        dataset_type=_dataset_type(hit),
+    )
+
+
+def _hybrid_hit(hit: dict[str, Any]) -> dict[str, Any]:
+    """A hybrid hit carries no score: the fused head and the keyword matches after it are ordered by different rules,
+    so their scores could not be compared."""
+    return {**hit, "score": None}
+
+
+def _fused_hit(ranked: Ranked, keyword_matches: set[int]) -> dict[str, Any]:
+    """A hit of the fused head; a semantic study that the keyword search also matches (beyond the fusion window)
+    says so."""
+    hit = _hit(ranked)
+    if ranked.sid in keyword_matches and "lexical" not in hit["matched_by"]:
+        hit["matched_by"] = ["lexical", *hit["matched_by"]]
+    return _hybrid_hit(hit)
 
 
 async def hybrid(job: SearchJob) -> StudyPage:
-    """Both legs, fused by rank: keyword matches lead, and the vector leg fills what keywords cannot reach."""
-    vector = await _embed(job)  # fail before any search runs
-    (lex, more, took_lex, body_lex), (sem, took_sem, body_sem) = await asyncio.gather(
-        _lexical_hits(job, job.policy.window), _semantic_hits(job, vector)
+    """The semantic studies and the keyword matches, fused, then every other keyword match.
+
+    With a relevance sort, the best ``fusion_window`` keyword matches and the semantic studies (at most
+    ``semantic_window``) are fused by rank: a study in both comes first, and the two lists otherwise alternate, so an
+    exact keyword match is never buried under related studies. The keyword matches beyond the window follow, best
+    first and paged by OpenSearch. ``found`` is the fused head plus those matches, so nothing is cut, and the counts by
+    type are the keyword counts plus the head's. With any other sort the union of the semantic studies and the keyword
+    matches is ordered by that sort, so ``found`` is the same whatever the sort.
+    """
+    assert job.query is not None
+    block, took, bodies = await _semantic_block(job)  # fail before any keyword search runs
+    if not block:
+        page = await lexical(job)
+        page.took_ms = (page.took_ms or 0.0) + took
+        page.request_bodies = [*bodies, *page.request_bodies]
+        return page
+
+    block_ids = [r.sid for r in block]
+    by_sid = {r.sid: r for r in block}
+    types = job.filters.types
+
+    if job.sort_by is not SortField.relevance:
+        agree, took_agree, body_agree = await _keyword_matches_among(job, block_ids)
+        body = keyword_body(
+            job.query,
+            job.filters,
+            sort=sort_clause(job.sort_by, job.sort_order),
+            limit=job.limit,
+            offset=job.offset,
+            union_sids=block_ids,
+        )
+        response = await _search(job.client, job.index, body)
+        return StudyPage(
+            found=_total(response),
+            counts_by_type=_by_type(response),
+            hits=[
+                _fused_hit(by_sid[sid], agree)
+                if (sid := int(h["_source"]["sid"])) in by_sid
+                else _hybrid_hit(_keyword_hit(h))
+                for h in response["hits"]["hits"]
+            ],
+            took_ms=took + took_agree + _took(response),
+            request_bodies=[*bodies, body_agree, body],
+        )
+
+    # the head: the best keyword matches over ALL types (the tab never changes the order), fused with the semantic studies
+    head_body = keyword_body(
+        job.query,
+        job.filters.model_copy(update={"types": None}),
+        sort=relevance_sort(SortOrder.desc),
+        limit=job.policy.fusion_window,
+        offset=0,
     )
-    fused, took_lookup, lookup = await _enrich(job, rrf_fuse(lex, sem, job.policy))
-    return await _page(
-        job,
-        fused,
-        truncated=more,
-        took=took_lex + took_sem + took_lookup,
-        bodies=[body_lex, body_sem, *lookup],
+    (agree, took_agree, body_agree), head_response = await asyncio.gather(
+        _keyword_matches_among(job, block_ids), _search(job.client, job.index, head_body)
+    )
+    keyword_head = [_keyword_ranked(h) for h in head_response["hits"]["hits"]]
+    fused = rrf_fuse(keyword_head, block)
+    shown = [r for r in fused if not types or (r.dataset_type or "unknown") in types]
+    descending = job.sort_order is SortOrder.desc
+
+    # The fused head sits at the start (best first) or the end (reversed) of the ordered result; the keyword matches
+    # without it fill the rest. One keyword request supplies its rows, its total and the per-type counts.
+    if descending:
+        from_head = max(0, min(job.limit, len(shown) - job.offset))
+        tail_offset, tail_rows = max(0, job.offset - len(shown)), job.limit - from_head
+    else:
+        tail_offset, tail_rows = job.offset, job.limit
+    body = keyword_body(
+        job.query,
+        job.filters,
+        sort=relevance_sort(job.sort_order),
+        limit=max(1, tail_rows),  # a page inside the head still needs the total and the counts
+        offset=tail_offset,
+        exclude_sids=[r.sid for r in fused],
+    )
+    response = await _search(job.client, job.index, body)
+    tail_found = _total(response)
+    tail_hits = [_hybrid_hit(_keyword_hit(h)) for h in response["hits"]["hits"]] if tail_rows > 0 else []
+
+    if descending:
+        hits = [_fused_hit(r, agree) for r in shown[job.offset : job.offset + from_head]] + tail_hits
+    else:
+        need = job.limit - len(tail_hits)
+        start = max(0, job.offset - tail_found)
+        hits = tail_hits + [_fused_hit(r, agree) for r in shown[::-1][start : start + need]]
+
+    counts = _by_type(response)
+    for r in fused:
+        counts[r.dataset_type or "unknown"] = counts.get(r.dataset_type or "unknown", 0) + 1
+    return StudyPage(
+        found=len(shown) + tail_found,
+        counts_by_type=counts,
+        hits=hits,
+        took_ms=took + took_agree + _took(head_response) + _took(response),
+        request_bodies=[*bodies, body_agree, head_body, body],
     )
 
 

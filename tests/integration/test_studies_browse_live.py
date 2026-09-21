@@ -321,7 +321,6 @@ def test_browse_matches_the_oracle_on_the_real_index() -> None:
                         sort_order=SortOrder(order),
                         limit=limit,
                         offset=offset,
-                        result_cap=100,
                     )
                     return await browse(job)
 

@@ -187,7 +187,6 @@ def test_keyword_search_on_the_real_index() -> None:
                     order: str = "desc",
                     limit: int = 100,
                     offset: int = 0,
-                    cap: int = 100,
                 ):
                     return await lexical(
                         SearchJob(
@@ -201,7 +200,6 @@ def test_keyword_search_on_the_real_index() -> None:
                             sort_order=SortOrder(order),
                             limit=limit,
                             offset=offset,
-                            result_cap=cap,
                         )
                     )
 
@@ -210,7 +208,7 @@ def test_keyword_search_on_the_real_index() -> None:
 
                 # nothing matches gibberish
                 page = await search("xyzzy qwerty flurbo")
-                assert (page.found, page.hits, page.counts_by_type, page.truncated) == (0, [], {}, False)
+                assert (page.found, page.hits, page.counts_by_type) == (0, [], {})
 
                 # a distinctive title word finds its study, whatever the case and accents
                 assert ids(await search("poverty")) == [5]
@@ -239,7 +237,7 @@ def test_keyword_search_on_the_real_index() -> None:
                 assert all(h["matched_by"] == ["lexical"] for h in page.hits)
                 assert (await search("survey")).hits == page.hits  # deterministic
 
-                # filters apply before the cut; `types` after it
+                # filters apply to the matches; `types` narrows found and the hits but not the tab counts
                 assert ids(await search("survey", filters={"countries": [818]})) == [1]
                 everything = await search("survey")
                 assert everything.found == 5 and everything.counts_by_type == {"survey": 3, "geospatial": 1, "table": 1}
@@ -247,25 +245,21 @@ def test_keyword_search_on_the_real_index() -> None:
                 assert surveys.found == 3
                 assert surveys.counts_by_type == everything.counts_by_type  # the tabs do not change
 
-                # the cap: only the best `cap` matches are pageable, and the result says so
-                capped = await search("survey", cap=3)
-                assert (capped.found, capped.truncated, capped.result_cap) == (3, True, 3)
-                assert ids(capped) == ids(everything)[:3]
-                assert sum(capped.counts_by_type.values()) == 3
-                assert (await search("survey", cap=5)).truncated is False
+                # nothing is cut: every match is returned, and the total counts them all however small the page
+                assert (await search("survey", limit=2)).found == 5
+                assert sum((await search("survey", limit=1)).counts_by_type.values()) == 5
 
-                # another sort re-sorts the SAME cut set (by title here), keeping each hit's score
-                by_title = await search("survey", cap=3, by="title", order="asc")
-                titles = {sid: STUDIES[sid]["title"].lower() for sid in ids(capped)}
-                assert sorted(ids(by_title)) == sorted(ids(capped))
-                assert ids(by_title) == sorted(ids(capped), key=lambda sid: (titles[sid], sid))
-                assert {h["sid"]: h["score"] for h in by_title.hits} == {h["sid"]: h["score"] for h in capped.hits}
-                assert (by_title.found, by_title.truncated) == (3, True)
+                # another sort orders ALL the matches (by title here); a title sort has no relevance score
+                by_title = await search("survey", by="title", order="asc")
+                titles = {sid: STUDIES[sid]["title"].lower() for sid in ids(everything)}
+                assert ids(by_title) == sorted(ids(everything), key=lambda sid: (titles[sid], sid))
+                assert by_title.found == 5 and all(h["score"] is None for h in by_title.hits)
 
-                # paging over the cut set
+                # paging is done by OpenSearch, and the pages join up
                 first = await search("survey", limit=2, offset=0)
                 second = await search("survey", limit=2, offset=2)
-                assert ids(first) + ids(second) == ids(everything)[:4]
+                third = await search("survey", limit=2, offset=4)
+                assert ids(first) + ids(second) + ids(third) == ids(everything)
                 assert (await search("survey", limit=2, offset=50)).hits == []
                 assert (await search("survey", limit=2, offset=50)).found == 5
             finally:

@@ -1,10 +1,11 @@
-"""POST /studies/search, semantic and hybrid modes (step 7 of the OpenSearch plan): the policy, fusion, executors."""
+"""POST /studies/search, semantic and hybrid modes: the policy, the semantic block, and the executors."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -35,7 +36,6 @@ from nada_ai.search.backend.opensearch.studies_search import (
 from nada_ai.search.backend.opensearch.studies_semantic import (
     Ranked,
     StudyPolicy,
-    apply_lexical_cutoff,
     apply_semantic_policy,
     knn_body,
     parse_semantic,
@@ -45,14 +45,11 @@ from nada_ai.search.backend.opensearch.studies_semantic import (
 from nada_ai.settings import Settings
 
 POLICY = StudyPolicy(
-    window=200,
+    semantic_window=50,
+    fusion_window=50,
     semantic_k=1000,
     semantic_min_score=0.68,
     semantic_relative_cutoff=0.9,
-    lexical_relative_cutoff=0.0,
-    lexical_weight=1.0,
-    semantic_weight=0.5,
-    rrf_k=60,
 )
 
 # ---------------------------------------------------------------------------------------
@@ -61,31 +58,50 @@ POLICY = StudyPolicy(
 
 
 def test_the_policy_comes_from_settings() -> None:
-    settings = Settings(studies_semantic_min_score=0.7, studies_fusion_semantic_weight=0.25)
+    settings = Settings(studies_semantic_min_score=0.7, studies_semantic_window=20, studies_fusion_window=30)
     policy = StudyPolicy.from_settings(settings)
-    assert (policy.window, policy.semantic_k) == (200, 1000)
+    assert (policy.semantic_window, policy.fusion_window, policy.semantic_k) == (20, 30, 1000)
     assert (policy.semantic_min_score, policy.semantic_relative_cutoff) == (0.7, 0.94)
-    assert policy.lexical_relative_cutoff == 0.4
-    assert (policy.lexical_weight, policy.semantic_weight, policy.rrf_k) == (1.0, 0.25, 60)
 
 
-def test_the_legs_weigh_the_same_by_default() -> None:
-    """Chosen on the golden queries: a heavier keyword leg buried paraphrase matches, a heavier vector leg
-    demoted exact and misspelled ones."""
-    policy = StudyPolicy.from_settings(Settings())
-    assert policy.lexical_weight == policy.semantic_weight
+def test_the_semantic_side_is_bounded_and_the_keyword_side_is_not() -> None:
+    """The semantic window bounds the related studies only. There is no cap on the keyword matches, no score cutoff,
+    and the two rankings are fused with equal weights."""
+    assert (Settings().studies_semantic_window, Settings().studies_fusion_window) == (50, 50)
+    for gone in (
+        "studies_result_cap",
+        "studies_candidate_window",
+        "studies_lexical_relative_cutoff",
+        "studies_fusion_lexical_weight",
+        "studies_fusion_semantic_weight",
+        "studies_fusion_rank_constant",
+    ):
+        assert gone not in Settings.model_fields
 
 
-def test_the_lexical_cutoff_drops_the_weak_tail_of_keyword_matches() -> None:
-    policy = StudyPolicy(**{**POLICY.__dict__, "lexical_relative_cutoff": 0.4})
-    hits = [Ranked(sid=i, score=score, matched_by=["lexical"]) for i, score in enumerate((10.0, 6.0, 4.0, 3.9, 0.5), 1)]
-    assert [h.sid for h in apply_lexical_cutoff(hits, policy)] == [1, 2, 3]
-    assert apply_lexical_cutoff([], policy) == []
+def test_fusion_puts_a_study_found_by_both_lists_first_and_alternates_the_rest() -> None:
+    keyword = [Ranked(sid=s, score=9.0, matched_by=["lexical"], idno=f"I{s}", dataset_type="survey") for s in (1, 2, 5)]
+    semantic = [Ranked(sid=s, score=0.9, matched_by=["semantic"], dataset_type="table") for s in (3, 2, 7)]
+    fused = rrf_fuse(keyword, semantic)
+    assert [h.sid for h in fused] == [2, 1, 3, 5, 7]  # 2 is in both; then rank 1 of each list, rank 3 of each (by sid)
+    assert fused[0].matched_by == ["lexical", "semantic"]
+    assert all(h.score is None for h in fused)  # the fused score only orders; it is not carried on
 
 
-def test_a_zero_lexical_cutoff_keeps_every_keyword_match() -> None:
-    hits = [Ranked(sid=i, score=score, matched_by=["lexical"]) for i, score in enumerate((10.0, 0.1), 1)]
-    assert len(apply_lexical_cutoff(hits, POLICY)) == 2
+def test_fusion_keeps_what_each_list_knows() -> None:
+    keyword = [Ranked(sid=1, score=9.0, matched_by=["lexical"], idno="NADA_1", dataset_type="document")]
+    semantic = [Ranked(sid=1, score=0.8, matched_by=["semantic"], passages=[{"page": 2}])]
+    (fused,) = rrf_fuse(keyword, semantic)
+    assert (fused.idno, fused.dataset_type, fused.passages) == ("NADA_1", "document", [{"page": 2}])
+
+
+def test_fusing_nothing_is_nothing() -> None:
+    assert rrf_fuse([], []) == []
+
+
+def test_the_vector_request_asks_for_the_semantic_window() -> None:
+    body = knn_body([0.1, 0.2], [], StudyPolicy(**{**POLICY.__dict__, "semantic_window": 37}))
+    assert body["size"] == 37
 
 
 # ---------------------------------------------------------------------------------------
@@ -99,7 +115,7 @@ def test_knn_body_filters_before_the_search_and_collapses_to_one_hit_per_study()
     knn = body["query"]["knn"]["embedding"]
     assert (knn["k"], knn["vector"]) == (1000, [0.1, 0.2])
     assert knn["filter"] == {"bool": {"filter": clauses}}  # the top k come from the filtered set
-    assert body["size"] == 200
+    assert body["size"] == POLICY.semantic_window
     assert body["collapse"]["field"] == "metadata.sid"
     assert body["collapse"]["inner_hits"]["name"] == "passages"
     assert body["track_total_hits"] is False
@@ -229,70 +245,32 @@ def test_no_hits_no_matches() -> None:
 
 
 # ---------------------------------------------------------------------------------------
-# Fusion
-# ---------------------------------------------------------------------------------------
-
-
-def _lex(*sids: int) -> list[Ranked]:
-    return [
-        Ranked(sid=s, score=10.0 - i, matched_by=["lexical"], idno=f"I{s}", dataset_type="survey")
-        for i, s in enumerate(sids)
-    ]
-
-
-def _sem(*sids: int) -> list[Ranked]:
-    return [
-        Ranked(sid=s, score=0.9 - i / 100, matched_by=["semantic"], dataset_type="survey") for i, s in enumerate(sids)
-    ]
-
-
-def test_a_study_found_by_both_legs_outranks_one_found_by_either_alone() -> None:
-    fused = rrf_fuse(_lex(1, 2), _sem(2, 3), POLICY)
-    assert [h.sid for h in fused] == [2, 1, 3]
-    assert fused[0].matched_by == ["lexical", "semantic"]
-
-
-def test_keyword_matches_lead_semantic_only_ones() -> None:
-    fused = rrf_fuse(_lex(1, 2, 3), _sem(9, 8), POLICY)
-    assert [h.sid for h in fused] == [1, 2, 3, 9, 8]  # semantic weight 0.5: its rank 1 is below lexical rank 3
-
-
-def test_weights_and_the_rank_constant_are_the_policy() -> None:
-    equal = StudyPolicy(**{**POLICY.__dict__, "semantic_weight": 1.0})
-    assert [h.sid for h in rrf_fuse(_lex(1), _sem(9), equal)] == [1, 9]  # a tie breaks by sid
-    semantic_first = StudyPolicy(**{**POLICY.__dict__, "lexical_weight": 0.5, "semantic_weight": 1.0})
-    assert [h.sid for h in rrf_fuse(_lex(1), _sem(9), semantic_first)] == [9, 1]
-
-
-def test_fused_scores_are_reciprocal_rank_sums() -> None:
-    fused = rrf_fuse(_lex(1), _sem(1), POLICY)
-    assert fused[0].score == pytest.approx(1.0 / 61 + 0.5 / 61)
-
-
-def test_fusion_keeps_what_each_leg_knows() -> None:
-    semantic_side = Ranked(sid=1, score=0.8, matched_by=["semantic"], dataset_type="document", passages=[{"page": 2}])
-    (fused,) = rrf_fuse(_lex(1), [semantic_side], POLICY)
-    assert (fused.idno, fused.passages) == ("I1", [{"page": 2}])
-
-
-def test_fusing_nothing_is_nothing() -> None:
-    assert rrf_fuse([], [], POLICY) == []
-
-
-# ---------------------------------------------------------------------------------------
 # Executors, against a mocked cluster
 # ---------------------------------------------------------------------------------------
 
 
-def _lexical_response(rows: list[tuple[int, str, float, str]], total: int | None = None) -> dict[str, Any]:
+def _lexical_response(
+    rows: list[tuple[int, str, float | None, str]], total: int | None = None, counts: dict[str, int] | None = None
+) -> dict[str, Any]:
+    """A keyword page: the rows shown, the total of all keyword matches, and the per-type counts of all of them."""
     hits = [
-        {
-            "_score": score,
-            "_source": {"sid": sid, "idno": idno, "filter_facets": {"dataset_type": [dtype]}},
-        }
+        {"_score": score, "_source": {"sid": sid, "idno": idno, "filter_facets": {"dataset_type": [dtype]}}}
         for sid, idno, score, dtype in rows
     ]
-    return {"took": 3, "hits": {"total": {"value": len(hits) if total is None else total}, "hits": hits}}
+    by_type = counts
+    if by_type is None:
+        by_type = {}
+        for _, _, _, dtype in rows:
+            by_type[dtype] = by_type.get(dtype, 0) + 1
+    return {
+        "took": 3,
+        "hits": {"total": {"value": len(hits) if total is None else total}, "hits": hits},
+        "aggregations": {"by_type": {"buckets": [{"key": k, "doc_count": v} for k, v in by_type.items()]}},
+    }
+
+
+def _agree_response(sids: list[int]) -> dict[str, Any]:
+    return {"took": 1, "hits": {"total": {"value": len(sids)}, "hits": [{"_source": {"sid": sid}} for sid in sids]}}
 
 
 def _lookup_response(rows: list[tuple[int, str, str]]) -> dict[str, Any]:
@@ -313,6 +291,8 @@ def _resort_response(rows: list[tuple[int, str]], found: int, counts: dict[str, 
 def _cluster(
     *,
     lexical: dict | None = None,
+    head: dict | None = None,
+    agree: list[int] | None = None,
     knn: dict | None = None,
     lookup: dict | None = None,
     resort: dict | None = None,
@@ -325,19 +305,48 @@ def _cluster(
 
     async def search(index: str, body: dict[str, Any]) -> dict[str, Any]:
         client.requests.append((index, body))
-        if "collapse" in body:
+        if "collapse" in body:  # the vector search on the chunk index
             if chunks_missing:
                 raise NotFoundError(404, "index_not_found_exception", {})
             return knn if knn is not None else _knn_response()
-        if "must" in body["query"]["bool"]:
-            return lexical if lexical is not None else _lexical_response([])
-        if "aggs" in body:
+        clauses = body["query"]["bool"]
+        if "must" in clauses:
+            if "aggs" not in body:  # which of the semantic studies also match the keyword
+                return _agree_response(agree or [])
+            page = lexical if lexical is not None else _lexical_response([], counts={})
+            if "must_not" not in clauses and "bool" not in clauses["must"][0]:  # the best keyword matches (the head)
+                return head if head is not None else page
+            return page  # the keyword matches after the head, or a keyword page of any other kind
+        if "aggs" in body:  # a filter-only listing (browse, or the semantic block re-sorted)
             return resort if resort is not None else _resort_response([], 0, {})
-        return lookup if lookup is not None else _lookup_response([])
+        return lookup if lookup is not None else _lookup_response([])  # idno and type of the semantic studies
 
     client.search = search
     client.count = AsyncMock(return_value={"count": indexed})
     return client
+
+
+def _bodies(client: MagicMock, kind: str) -> list[dict[str, Any]]:
+    """The requests of one kind: ``vector``, ``head`` (the best keyword matches), ``tail`` (the keyword matches after
+    them), ``union`` (the block and the keyword matches, for another sort), ``agree`` or ``lookup``."""
+    chosen = []
+    for _, body in client.requests:
+        clauses = body["query"]["bool"] if "query" in body and "bool" in body["query"] else {}
+        if "collapse" in body:
+            found = "vector"
+        elif "must" not in clauses:
+            found = "lookup" if "aggs" not in body else "browse"
+        elif "aggs" not in body:
+            found = "agree"
+        elif "must_not" in clauses:
+            found = "tail"
+        elif "bool" in clauses["must"][0]:
+            found = "union"
+        else:
+            found = "head"
+        if found == kind:
+            chosen.append(body)
+    return chosen
 
 
 async def _embed(_text: str) -> list[float]:
@@ -355,7 +364,6 @@ def _job(client: Any, **overrides: Any) -> SearchJob:
         "sort_order": SortOrder.desc,
         "limit": 15,
         "offset": 0,
-        "result_cap": 100,
         "policy": POLICY,
         "embed": _embed,
     }
@@ -379,7 +387,7 @@ def test_semantic_asks_the_chunk_index_then_the_study_index() -> None:
     assert {"terms": {"metadata.filter_facets.countries": [16]}} in knn["query"]["knn"]["embedding"]["filter"]["bool"][
         "filter"
     ]
-    # the lookup uses the full filters on the study index and asks only for the semantic-only studies
+    # the lookup uses the full filters on the study index and asks only for the semantic studies
     assert study_index == "studies"
     assert {"terms": {"filter_facets.countries": [16]}} in lookup["query"]["bool"]["filter"]
     assert {"terms": {"sid": [5, 9]}} in lookup["query"]["bool"]["filter"]
@@ -390,7 +398,7 @@ def test_semantic_asks_the_chunk_index_then_the_study_index() -> None:
     ]
     assert page.hits[1]["passages"] == [{"page": 4, "score": 0.77, "total_pages": 12, "excerpt": "text"}]
     assert page.counts_by_type == {"geospatial": 1, "document": 1}
-    assert (page.found, page.truncated, page.result_cap) == (2, False, 100)
+    assert page.found == 2
 
 
 def test_semantic_drops_studies_the_study_index_does_not_have() -> None:
@@ -430,64 +438,179 @@ def test_a_missing_chunk_index_is_not_ready() -> None:
         _run(semantic, _job(_cluster(chunks_missing=True)))
 
 
-def test_hybrid_fuses_keyword_and_semantic_matches() -> None:
+def test_semantic_with_another_sort_re_sorts_the_block_in_opensearch() -> None:
     client = _cluster(
-        lexical=_lexical_response([(1, "NADA_1", 12.0, "survey"), (2, "NADA_2", 7.0, "table")]),
-        knn=_knn_response(_knn_hit(2, 0.85, "table"), _knn_hit(3, 0.80, "document", [_passage(0, 0.8)])),
-        lookup=_lookup_response([(3, "NADA_3", "document")]),
+        knn=_knn_response(_knn_hit(5, 0.82, "survey"), _knn_hit(9, 0.78, "document")),
+        lookup=_lookup_response([(5, "NADA_5", "survey"), (9, "NADA_9", "document")]),
+        resort=_resort_response([(9, "NADA_9"), (5, "NADA_5")], 2, {"survey": 1, "document": 1}),
     )
+    page = _run(semantic, _job(client, sort_by=SortField.title, sort_order=SortOrder.asc))
+    assert [h["sid"] for h in page.hits] == [9, 5]
+    assert {"terms": {"sid": [5, 9]}} in client.requests[-1][1]["query"]["bool"]["filter"]
+
+
+# -- hybrid: the semantic studies fused with the best keyword matches, then every other keyword match
+
+#: The vector search finds 3 (a table), 2 (a document, which the keyword search also matches) and 7 (a survey).
+BLOCK = dict(
+    knn=_knn_response(
+        _knn_hit(3, 0.90, "table"), _knn_hit(2, 0.88, "document", [_passage(0, 0.87)]), _knn_hit(7, 0.86)
+    ),
+    lookup=_lookup_response([(3, "NADA_3", "table"), (2, "NADA_2", "document"), (7, "NADA_7", "survey")]),
+    agree=[2],
+)
+
+#: The best keyword matches are 1, 2 and 5. Fused with the semantic studies 3, 2, 7 by rank, 2 (in both) leads and the
+#: others follow in the order 1, 3, 5, 7 (ties break by sid): the two lists alternate.
+HEAD = _lexical_response(
+    [(1, "NADA_1", 12.0, "survey"), (2, "NADA_2", 9.0, "document"), (5, "NADA_5", 4.0, "survey")],
+    total=43,
+    counts={"survey": 31, "document": 11, "table": 1},
+)
+FUSED = [2, 1, 3, 5, 7]
+
+#: 40 more keyword matches after the head and the block: the two best are shown on the first page.
+TAIL = _lexical_response(
+    [(9, "NADA_9", 3.0, "survey"), (11, "NADA_11", 2.0, "survey")],
+    total=40,
+    counts={"survey": 30, "document": 9, "table": 1},
+)
+
+
+def _sids(page: Any) -> list[int]:
+    return [h["sid"] for h in page.hits]
+
+
+def test_hybrid_fuses_the_head_then_pages_every_other_keyword_match() -> None:
+    client = _cluster(head=HEAD, lexical=TAIL, **BLOCK)
     page = _run(hybrid, _job(client))
     assert [(h["sid"], h["matched_by"]) for h in page.hits] == [
-        (2, ["lexical", "semantic"]),  # found by both legs
+        (2, ["lexical", "semantic"]),
         (1, ["lexical"]),
         (3, ["semantic"]),
+        (5, ["lexical"]),
+        (7, ["semantic"]),
+        (9, ["lexical"]),
+        (11, ["lexical"]),
     ]
-    assert page.hits[2]["idno"] == "NADA_3" and "passages" in page.hits[2]
-    assert page.counts_by_type == {"table": 1, "survey": 1, "document": 1}
-    assert page.found == 3
-
-    indexes = [index for index, _ in client.requests]
-    assert sorted(indexes) == ["chunks", "studies", "studies"]  # keyword leg, vector leg, lookup of the semantic-only
-    # only the semantic-only study is looked up: the keyword leg already came from the study index
-    lookup_body = client.requests[-1][1]
-    assert {"terms": {"sid": [3]}} in lookup_body["query"]["bool"]["filter"]
+    assert page.hits[0]["passages"][0]["page"] == 1 and page.hits[2]["idno"] == "NADA_3"
+    assert all(h["score"] is None for h in page.hits)  # the two orderings' scores could not be compared
+    assert page.found == 5 + 40  # the fused head plus every other keyword match: nothing is cut
+    # the keyword counts after the head plus the head's own
+    assert page.counts_by_type == {"survey": 33, "document": 10, "table": 2}
+    assert sum(page.counts_by_type.values()) == page.found
 
 
-def test_hybrid_fetches_a_window_from_each_leg() -> None:
-    client = _cluster(lexical=_lexical_response([(1, "NADA_1", 1.0, "survey")]))
-    _run(hybrid, _job(client, policy=StudyPolicy(**{**POLICY.__dict__, "window": 37})))
-    sizes = {("semantic" if "collapse" in body else "lexical"): body["size"] for _, body in client.requests}
-    assert sizes == {"lexical": 37, "semantic": 37}
-
-
-def test_hybrid_is_truncated_when_more_keyword_matches_exist_than_the_window() -> None:
-    client = _cluster(lexical=_lexical_response([(1, "NADA_1", 5.0, "survey")], total=900))
-    assert _run(hybrid, _job(client)).truncated is True
-    assert _run(hybrid, _job(_cluster(lexical=_lexical_response([(1, "NADA_1", 5.0, "survey")])))).truncated is False
-
-
-def test_hybrid_cuts_at_the_result_cap_across_all_types() -> None:
-    rows = [(i, f"NADA_{i}", 100.0 - i, "survey" if i % 2 else "table") for i in range(1, 8)]
-    client = _cluster(lexical=_lexical_response(rows))
-    page = _run(hybrid, _job(client, result_cap=4, filters=StudyFilters(types=["table"])))
-    assert page.truncated is True
-    assert page.counts_by_type == {"survey": 2, "table": 2}  # the cut set (top 4), ignoring the types filter
-    assert [h["sid"] for h in page.hits] == [2, 4]  # `types` narrows found and the hits only
-    assert page.found == 2
-
-
-def test_hybrid_with_another_sort_re_sorts_the_cut_set_in_opensearch() -> None:
+def test_an_exact_keyword_match_is_not_buried_under_semantic_only_studies() -> None:
+    """The reason for fusing: with fifty related studies, a keyword match at rank 1 still comes near the top."""
+    semantic_only = [_knn_hit(100 + i, 0.90 - i * 0.001) for i in range(50)]
     client = _cluster(
-        lexical=_lexical_response([(1, "NADA_1", 9.0, "survey"), (2, "NADA_2", 8.0, "survey")]),
-        knn=_knn_response(_knn_hit(3, 0.9, "document")),
-        lookup=_lookup_response([(3, "NADA_3", "document")]),
-        resort=_resort_response([(3, "NADA_3"), (1, "NADA_1"), (2, "NADA_2")], 3, {"survey": 2, "document": 1}),
+        head=_lexical_response([(1, "NADA_1", 40.0, "survey")], total=1, counts={"survey": 1}),
+        knn=_knn_response(*semantic_only),
+        lookup=_lookup_response([(100 + i, f"NADA_{100 + i}", "survey") for i in range(50)]),
     )
-    page = _run(hybrid, _job(client, sort_by=SortField.title, sort_order=SortOrder.asc))
-    assert [h["sid"] for h in page.hits] == [3, 1, 2]
-    assert page.hits[0]["matched_by"] == ["semantic"]  # each hit keeps what the relevance search knew
-    resort_body = client.requests[-1][1]
-    assert {"terms": {"sid": [1, 2, 3]}} in resort_body["query"]["bool"]["filter"]
+    page = _run(hybrid, _job(client, policy=replace(POLICY, semantic_window=50)))
+    assert _sids(page)[:2] == [1, 100]  # the keyword match ties with the best semantic one; both are on top
+
+
+def test_the_head_is_the_best_keyword_matches_over_all_types() -> None:
+    client = _cluster(head=HEAD, lexical=TAIL, **BLOCK)
+    _run(hybrid, _job(client, filters=StudyFilters(types=["survey"], countries=[16])))
+    (head,) = _bodies(client, "head")
+    assert (head["from"], head["size"]) == (0, POLICY.fusion_window)
+    assert head["sort"] == [{"_score": {"order": "desc"}}, {"sid": {"order": "asc"}}]
+    assert "post_filter" not in head and "dataset_type" not in str(head["query"])  # the tab never changes the order
+    assert {"terms": {"filter_facets.countries": [16]}} in head["query"]["bool"]["filter"]
+    assert _bodies(client, "vector")[0]["size"] == POLICY.semantic_window
+
+
+def test_the_keyword_tail_leaves_out_the_fused_head_and_fills_the_page() -> None:
+    client = _cluster(head=HEAD, lexical=TAIL, **BLOCK)
+    _run(hybrid, _job(client))
+    (tail,) = _bodies(client, "tail")
+    assert tail["query"]["bool"]["must_not"] == [{"terms": {"sid": FUSED}}]
+    assert (tail["from"], tail["size"]) == (0, 10)  # 15 rows, 5 of them from the fused head
+    assert tail["sort"] == [{"_score": {"order": "desc"}}, {"sid": {"order": "asc"}}]
+
+
+def test_a_page_inside_the_head_still_asks_for_the_total_and_the_counts() -> None:
+    client = _cluster(head=HEAD, lexical=TAIL, **BLOCK)
+    page = _run(hybrid, _job(client, limit=2, offset=0))
+    assert _sids(page) == [2, 1]
+    (tail,) = _bodies(client, "tail")
+    assert (tail["from"], tail["size"]) == (0, 1)
+    assert page.found == 45
+
+
+def test_a_page_after_the_head_pages_the_keyword_matches() -> None:
+    client = _cluster(head=HEAD, lexical=TAIL, **BLOCK)
+    page = _run(hybrid, _job(client, limit=10, offset=25))
+    (tail,) = _bodies(client, "tail")
+    assert (tail["from"], tail["size"]) == (20, 10)  # positions 25.. are keyword matches 20.. after the head
+    assert _sids(page) == [9, 11]  # whatever the mock returns, and no head rows
+
+
+def test_a_page_across_the_end_of_the_head_takes_the_rest_from_the_keyword_matches() -> None:
+    client = _cluster(head=HEAD, lexical=TAIL, **BLOCK)
+    page = _run(hybrid, _job(client, limit=4, offset=3))
+    (tail,) = _bodies(client, "tail")
+    assert (tail["from"], tail["size"]) == (0, 2)
+    assert _sids(page) == [5, 7, 9, 11]
+
+
+def test_ascending_relevance_lists_the_weakest_keyword_matches_first_and_the_head_last() -> None:
+    tail = _lexical_response(
+        [(11, "NADA_11", 1.0, "survey"), (9, "NADA_9", 2.0, "survey")], total=40, counts={"survey": 40}
+    )
+    client = _cluster(head=HEAD, lexical=tail, **BLOCK)
+    page = _run(hybrid, _job(client, sort_order=SortOrder.asc, limit=4))
+    (body,) = _bodies(client, "tail")
+    assert body["sort"][0] == {"_score": {"order": "asc"}}
+    assert (body["from"], body["size"]) == (0, 4)
+    assert _sids(page) == [11, 9, 7, 5]  # the fused head, reversed, follows the keyword matches
+
+
+def test_the_types_filter_narrows_found_and_the_hits_but_not_the_counts() -> None:
+    tail = _lexical_response([(9, "NADA_9", 3.0, "survey")], total=31, counts={"survey": 30, "document": 9, "table": 1})
+    client = _cluster(head=HEAD, lexical=tail, **BLOCK)
+    page = _run(hybrid, _job(client, filters=StudyFilters(types=["survey"])))
+    assert _sids(page) == [1, 5, 7, 9]  # the surveys of the fused head, then the surveys among the other matches
+    assert page.found == 3 + 31
+    assert page.counts_by_type == {"survey": 33, "document": 10, "table": 2}
+    (body,) = _bodies(client, "tail")
+    assert body["post_filter"] == {"terms": {"filter_facets.dataset_type": ["survey"]}}
+    assert (body["from"], body["size"]) == (0, 12)
+
+
+def test_another_sort_orders_the_semantic_studies_and_the_keyword_matches_together() -> None:
+    union = _lexical_response(
+        [(3, "NADA_3", None, "table"), (1, "NADA_1", None, "survey"), (2, "NADA_2", None, "document")],
+        total=45,
+        counts={"survey": 33, "document": 10, "table": 2},
+    )
+    client = _cluster(lexical=union, **BLOCK)
+    page = _run(hybrid, _job(client, sort_by=SortField.title, sort_order=SortOrder.asc, limit=3))
+    (body,) = _bodies(client, "union")
+    should = body["query"]["bool"]["must"][0]["bool"]
+    assert should["minimum_should_match"] == 1 and {"terms": {"sid": [3, 2, 7]}} in should["should"]
+    assert body["sort"][0] == {"title_sort": {"order": "asc", "missing": "_last"}}
+    assert "must_not" not in body["query"]["bool"]
+    assert [(h["sid"], h["matched_by"]) for h in page.hits] == [
+        (3, ["semantic"]),
+        (1, ["lexical"]),
+        (2, ["lexical", "semantic"]),
+    ]
+    # the same set as the relevance sort finds: the semantic studies plus every keyword match
+    assert page.found == 45 and page.counts_by_type == {"survey": 33, "document": 10, "table": 2}
+
+
+def test_hybrid_without_semantic_matches_is_the_keyword_search() -> None:
+    client = _cluster(knn=_knn_response(_knn_hit(5, 0.60)), lexical=TAIL)
+    page = _run(hybrid, _job(client))
+    assert _sids(page) == [9, 11]
+    assert all(h["matched_by"] == ["lexical"] for h in page.hits)
+    assert page.found == 40
+    assert "collapse" in page.request_bodies[0]  # the vector search is still listed in the debug output
 
 
 def test_semantic_and_hybrid_are_registered() -> None:
@@ -538,9 +661,12 @@ def _post(client: TestClient, body: dict[str, Any]):
 
 def _full_cluster() -> MagicMock:
     return _cluster(
-        lexical=_lexical_response([(1, "NADA_1", 12.0, "survey"), (2, "NADA_2", 7.0, "document")]),
+        # the best keyword matches (also what a keyword-only search returns), and the one match after them
+        head=_lexical_response([(1, "NADA_1", 12.0, "survey"), (4, "NADA_4", 7.0, "survey")]),
+        lexical=_lexical_response([(6, "NADA_6", 3.0, "survey")]),
         knn=_knn_response(_knn_hit(2, 0.85, "document", [_passage(0, 0.84)]), _knn_hit(3, 0.8, "table")),
-        lookup=_lookup_response([(3, "NADA_3", "table")]),
+        lookup=_lookup_response([(2, "NADA_2", "document"), (3, "NADA_3", "table")]),
+        agree=[2],
     )
 
 
@@ -552,11 +678,19 @@ def test_a_query_defaults_to_hybrid(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body.invariant_violations() == []
     assert body.applied.mode is EffectiveMode.hybrid
     assert (body.applied.sort.by, body.applied.sort.order) == (SortField.relevance, SortOrder.desc)
-    assert [h.sid for h in body.hits] == [2, 1, 3]
-    assert [[m.value for m in h.matched_by] for h in body.hits] == [["lexical", "semantic"], ["lexical"], ["semantic"]]
-    assert body.hits[0].passages is not None and body.hits[0].passages[0].page == 1
+    # keyword 1, 4 fused with semantic 2, 3 (alternating; 2 is also a keyword match), then the other keyword match 6
+    assert [h.sid for h in body.hits] == [1, 2, 3, 4, 6]
+    assert [[m.value for m in h.matched_by] for h in body.hits] == [
+        ["lexical"],
+        ["lexical", "semantic"],
+        ["semantic"],
+        ["lexical"],
+        ["lexical"],
+    ]
+    assert body.hits[1].passages is not None and body.hits[1].passages[0].page == 1
     assert body.warnings == []
-    assert body.search_counts_by_type == {"document": 1, "survey": 1, "table": 1}
+    assert (body.found, body.truncated) == (5, False)
+    assert body.search_counts_by_type == {"survey": 3, "document": 1, "table": 1}
 
 
 def test_explicit_semantic(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -574,16 +708,13 @@ def test_auto_degrades_to_keyword_search_when_the_model_fails(monkeypatch: pytes
     body = StudySearchResponse.model_validate(response.json())
     assert body.applied.mode is EffectiveMode.lexical
     assert [w.code.value for w in body.warnings] == ["semantic_unavailable"]
-    assert [h.sid for h in body.hits] == [1, 2]
+    assert [h.sid for h in body.hits] == [1, 4]
     assert all([m.value for m in h.matched_by] == ["lexical"] for h in body.hits)
     assert body.invariant_violations() == []
 
 
 def test_degradation_keeps_the_requested_sort(monkeypatch: pytest.MonkeyPatch) -> None:
-    cluster = _cluster(
-        lexical=_lexical_response([(1, "NADA_1", 12.0, "survey"), (2, "NADA_2", 7.0, "document")]),
-        resort=_resort_response([(2, "NADA_2"), (1, "NADA_1")], 2, {"survey": 1, "document": 1}),
-    )
+    cluster = _cluster(lexical=_lexical_response([(2, "NADA_2", None, "document"), (1, "NADA_1", None, "survey")]))
     with _running(monkeypatch, cluster, _Model(fail=True)) as client:
         body = StudySearchResponse.model_validate(
             _post(client, {"query": "x", "sort": {"by": "title", "order": "asc"}}).json()
@@ -621,10 +752,9 @@ def test_a_missing_chunk_index_is_index_not_ready(monkeypatch: pytest.MonkeyPatc
     assert response.json()["error"]["code"] == "index_not_ready"
 
 
-def test_the_policy_reaches_the_executors_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NADA_STUDIES_CANDIDATE_WINDOW", "50")
+def test_the_semantic_window_reaches_the_vector_search_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NADA_STUDIES_SEMANTIC_WINDOW", "7")
     cluster = _full_cluster()
     with _running(monkeypatch, cluster, _Model()) as client:
         _post(client, {"query": "x"})
-    sizes = sorted(body["size"] for _, body in cluster.requests[:2])  # the two legs
-    assert sizes == [50, 50]
+    assert _bodies(cluster, "vector")[0]["size"] == 7
