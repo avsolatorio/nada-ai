@@ -1,8 +1,13 @@
 # Qdrant + catalog database search evaluation
 
-NADA's `qdrant_db` semantic engine fuses the catalog database's keyword ranking with Qdrant's vector ranking (see
+NADA's `qdrant_db` semantic engine combines Qdrant's vector search with the catalog database's keyword search (see
 `Catalog_search_semantic_fused.php` in NADA). This records how it was measured and how its defaults were chosen.
 Reproduce with `eval/run_nada_api.py`, which scores NADA's public catalog API, so it works for any search engine.
+
+**Two designs were built and measured.** The first fused the two rankings with reciprocal rank fusion into a list of
+at most about 150 studies (sections "Result" to "Pitfalls" below). The current one pins the semantic matches to the top
+and lets the database's own keyword result follow, with its own paging (section "Current design: semantic block pinned
+to the top"). The first design's numbers and sweep are kept because the semantic window, floor and cutoff carry over.
 
 ## Method
 
@@ -87,3 +92,53 @@ work. A floor of 0.50 gives a smaller, more precise result at the price of one p
 - The relevance rules are a proxy for judgement, as in the OpenSearch evaluation.
 - Document passages (page-level results) are not measured; the catalog's documents carry metadata only.
 - The SQL Server version of the keyword leg is unverified: there is no SQL Server in the development environment.
+
+## Current design: semantic block pinned to the top
+
+**What it does.** A relevance search returns Qdrant's best matches first (at most 50, after the 0.45 floor and the 0.85
+relative cutoff, the studies that also match the keyword ahead of those that do not), then the database's keyword result
+without those studies, in the database's own relevance order and with its own paging. `found` is the pinned block plus
+the database result; the tab counts are the database's counts plus the pinned studies that are not keyword matches. Any
+other sort lists the database's keyword matches only and says so.
+
+**Why it replaced the fusion.** Measured on the same golden queries, before building it (semantic block ordered by Qdrant
+score alone: nDCG@10 0.764; with keyword matches first: 0.772; the fusion: 0.767), and after building it (0.771). The
+ranking is the same within noise, but:
+
+- The fusion considered only the best 100 keyword matches and gave no sign of the rest: 13 of the 67 golden queries have
+  more database matches than that (`education` 267, `population census` 212, `health` 144). The pinned design shows an
+  exact `found` and every page (`education` is 269 results over 18 pages of 15, walked page by page with no repeats).
+- One database search does the paging, counting and sorting, so there is no fusion, no weights and no keyword window to
+  tune. The remaining settings are the semantic window, floor and cutoff.
+- A Qdrant outage needs no special path: the block is empty and the result is the plain database search.
+- A keyword that is too short or only noise words (`ab`, `the`) matches everything in the database search; it now returns
+  only the semantic block.
+
+**Changes needed in the database search drivers.** An `exclude_sid` condition (rows and `found`, not the tab counts) so
+the tail pages without repeating the pinned studies; a stable tie-break by study id when sorting by relevance (equal
+scores are common and unstable at depth); `has_usable_keyword()`, `keyword_matching_ids()` and `filtered_study_types()`.
+The SQL Server versions are written from the existing code and untested.
+
+### Result
+
+| configuration | nDCG@10 | p@10 | MRR | recall | precision (whole result) | median size | negatives empty |
+|---|---|---|---|---|---|---|---|
+| database | 0.463 | 0.498 | 0.497 | 0.621 | 0.483 | 12 | 5/5 |
+| legacy_qdrant | 0.767 | 0.621 | 0.837 | 0.887 | 0.052 | 1391 | 0/5 |
+| qdrant_db, fusion (previous) | 0.767 | 0.686 | 0.841 | 0.879 | 0.416 | 41 | 3/5 |
+| qdrant_db, pinned block (current) | 0.771 | 0.681 | 0.849 | 0.879 | 0.416 | 41 | 3/5 |
+| opensearch | 0.850 | 0.750 | 0.912 | 0.928 | 0.534 | 46 | 1/5 |
+
+Per category the current design differs from the fusion by at most 0.03 nDCG (topical 0.78 against 0.75, acronym 0.90
+against 0.92, multilingual 0.89 against 0.91). "Median size" is the median of `found`; the 100 studies fetched per query
+cap what recall and precision see, so the current design's advantage on broad queries (whole result reachable) does not
+show in these columns.
+
+### Verification beyond the metrics
+
+Walking every page of `health`, `education`, `poverty`, `gender statistics`, `cost of living` and `labour force` at 15 and
+50 per page, and of tab- and country-filtered searches: every result was listed exactly once, `found` never changed between
+pages, and the tab counts summed to `found`. A relevance search, any other sort, an exact idno, a short keyword, filters
+(year, region, data access, tag, study id list, unknown country), an unreachable Qdrant, and the block cache were each checked
+through NADA's catalog API.
+
