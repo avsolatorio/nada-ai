@@ -11,12 +11,10 @@ after an operation.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from nada_ai.search.dynamic_filters import (
     FIXED_FILTER_KEYS,
-    _DEFAULT_FACETABLE,
     _resolve_facets_path,
     load_dynamic_facet_keys,
     load_excluded_facet_keys,
@@ -130,8 +128,8 @@ def remove_facet_key(settings: Settings, key: str) -> dict[str, Any]:
 def backfill_facets_op(settings: Settings, *, show_progress_bar: bool = False) -> dict[str, Any]:
     """Backfill ``metadata.filter_facets`` from existing ``filter_fields`` on all indexed points.
 
-    Qdrant only — OpenSearch uses nested ``filter_fields`` queries directly and
-    does not store the flat ``filter_facets`` map.
+    Qdrant only — OpenSearch has only ever stored the flat ``filter_facets`` map, so
+    there are no ``filter_fields`` rows to backfill from.
 
     Returns a summary dict suitable for a job result.
     """

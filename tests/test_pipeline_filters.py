@@ -147,7 +147,9 @@ def test_iter_langdoc_records_bakes_in_cached_extract_filters(tmp_path):
     _FakeLoader._by_idno = {
         "DOC-1": [_FakeDoc("a perfectly fine and long enough description", {"idno": "DOC-1", "type": "document"})],
     }
-    _FakeLoader._raw_by_idno = {"DOC-1": {"_extract_filters": {"brand_new_facet_key": ["x"]}}}
+    _FakeLoader._raw_by_idno = {
+        "DOC-1": {"_extract_filters": {"brand_new_facet_key": ["x"]}, "_extract_core_fields": {"survey_uid": 5, "idno": "DOC-1"}}
+    }
 
     with (
         patch.object(pipeline_module, "MetadataLoader", _FakeLoader),
@@ -162,53 +164,29 @@ def test_iter_langdoc_records_bakes_in_cached_extract_filters(tmp_path):
 
     assert len(results) == 1
     _, _, source = results[0]
-    assert source["metadata"]["filter_fields"] == [{"key": "brand_new_facet_key", "value": ["x"]}]
-    # OpenSearch backend never gets the flat facets map
-    assert "filter_facets" not in source["metadata"]
+    assert source["metadata"]["sid"] == 5
+    # OpenSearch stores the flat facets map only; the nested rows are a Qdrant payload shape
+    assert source["metadata"]["filter_facets"] == {"brand_new_facet_key": ["x"]}
+    assert "filter_fields" not in source["metadata"]
 
     from nada_ai.search.dynamic_filters import load_dynamic_facet_keys
 
     assert "brand_new_facet_key" in load_dynamic_facet_keys(settings)
 
 
-def test_iter_langdoc_records_skips_filters_when_disabled(tmp_path):
+def test_iter_langdoc_records_includes_qdrant_facets(tmp_path):
     import nada_ai.ingest.pipeline as pipeline_module
 
     _FakeLoader._by_idno = {
         "DOC-1": [_FakeDoc("a perfectly fine and long enough description", {"idno": "DOC-1", "type": "document"})],
     }
-    _FakeLoader._raw_by_idno = {"DOC-1": {"_extract_filters": {"some_key": ["x"]}}}
-
-    with (
-        patch.object(pipeline_module, "MetadataLoader", _FakeLoader),
-        patch.object(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata["idno"]),
-    ):
-        settings = _settings(tmp_path, search_backend="opensearch", sync_filters_during_ingest=False)
-        results = list(
-            pipeline_module.iter_langdoc_records(
-                settings, _FakeEmbedding(), [("DOC-1", "document")], show_progress_bar=False
-            )
-        )
-
-    _, _, source = results[0]
-    assert "filter_fields" not in source["metadata"]
-
-
-def test_iter_langdoc_records_falls_back_to_explicit_fetch_and_includes_qdrant_facets(tmp_path):
-    import nada_ai.ingest.pipeline as pipeline_module
-
-    _FakeLoader._by_idno = {
-        "DOC-1": [_FakeDoc("a perfectly fine and long enough description", {"idno": "DOC-1", "type": "document"})],
+    _FakeLoader._raw_by_idno = {
+        "DOC-1": {"_extract_filters": {"tags": ["health"]}, "_extract_core_fields": {"survey_uid": 5, "idno": "DOC-1"}}
     }
-    _FakeLoader._raw_by_idno = {"DOC-1": {}}  # no _extract_filters cached — must fall back
 
     with (
         patch.object(pipeline_module, "MetadataLoader", _FakeLoader),
         patch.object(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata["idno"]),
-        patch(
-            "nada_ai.filters.metadata_extract.fetch_study_records",
-            return_value=[{"idno": "DOC-1", "filters": {"tags": ["health"]}}],
-        ),
     ):
         settings = _settings(tmp_path, search_backend="qdrant")
         results = list(
@@ -220,3 +198,32 @@ def test_iter_langdoc_records_falls_back_to_explicit_fetch_and_includes_qdrant_f
     _, _, source = results[0]
     assert source["metadata"]["filter_fields"] == [{"key": "tags", "value": ["health"]}]
     assert source["metadata"]["filter_facets"] == {"tags": ["health"]}
+
+
+def test_iter_langdoc_records_skips_a_study_without_extract_data(tmp_path):
+    """No cached extract data means no filters and no sid; there is no fallback lookup, so the study is skipped."""
+    import nada_ai.ingest.pipeline as pipeline_module
+
+    _FakeLoader._by_idno = {
+        "DOC-1": [_FakeDoc("a perfectly fine and long enough description", {"idno": "DOC-1", "type": "document"})],
+    }
+    _FakeLoader._raw_by_idno = {"DOC-1": {}}
+    load_errors: list[dict[str, Any]] = []
+
+    with (
+        patch.object(pipeline_module, "MetadataLoader", _FakeLoader),
+        patch.object(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata["idno"]),
+        patch("nada_ai.filters.metadata_extract.fetch_study_records", side_effect=AssertionError("no fallback")),
+    ):
+        results = list(
+            pipeline_module.iter_langdoc_records(
+                _settings(tmp_path, search_backend="qdrant"),
+                _FakeEmbedding(),
+                [("DOC-1", "document")],
+                show_progress_bar=False,
+                load_errors=load_errors,
+            )
+        )
+
+    assert results == []
+    assert [e["stage"] for e in load_errors] == ["extract"]

@@ -178,7 +178,7 @@ class _FakeLoader:
             raise RuntimeError(f"metadata fetch failed for {idno}")
         self.idno = idno
         self.metadata_type = metadata_type
-        self.metadata = {}
+        self.metadata = {"_extract_filters": {}, "_extract_core_fields": {"survey_uid": 1, "idno": idno}}
 
     def get_metadata_handler(self) -> _FakeHandler:
         return _FakeHandler(self._by_idno.get(self.idno, []))

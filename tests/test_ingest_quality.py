@@ -4,10 +4,10 @@ and its wiring through iter_langdoc_records / index_ids_op / index_from_catalog_
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 from nada_ai.ingest.quality import QualityReport, check_source_document
+from nada_ai.settings import Settings
 
 # ── pure function / accumulator tests ──────────────────────────────────────
 
@@ -96,13 +96,13 @@ class _FakeLoader:
     def __init__(self, idno: str, metadata_type: str, force: bool = False, include_resources: bool = True) -> None:
         self.idno = idno
         self.metadata_type = metadata_type
-        self.metadata = {}
+        self.metadata = {"_extract_filters": {}, "_extract_core_fields": {"survey_uid": 1, "idno": idno}}
 
     def get_metadata_handler(self) -> _FakeHandler:
         return _FakeHandler(self._by_idno.get(self.idno, []))
 
 
-def test_iter_langdoc_records_observes_quality_report(monkeypatch):
+def test_iter_langdoc_records_observes_quality_report(monkeypatch, tmp_path):
     """Wiring test: iter_langdoc_records must call quality_report.observe() for
     every source document it builds, whether or not it's flagged as an issue.
 
@@ -121,7 +121,13 @@ def test_iter_langdoc_records_observes_quality_report(monkeypatch):
     monkeypatch.setattr(pipeline_module, "MetadataLoader", _FakeLoader)
     monkeypatch.setattr(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata.get("idno") or "NOMETA")
 
-    settings = SimpleNamespace(embedding_backend="opensearch_ml", sync_filters_during_ingest=False)
+    settings = Settings(
+        search_backend="opensearch",
+        embedding_backend="opensearch_ml",
+        opensearch_ml_model_id="m",
+        opensearch_ml_embedding_dimension=8,
+        dynamic_filter_facets_path=str(tmp_path / "facets.json"),
+    )
     report = QualityReport()
 
     results = list(
@@ -140,7 +146,7 @@ def test_iter_langdoc_records_observes_quality_report(monkeypatch):
     assert out["issues"]["missing_idno"]["count"] == 1
 
 
-def test_iter_langdoc_records_without_quality_report_is_unaffected(monkeypatch):
+def test_iter_langdoc_records_without_quality_report_is_unaffected(monkeypatch, tmp_path):
     """quality_report=None (the default) must not change what's yielded."""
     import nada_ai.ingest.pipeline as pipeline_module
 
@@ -150,7 +156,13 @@ def test_iter_langdoc_records_without_quality_report_is_unaffected(monkeypatch):
     monkeypatch.setattr(pipeline_module, "MetadataLoader", _FakeLoader)
     monkeypatch.setattr(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata["idno"])
 
-    settings = SimpleNamespace(embedding_backend="opensearch_ml", sync_filters_during_ingest=False)
+    settings = Settings(
+        search_backend="opensearch",
+        embedding_backend="opensearch_ml",
+        opensearch_ml_model_id="m",
+        opensearch_ml_embedding_dimension=8,
+        dynamic_filter_facets_path=str(tmp_path / "facets.json"),
+    )
     results = list(
         pipeline_module.iter_langdoc_records(
             settings, None, [("GOOD", "indicator")], show_progress_bar=False

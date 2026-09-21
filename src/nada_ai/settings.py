@@ -35,6 +35,29 @@ class Settings(BaseSettings):
     aws_profile: str | None = Field(default=None, description="Optional boto3 profile name")
 
     index_name: str = Field(default="nada-metadata")
+    #: OpenSearch study index (one document per study, ``_id`` = ``sid``). Defaults to ``<index_name>-studies``;
+    #: ``index_name`` itself is the chunk index (text chunks + embeddings).
+    studies_index_name: str | None = Field(default=None)
+
+    #: Study search: the most studies a relevance search makes pageable (reported by ``GET /info`` as
+    #: ``limits.query_result_cap``).
+    studies_result_cap: int = Field(default=100, ge=1, le=1000)
+    #: Study search: studies each leg (keyword, vector) contributes before fusion. Keep it at least the result cap.
+    studies_candidate_window: int = Field(default=200, ge=1, le=1000)
+    #: Study search: chunk candidates the vector search considers before chunks collapse to one hit per study.
+    studies_semantic_k: int = Field(default=1000, ge=1, le=10_000)
+    #: Study search: absolute floor on a chunk's vector score. OpenSearch cosine scores fall in about 0.5-1; on the
+    #: full catalog the best score of a real query is 0.70-0.91, out-of-domain queries 0.68-0.69, and gibberish 0.73
+    #: (no floor separates gibberish from a short typo, so the floor only rejects clearly unrelated queries).
+    studies_semantic_min_score: float = Field(default=0.70, ge=0.0, le=1.0)
+    #: Study search: keep semantic matches scoring at least this fraction of the best semantic match.
+    studies_semantic_relative_cutoff: float = Field(default=0.94, ge=0.0, le=1.0)
+    #: Study search: keep keyword matches scoring at least this fraction of the best keyword match.
+    studies_lexical_relative_cutoff: float = Field(default=0.4, ge=0.0, le=1.0)
+    #: Study search: rank-fusion weights and the rank constant.
+    studies_fusion_lexical_weight: float = Field(default=1.0, gt=0.0)
+    studies_fusion_semantic_weight: float = Field(default=1.0, gt=0.0)
+    studies_fusion_rank_constant: int = Field(default=60, ge=1)
 
     #: If True, ``PUT _index_template`` before index create / bulk ingest so auto-created indices inherit ``knn_vector`` mapping.
     opensearch_put_composable_index_template: bool = Field(default=True)
@@ -112,14 +135,6 @@ class Settings(BaseSettings):
     #: Set to 1 for GPU deployments (single-threaded model inference avoids OOM).
     #: Raise to 2–4 for CPU-only deployments with plentiful cores.
     max_concurrent_ingest_jobs: int = Field(default=1, ge=1, le=16)
-
-    #: When true (default), content ingest (index/index_from_catalog) also
-    #: fetches and bakes in each idno's NADA filters/facets at write time —
-    #: see ingest.pipeline._fetch_filter_payload — instead of requiring a
-    #: separate filters-sync pass afterward. Disable for a pure content-only
-    #: ingest (e.g. to shave the extra per-idno metadata-extract round trip
-    #: when the deployment doesn't use facets at all).
-    sync_filters_during_ingest: bool = Field(default=True)
 
     #: NADA search-metadata-extract API base URL (no trailing slash). This is
     #: instance-specific — every NADA deployment (IHSN's or anyone else's) has
@@ -228,6 +243,10 @@ class Settings(BaseSettings):
     @property
     def qdrant_collection(self) -> str:
         return self.qdrant_collection_name or self.index_name
+
+    @property
+    def studies_index(self) -> str:
+        return self.studies_index_name or f"{self.index_name}-studies"
 
     @model_validator(mode="after")
     def validate_search_backend(self) -> Settings:

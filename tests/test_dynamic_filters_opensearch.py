@@ -4,24 +4,29 @@ from nada_ai.search.backend.opensearch.queries import build_filters, merge_facet
 from nada_ai.search.dynamic_filters import dynamic_facet_aggs, dynamic_filters_to_opensearch_clauses
 
 
-def test_dynamic_filters_nested_clauses():
-    clauses = dynamic_filters_to_opensearch_clauses({"countries": [181, 182]})
-    assert len(clauses) == 1
-    assert "nested" in clauses[0]
-    assert clauses[0]["nested"]["path"] == "metadata.filter_fields"
+def test_dynamic_filters_are_flat_clauses():
+    clauses = dynamic_filters_to_opensearch_clauses({"countries": [181, 182], "tags": ["health"]})
+    assert clauses == [
+        {"terms": {"metadata.filter_facets.countries": ["181", "182"]}},
+        {"term": {"metadata.filter_facets.tags": "health"}},
+    ]
+
+
+def test_no_nested_queries_anywhere():
+    clauses = build_filters({"type": "document", "countries": [181]})
+    assert "nested" not in str(clauses)
 
 
 def test_build_filters_includes_dynamic():
     clauses = build_filters({"type": "document", "countries": [181]})
-    assert len(clauses) == 2
-    assert any("nested" in c for c in clauses)
-    assert any("term" in c for c in clauses)
+    assert {"term": {"metadata.type": "document"}} in clauses
+    assert {"term": {"metadata.filter_facets.countries": "181"}} in clauses
 
 
 def test_dynamic_facet_aggs_shape():
     aggs = dynamic_facet_aggs(["countries", "regions"])
-    assert "countries" in aggs
-    assert aggs["countries"]["nested"]["path"] == "metadata.filter_fields"
+    assert aggs["countries"] == {"terms": {"field": "metadata.filter_facets.countries", "size": 200}}
+    assert set(aggs) == {"countries", "regions"}
 
 
 def test_merge_facets_static_and_dynamic():

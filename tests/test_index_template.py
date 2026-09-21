@@ -13,6 +13,8 @@ from nada_ai.search.backend.opensearch.index_template import (
     composable_index_template_name,
     put_cluster_auto_create_index,
     put_composable_index_template,
+    studies_index_template_body,
+    studies_index_template_name,
 )
 from nada_ai.settings import Settings
 
@@ -32,7 +34,8 @@ def test_composable_index_template_name_sanitizes_slash() -> None:
 def test_composable_index_template_body_patterns_and_knn() -> None:
     s = Settings(index_name="nada-metadata", opensearch_index_template_priority=100)
     body = composable_index_template_body(s, 384)
-    assert body["index_patterns"] == ["nada-metadata", "nada-metadata-*"]
+    # exactly the chunk index: a `-*` pattern would also match (and mis-map) the study index
+    assert body["index_patterns"] == ["nada-metadata"]
     assert body["priority"] == 100
     emb = body["template"]["mappings"]["properties"]["embedding"]
     assert emb["type"] == "knn_vector"
@@ -40,16 +43,30 @@ def test_composable_index_template_body_patterns_and_knn() -> None:
     assert body["template"]["settings"]["index"]["knn"] is True
 
 
-def test_put_composable_index_template_calls_client() -> None:
+def test_studies_index_template_matches_only_the_study_index() -> None:
+    s = Settings(index_name="nada-metadata")
+    body = studies_index_template_body(s)
+    assert body["index_patterns"] == ["nada-metadata-studies"]
+    assert "embedding" not in body["template"]["mappings"]["properties"]
+    assert studies_index_template_name(s) == "nada-ai-nada-metadata-studies-template"
+    assert studies_index_template_name(s) != composable_index_template_name(s)
+
+
+def test_studies_index_name_can_be_overridden() -> None:
+    assert Settings(index_name="a").studies_index == "a-studies"
+    assert Settings(index_name="a", studies_index_name="other").studies_index == "other"
+
+
+def test_put_composable_index_template_installs_both_templates() -> None:
     client = MagicMock()
     s = Settings(index_name="idx-one")
     out = put_composable_index_template(client, s, 256)
-    assert out["template"] == "nada-ai-idx-one-template"
-    assert out["index_patterns"] == ["idx-one", "idx-one-*"]
-    client.indices.put_index_template.assert_called_once()
-    call_kw = client.indices.put_index_template.call_args.kwargs
-    assert call_kw["name"] == "nada-ai-idx-one-template"
-    assert call_kw["body"]["index_patterns"] == ["idx-one", "idx-one-*"]
+    assert set(out["templates"]) == {"nada-ai-idx-one-template", "nada-ai-idx-one-studies-template"}
+    assert out["templates"]["nada-ai-idx-one-template"]["index_patterns"] == ["idx-one"]
+    assert out["templates"]["nada-ai-idx-one-studies-template"]["index_patterns"] == ["idx-one-studies"]
+    assert client.indices.put_index_template.call_count == 2
+    names = {c.kwargs["name"] for c in client.indices.put_index_template.call_args_list}
+    assert names == {"nada-ai-idx-one-template", "nada-ai-idx-one-studies-template"}
 
 
 def test_put_cluster_auto_create_index() -> None:
@@ -90,7 +107,7 @@ def test_put_index_template_op_respects_template_flag(monkeypatch: pytest.Monkey
     out = put_index_template_op(s)
     assert out["dim"] == 512
     if expect_put:
-        client.indices.put_index_template.assert_called_once()
+        assert client.indices.put_index_template.call_count == 2
         assert "template" in out and "skipped" not in out.get("template", {})
     else:
         client.indices.put_index_template.assert_not_called()

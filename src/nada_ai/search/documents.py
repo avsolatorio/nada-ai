@@ -21,8 +21,15 @@ def langdoc_to_source(
     raw_metadata: dict | None = None,
     filter_fields: list[dict[str, Any]] | None = None,
     filter_facets: dict[str, list[str]] | None = None,
+    *,
+    sid: int,
+    created: int | None = None,
 ) -> dict[str, Any]:
     """Build the canonical JSON document: ``page_content``, ``metadata`` facets, optional ``embedding``.
+
+    ``sid`` is the NADA internal study id (``surveys.id``). It is required: it is stored as ``metadata.sid``
+    on every document of the study and is the key used to replace or delete a study. ``created`` (the study's
+    created timestamp) is stored as ``metadata.created`` so the vector search can filter on it before searching.
 
     Pass ``embedding=None`` when an OpenSearch ingest pipeline (e.g. ``text_embedding``)
     fills ``embedding`` server-side. Qdrant upserts pass the dense vector separately and
@@ -47,6 +54,9 @@ def langdoc_to_source(
     metadata_body: dict[str, Any] = dict(meta)
     if qfield is not None:
         metadata_body["qfield"] = qfield
+    metadata_body["sid"] = int(sid)
+    if created is not None:
+        metadata_body["created"] = int(created)
     if filter_fields is not None:
         metadata_body[FILTER_FIELDS_KEY] = filter_fields
     if filter_facets is not None:

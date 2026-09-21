@@ -1,4 +1,7 @@
-"""Dynamic filter_fields normalization, query building, and facet helpers."""
+"""Dynamic filter normalization, query building, and facet helpers.
+
+Filters are stored flat: ``<prefix>filter_facets.<key>`` holds the values of one filter key (one field per key), on
+both engines. The nested ``filter_fields`` rows are kept only as the Qdrant payload / admin response shape."""
 
 from __future__ import annotations
 
@@ -10,12 +13,10 @@ from typing import Any
 
 from qdrant_client.http import models as qm
 
-from nada_ai.search.backend.opensearch.mapping import metadata_field
+from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, metadata_field
 from nada_ai.settings import Settings
 
 FILTER_FIELDS_KEY = "filter_fields"
-FILTER_FACETS_KEY = "filter_facets"
-FILTER_FIELDS_PATH = metadata_field(FILTER_FIELDS_KEY)
 
 FIXED_FILTER_KEYS = frozenset(
     {
@@ -181,9 +182,18 @@ def normalized_to_facets_map(normalized: list[dict[str, list[str]]]) -> dict[str
     return {str(entry["key"]): list(entry["value"]) for entry in normalized}
 
 
-def dynamic_facet_qdrant_key(field: str) -> str:
-    """Indexed payload path for faceting one dynamic filter key in Qdrant."""
+def dynamic_facet_field(field: str) -> str:
+    """Stored field path of one dynamic filter key on a chunk document (both engines)."""
     return metadata_field(f"{FILTER_FACETS_KEY}.{field}")
+
+
+def facets_to_filter_field_rows(facets: dict[str, Any] | None) -> list[dict[str, list[str]]]:
+    """``[{key, value: [str, ...]}, ...]`` rows (the admin response shape) from a flat ``filter_facets`` map."""
+    return [
+        {"key": str(key), "value": values}
+        for key, raw in sorted((facets or {}).items())
+        if (values := _coerce_value_strings(raw))
+    ]
 
 
 def normalize_external_filters(raw: dict[str, Any]) -> list[dict[str, list[str]]]:
@@ -235,7 +245,7 @@ def dynamic_filters_to_qdrant_conditions(dynamic: dict[str, Any]) -> list[qm.Con
         )
         clauses.append(
             qm.FieldCondition(
-                key=dynamic_facet_qdrant_key(str(key)),
+                key=dynamic_facet_field(str(key)),
                 match=value_cond,
             )
         )
@@ -243,6 +253,7 @@ def dynamic_filters_to_qdrant_conditions(dynamic: dict[str, Any]) -> list[qm.Con
 
 
 def dynamic_filters_to_opensearch_clauses(dynamic: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flat ``term`` / ``terms`` clauses on ``metadata.filter_facets.<key>`` (values within a key are any-of)."""
     if not dynamic:
         return []
     clauses: list[dict[str, Any]] = []
@@ -250,21 +261,8 @@ def dynamic_filters_to_opensearch_clauses(dynamic: dict[str, Any]) -> list[dict[
         values = _query_values(value)
         if not values:
             continue
-        must: list[dict[str, Any]] = [
-            {"term": {f"{FILTER_FIELDS_PATH}.key": str(key)}},
-        ]
-        if len(values) == 1:
-            must.append({"term": {f"{FILTER_FIELDS_PATH}.value": values[0]}})
-        else:
-            must.append({"terms": {f"{FILTER_FIELDS_PATH}.value": values}})
-        clauses.append(
-            {
-                "nested": {
-                    "path": FILTER_FIELDS_PATH,
-                    "query": {"bool": {"must": must}},
-                }
-            }
-        )
+        field = dynamic_facet_field(str(key))
+        clauses.append({"term": {field: values[0]}} if len(values) == 1 else {"terms": {field: values}})
     return clauses
 
 
@@ -347,33 +345,13 @@ def resolve_facet_fields(
 
 
 def dynamic_facet_aggs(dynamic_keys: list[str]) -> dict[str, Any]:
-    """OpenSearch nested aggregations for dynamic filter_fields facets."""
-    if not dynamic_keys:
-        return {}
-    aggs: dict[str, Any] = {}
-    for name in dynamic_keys:
-        aggs[name] = {
-            "nested": {"path": FILTER_FIELDS_PATH},
-            "aggs": {
-                "filtered": {
-                    "filter": {"term": {f"{FILTER_FIELDS_PATH}.key": name}},
-                    "aggs": {
-                        "values": {
-                            "terms": {"field": f"{FILTER_FIELDS_PATH}.value", "size": 200},
-                        }
-                    },
-                }
-            },
-        }
-    return aggs
+    """OpenSearch terms aggregations, one per dynamic filter key, on the flat ``filter_facets`` fields."""
+    return {name: {"terms": {"field": dynamic_facet_field(name), "size": 200}} for name in dynamic_keys}
 
 
 def unwrap_dynamic_facet_buckets(field: str, agg: dict[str, Any]) -> list[dict[str, Any]]:
-    """Normalize nested agg buckets for a dynamic facet field."""
-    filtered = agg.get("filtered") or {}
-    values = filtered.get("values") or {}
-    buckets = values.get("buckets") or []
-    return [{"value": b.get("key"), "count": int(b.get("doc_count", 0))} for b in buckets]
+    """Normalize the buckets of a dynamic facet terms aggregation."""
+    return [{"value": b.get("key"), "count": int(b.get("doc_count", 0))} for b in agg.get("buckets") or []]
 
 
 def aggregate_dynamic_facet_rows(

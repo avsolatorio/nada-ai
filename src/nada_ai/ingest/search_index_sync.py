@@ -395,8 +395,7 @@ def apply_and_ack_queue_item(
     filters/facets — not via an extra call here, but because
     ``ingest.pipeline.iter_langdoc_records`` (which both backend writers
     route through) fetches and bakes in NADA's ``filters`` data as part of
-    building the document/point payload itself (see
-    ``settings.sync_filters_during_ingest``). So a queue-driven reindex keeps
+    building the document/point payload itself. So a queue-driven reindex keeps
     both content and facets in sync from a single fetch, with no separate
     filters-sync pass required.
 
