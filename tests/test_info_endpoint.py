@@ -123,7 +123,7 @@ def test_capabilities_reflect_the_modes_that_are_implemented(monkeypatch: pytest
         "citations_search": False,
     }
     assert [spec.key for spec in info.filters][:2] == ["types", "countries"]
-    assert info.limits is not None and info.limits.query_result_cap == Settings().studies_result_cap
+    assert info.limits is not None and info.limits.semantic_window == Settings().studies_semantic_window
 
 
 def test_nothing_is_advertised_when_no_mode_is_implemented(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -250,10 +250,10 @@ def test_modes_that_need_a_local_query_embedding_are_off_for_other_embedding_bac
 
 
 def test_limits_come_from_settings() -> None:
-    limits = limits_for(Settings(studies_result_cap=50))
-    assert (limits.max_limit, limits.max_offset, limits.query_result_cap, limits.max_query_length) == (
+    limits = limits_for(Settings(studies_semantic_window=20))
+    assert (limits.max_limit, limits.max_offset, limits.semantic_window, limits.max_query_length) == (
         100,
         10_000,
-        50,
+        20,
         500,
     )

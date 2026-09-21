@@ -242,7 +242,7 @@ def test_browse_returns_ids_counts_and_the_effective_search(monkeypatch: pytest.
     assert response.status_code == 200
     body = StudySearchResponse.model_validate(response.json())
     assert body.invariant_violations() == []
-    assert (body.engine.value, body.found, body.truncated, body.result_cap) == ("opensearch", 3, False, None)
+    assert (body.engine.value, body.found, body.truncated) == ("opensearch", 3, False)
     assert [(h.sid, h.idno, h.rank) for h in body.hits] == [
         (2, "EGY_2014_DHS_v01_M", 1),
         (4, "PC11_A02-28-v22", 2),

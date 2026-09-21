@@ -91,7 +91,7 @@
   "limits": {
     "max_limit": 100,
     "max_offset": 10000,
-    "query_result_cap": 100,
+    "semantic_window": 50,
     "max_query_length": 500
   },
   "index": {

@@ -39,11 +39,12 @@ class Settings(BaseSettings):
     #: ``index_name`` itself is the chunk index (text chunks + embeddings).
     studies_index_name: str | None = Field(default=None)
 
-    #: Study search: the most studies a relevance search makes pageable (reported by ``GET /info`` as
-    #: ``limits.query_result_cap``).
-    studies_result_cap: int = Field(default=100, ge=1, le=1000)
-    #: Study search: studies each leg (keyword, vector) contributes before fusion. Keep it at least the result cap.
-    studies_candidate_window: int = Field(default=200, ge=1, le=1000)
+    #: Study search: the most studies the semantic side adds to a relevance search (reported by ``GET /info`` as
+    #: ``limits.semantic_window``). The keyword matches are not capped: they are all returned and paged.
+    studies_semantic_window: int = Field(default=50, ge=1, le=200)
+    #: Study search: how many of the best keyword matches are fused, by rank, with the semantic studies. The keyword
+    #: matches beyond them follow in score order. (On the golden queries 10 to 100 rank the same.)
+    studies_fusion_window: int = Field(default=50, ge=1, le=200)
     #: Study search: chunk candidates the vector search considers before chunks collapse to one hit per study.
     studies_semantic_k: int = Field(default=1000, ge=1, le=10_000)
     #: Study search: absolute floor on a chunk's vector score. OpenSearch cosine scores fall in about 0.5-1; on the
@@ -52,12 +53,6 @@ class Settings(BaseSettings):
     studies_semantic_min_score: float = Field(default=0.70, ge=0.0, le=1.0)
     #: Study search: keep semantic matches scoring at least this fraction of the best semantic match.
     studies_semantic_relative_cutoff: float = Field(default=0.94, ge=0.0, le=1.0)
-    #: Study search: keep keyword matches scoring at least this fraction of the best keyword match.
-    studies_lexical_relative_cutoff: float = Field(default=0.4, ge=0.0, le=1.0)
-    #: Study search: rank-fusion weights and the rank constant.
-    studies_fusion_lexical_weight: float = Field(default=1.0, gt=0.0)
-    studies_fusion_semantic_weight: float = Field(default=1.0, gt=0.0)
-    studies_fusion_rank_constant: int = Field(default=60, ge=1)
 
     #: If True, ``PUT _index_template`` before index create / bulk ingest so auto-created indices inherit ``knn_vector`` mapping.
     opensearch_put_composable_index_template: bool = Field(default=True)

@@ -143,8 +143,6 @@ def test_semantic_and_hybrid_search_on_the_real_index() -> None:
         # the synthetic vectors and expectations below are built for these thresholds, not for the tuned defaults
         studies_semantic_min_score=0.68,
         studies_semantic_relative_cutoff=0.9,
-        studies_lexical_relative_cutoff=0.0,
-        studies_fusion_semantic_weight=0.5,
     )
     studies = dict(STUDIES)
 
@@ -177,7 +175,7 @@ def test_semantic_and_hybrid_search_on_the_real_index() -> None:
                     fields: dict[str, Any] = dict(
                         client=client, index=settings.studies_index, chunk_index=settings.index_name, query=query,
                         filters=StudyFilters(), sort_by=SortField.relevance, sort_order=SortOrder.desc, limit=100,
-                        offset=0, result_cap=100, policy=policy, embed=embed_query,
+                        offset=0, policy=policy, embed=embed_query,
                     )  # fmt: skip
                     fields.update(overrides)
                     return SearchJob(**fields)
@@ -195,7 +193,8 @@ def test_semantic_and_hybrid_search_on_the_real_index() -> None:
                 assert all(h["matched_by"] == ["semantic"] for h in sem.hits)
                 assert by_sid(sem)[2]["idno"] == "NADA_2"  # NADA's idno, not the chunk's schema idno
 
-                # hybrid: the union, with what found each study, keyword matches ahead of semantic-only ones
+                # hybrid: the semantic studies fused with the best keyword matches, then every other keyword match; each
+                # study says what found it
                 page = await hybrid(job("salary"))
                 found = by_sid(page)
                 assert set(found) == {1, 2, 4, 5, 6}
@@ -203,9 +202,9 @@ def test_semantic_and_hybrid_search_on_the_real_index() -> None:
                 assert found[6]["matched_by"] == ["lexical"]
                 assert found[2]["matched_by"] == found[4]["matched_by"] == ["semantic"]
                 order = ids(page)
-                assert set(order[:2]) == {1, 5} and order[2] == 6 and set(order[3:]) == {2, 4}
+                assert set(order[:2]) == {1, 5} and set(order[2:]) == {2, 4, 6}  # both legs first, then the rest
                 assert {found[2]["idno"], found[4]["idno"]} == {"NADA_2", "NADA_4"}
-                assert (page.found, page.truncated) == (5, False)
+                assert page.found == 5
                 assert page.counts_by_type == {"survey": 3, "table": 1, "document": 1}
 
                 # a document study returns the pages that matched, best first
@@ -231,14 +230,15 @@ def test_semantic_and_hybrid_search_on_the_real_index() -> None:
                 assert set(ids(await hybrid(job("salary", filters=StudyFilters(created_from=300))))) == {4, 5, 6}
                 assert set(ids(await semantic(job("salary", filters=StudyFilters(created_from=300))))) == {4, 5}
 
-                # `types` narrows found but not the tab counts, which describe the whole cut set
+                # `types` narrows found but not the tab counts, which describe every keyword match plus the block
                 tab = await hybrid(job("salary", filters=StudyFilters(types=["table"])))
                 assert (ids(tab), tab.found) == ([5], 1)
                 assert tab.counts_by_type == {"survey": 3, "table": 1, "document": 1}
 
-                # the cap keeps the best studies across all types and says the rest were cut
-                capped = await hybrid(job("salary", result_cap=2))
-                assert set(ids(capped)) == {1, 5} and (capped.found, capped.truncated) == (2, True)
+                # nothing is cut, and the pages join up (the fused head spans the first page)
+                pages = [await hybrid(job("salary", limit=2, offset=o)) for o in (0, 2, 4)]
+                assert [i for p in pages for i in ids(p)] == order and {p.found for p in pages} == {5}
+                assert ids(await hybrid(job("salary", sort_order=SortOrder.asc))) == order[::-1]
 
                 # any other sort re-sorts the same set (title, case-insensitive)
                 by_title = await hybrid(job("salary", sort_by=SortField.title, sort_order=SortOrder.asc))

@@ -4,7 +4,6 @@
   "limit": 2,
   "offset": 0,
   "truncated": false,
-  "result_cap": null,
   "search_counts_by_type": {
     "survey": 3,
     "table": 2

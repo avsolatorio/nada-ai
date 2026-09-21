@@ -89,3 +89,68 @@ prefers recall can lower `NADA_STUDIES_LEXICAL_RELATIVE_CUTOFF` and `NADA_STUDIE
 - Relevance rules are a proxy for judgement (semantic, multilingual and document queries most of all).
 - Page-level passages are not measured: the documents in the catalog carry metadata only.
 - 62 positive queries make differences below about 0.01 nDCG noise.
+
+## Update: keyword matches are no longer capped
+
+The results above were measured with the result cap of 100, the keyword cutoff of 0.4 and a fusion window of 200 per leg.
+That design showed users a tight list (`education` returned 19 studies where the database returns 267) and stopped at 100
+results with no notice. It was replaced so that **every keyword match is returned and paged, and only the semantic side is
+bounded**. The measurements behind the change, all on the same 67 golden queries and 1391-study catalog:
+
+**1. The keyword score cutoff is a cliff, not a dial.** With the cap and window lifted, the number of keyword matches for a
+broad word at different relative cutoffs:
+
+| keyword search | no cutoff | 0.02 | 0.05 | 0.1 | 0.2 | database |
+|---|---|---|---|---|---|---|
+| `education` | 273 | 271 | 225 | 48 | 11 | 267 |
+| `health` | 145 | 145 | 92 | 55 | 33 | 144 |
+| `population census` | 212 | 211 | 201 | 166 | 17 | 212 |
+| `agriculture` | 165 | 162 | 143 | 103 | 72 | 133 |
+| `poverty` | 88 | 77 | 54 | 32 | 25 | 87 |
+
+The 11 `education` studies with the word in the title score 65 to 127, and the other 262 mention it only in low-weight
+fields (keywords, variable labels) and score under 25, so any cutoff of 0.2 or more drops all of them at once. Without a
+cutoff OpenSearch returns the same studies as the database, ranked with the strongest matches first. On the golden queries
+no cutoff scored the same ranking (nDCG@10 0.852 against 0.850 at 0.4), and a floor of 0.02 changed nothing measurable, so
+the cutoff was removed. The cost is a larger, less precise tail: precision of the whole result falls from 0.69 to 0.48.
+
+**2. The semantic side needs its own bound.** With the cap lifted, a gibberish query returned 210 semantic-only results;
+the cap of 100 was all that limited it. The semantic side is now bounded on its own (`NADA_STUDIES_SEMANTIC_WINDOW`, 50).
+
+**3. Fusing beats pinning.** A first version put the semantic studies in a block above the keyword matches. It scored 0.814
+nDCG@10 against 0.850 before: exact-title queries lost most (navigational 0.81 against 0.95), because up to 50 related
+studies sat above an exact keyword hit that the vector search had not found (`Geocoded Disasters GDIS dataset` went from
+rank 1 to outside the top 10). A block on top works when the keyword ranking is coarse (NADA's database fulltext), not
+against OpenSearch's field-boosted scoring. The shipped design fuses the semantic studies with the best keyword matches
+by rank, then lists the other keyword matches. The keyword window barely matters (10, 25, 50 and 100 all rank 0.849 to
+0.851), so it is 50.
+
+### Result of the shipped design
+
+| mode | nDCG@10 | p@10 | MRR | recall | precision (whole result) | median size | negatives empty |
+|---|---|---|---|---|---|---|---|
+| lexical | 0.820 | 0.667 | 0.831 | 0.907 | 0.289 | 64 | 2/5 |
+| semantic | 0.754 | 0.736 | 0.844 | 0.805 | 0.590 | 28 | 3/5 |
+| hybrid | 0.849 | 0.652 | 0.913 | 0.949 | 0.194 | 76 | 1/5 |
+
+Ranking quality is unchanged from the capped design (0.849 against 0.850) and recall is higher (0.949 against 0.928). The
+whole-result precision and size are not comparable with the earlier table: the earlier lists were cut, these are not, and
+`found` now counts every keyword match. A sweep of the semantic floor (0.68 to 0.72), cutoff (0.90 to 0.98) and window (25,
+50, 100) stayed between 0.840 and 0.859 nDCG@10, so the earlier floor and cutoff carry over.
+
+### What users see
+
+Through NADA, `education` returns 276 studies (140 documents, 123 surveys and 13 others), `health` 151 and `population
+census` 213, and every page walks with no repeats or gaps and tab counts that add up. A search sorted by title lists the
+same set (`found` does not change with the sort). The trade-off is a longer, weaker tail: `Foreign direct investment`
+returned 5 studies before and 49 now (the 5 series first, then studies that match some of the words).
+
+### Limits
+
+- Deep paging stops at 10,000 results (`offset + limit`), as before, and `truncated` now says `found` is beyond that depth. A
+  request past it is `offset_out_of_range`.
+- The semantic side still returns noise for gibberish and for languages the model handles poorly (a Kinyarwanda query for
+  foreign direct investment returns 50 Kinyarwanda documents, not the English FDI series, which rank 106th and below): the
+  bound keeps it to 50, but the floor and cutoff cannot tell these from real matches. That review is separate.
+- Not measured: OpenSearch at 20,000 studies (paging depth, memory and latency).
+
