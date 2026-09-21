@@ -72,6 +72,13 @@ class SearchRequest(BaseModel):
             "``NADA_QDRANT_VECTOR_SCORE_THRESHOLD`` or no threshold."
         ),
     )
+    include_total: bool = Field(
+        default=True,
+        description=(
+            "Qdrant vector / hybrid modes: false skips counting the neighbors behind ``total`` (a paginated scan when "
+            "``vector_score_threshold`` is set) and returns ``total: null``. Use it when only the hits are read."
+        ),
+    )
     query_prompt_name: str | None = Field(
         default=None,
         description=(

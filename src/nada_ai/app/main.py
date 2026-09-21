@@ -344,6 +344,7 @@ async def search(
         include_facets=body.include_facets,
         facet_fields=body.facet_fields,
         vector_score_threshold=v_thr,
+        include_total=body.include_total,
         use_idno_fast_path=use_idno_fast_path,
     )
 
@@ -368,7 +369,7 @@ async def search(
     _principal = await resolve_principal(x_admin_key, s) if body.include_debug_request else None
     dbg = outcome.debug_request if (body.include_debug_request and _principal is not None) else None
     return SearchResponse(
-        total=outcome.total,
+        total=outcome.total if body.include_total else None,
         hits=outcome.hits,
         facets=coerce_search_facets(outcome.facets),
         opensearch_body=dbg,
