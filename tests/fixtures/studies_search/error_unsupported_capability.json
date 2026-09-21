@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "unsupported_capability",
+    "message": "The active engine (qdrant) does not support studies_search",
+    "details": {
+      "capability": "studies_search",
+      "engine": "qdrant"
+    }
+  }
+}

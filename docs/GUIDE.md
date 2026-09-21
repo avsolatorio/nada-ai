@@ -304,9 +304,8 @@ instance's metadata-extract API into the index under `metadata.filter_fields` â€
   reconciliation) **also syncs filters/facets in the same pass** â€” no separate step
   required. `nada_ai.filters.cli {sync, sync-batch, sync-from-extract, backfill-facets}`
   remain available for a standalone filters-only pass (e.g. re-syncing filters without
-  touching embeddings) or for backends where `sync_filters_during_ingest` was disabled.
-  Disable the automatic behavior with `NADA_SYNC_FILTERS_DURING_INGEST=false` if you
-  want pure content-only ingest (shaves one metadata-extract round trip per idno).
+  touching embeddings). Ingest requires NADA's metadata-extract API, which supplies the
+  filters and each study's internal id (`sid`).
 
 ### The REST search API
 
@@ -762,7 +761,6 @@ in `src/nada_ai/settings.py` unless noted.
 | Variable | Default | Purpose |
 |---|---|---|
 | `NADA_MAX_CONCURRENT_INGEST_JOBS` | `1` | Max simultaneous embedding-compute ingest jobs |
-| `NADA_SYNC_FILTERS_DURING_INGEST` | `true` | Content ingest also fetches + bakes in filters/facets per idno; `false` for content-only ingest |
 
 ### Admin auth / RBAC / audit / rate limiting
 

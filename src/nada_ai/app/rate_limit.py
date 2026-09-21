@@ -49,6 +49,11 @@ class RateLimiter:
             return bucket.count <= self.limit
 
 
+def client_key(request: Request) -> str:
+    """Identity a rate limit is counted against: the presented admin key, else the client address."""
+    return request.headers.get("X-NADA-Admin-Key") or (request.client.host if request.client else "unknown")
+
+
 def rate_limited(attr: str):
     """FastAPI dependency factory. ``attr`` names a ``RateLimiter`` on ``AppState``."""
 
@@ -56,10 +61,7 @@ def rate_limited(attr: str):
         limiter: RateLimiter | None = getattr(s, attr, None)
         if limiter is None:
             return
-        client_key = request.headers.get("X-NADA-Admin-Key") or (
-            request.client.host if request.client else "unknown"
-        )
-        if not await limiter.check(client_key):
+        if not await limiter.check(client_key(request)):
             raise HTTPException(status_code=429, detail="rate limit exceeded, slow down")
 
     return dependency

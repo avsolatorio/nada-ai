@@ -1,0 +1,39 @@
+{
+  "engine": "opensearch",
+  "found": 1,
+  "limit": 15,
+  "offset": 0,
+  "truncated": false,
+  "result_cap": 100,
+  "search_counts_by_type": {
+    "survey": 1
+  },
+  "hits": [
+    {
+      "sid": 2,
+      "idno": "EGY_2014_DHS_v01_M",
+      "rank": 1,
+      "score": 7.41,
+      "matched_by": [
+        "lexical"
+      ]
+    }
+  ],
+  "applied": {
+    "query": "demographic health survey",
+    "mode": "lexical",
+    "filters": {},
+    "sort": {
+      "by": "relevance",
+      "order": "desc"
+    },
+    "limit": 15,
+    "offset": 0
+  },
+  "warnings": [
+    {
+      "code": "semantic_unavailable",
+      "message": "Embedding model unavailable; results are lexical only."
+    }
+  ]
+}

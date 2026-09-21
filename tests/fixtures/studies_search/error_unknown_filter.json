@@ -1,0 +1,26 @@
+{
+  "error": {
+    "code": "unknown_filter",
+    "message": "Unknown filter key(s): region",
+    "details": {
+      "filters": [
+        "region"
+      ],
+      "supported": [
+        "types",
+        "countries",
+        "year_from",
+        "year_to",
+        "repository",
+        "collections",
+        "form_ids",
+        "data_class_ids",
+        "tags",
+        "facets",
+        "sids",
+        "created_from",
+        "created_to"
+      ]
+    }
+  }
+}

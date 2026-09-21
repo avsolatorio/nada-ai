@@ -1,0 +1,85 @@
+{
+  "engine": "opensearch",
+  "found": 4,
+  "limit": 15,
+  "offset": 0,
+  "truncated": false,
+  "result_cap": 100,
+  "search_counts_by_type": {
+    "survey": 1,
+    "geospatial": 1,
+    "document": 1,
+    "timeseries": 1
+  },
+  "hits": [
+    {
+      "sid": 278,
+      "idno": "SEN_2020_HRWIM_GEO_v01_M",
+      "rank": 1,
+      "score": 0.0323,
+      "matched_by": [
+        "lexical",
+        "semantic"
+      ]
+    },
+    {
+      "sid": 2,
+      "idno": "EGY_2014_DHS_v01_M",
+      "rank": 2,
+      "score": 0.0318,
+      "matched_by": [
+        "lexical",
+        "semantic"
+      ]
+    },
+    {
+      "sid": 21,
+      "idno": "document-unique-id",
+      "rank": 3,
+      "score": 0.0164,
+      "matched_by": [
+        "semantic"
+      ],
+      "passages": [
+        {
+          "page": 3,
+          "total_pages": 12,
+          "score": 0.52,
+          "excerpt": "... poverty headcount fell between the two survey rounds ..."
+        },
+        {
+          "page": 7,
+          "total_pages": 12,
+          "score": 0.47,
+          "excerpt": null
+        }
+      ]
+    },
+    {
+      "sid": 198,
+      "idno": "FE_FRTR_W_A10",
+      "rank": 4,
+      "score": 0.0161,
+      "matched_by": [
+        "semantic"
+      ]
+    }
+  ],
+  "applied": {
+    "query": "poverty",
+    "mode": "hybrid",
+    "filters": {},
+    "sort": {
+      "by": "relevance",
+      "order": "desc"
+    },
+    "limit": 15,
+    "offset": 0
+  },
+  "warnings": [],
+  "timing_ms": {
+    "total": 41.2,
+    "lexical": 9.8,
+    "semantic": 24.5
+  }
+}

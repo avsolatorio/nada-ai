@@ -1,0 +1,21 @@
+{
+  "query": "consumer price index",
+  "mode": "auto",
+  "filters": {
+    "types": [
+      "survey",
+      "timeseries"
+    ],
+    "countries": [
+      16
+    ],
+    "year_from": 2010,
+    "year_to": 2020
+  },
+  "sort": {
+    "by": "relevance",
+    "order": "desc"
+  },
+  "limit": 15,
+  "offset": 0
+}

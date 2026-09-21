@@ -1,0 +1,44 @@
+{
+  "engine": "opensearch",
+  "found": 5,
+  "limit": 2,
+  "offset": 0,
+  "truncated": false,
+  "result_cap": null,
+  "search_counts_by_type": {
+    "survey": 3,
+    "table": 2
+  },
+  "hits": [
+    {
+      "sid": 2,
+      "idno": "EGY_2014_DHS_v01_M",
+      "rank": 1,
+      "score": null,
+      "matched_by": []
+    },
+    {
+      "sid": 3,
+      "idno": "PC11_PCA_MISC02",
+      "rank": 2,
+      "score": null,
+      "matched_by": []
+    }
+  ],
+  "applied": {
+    "query": null,
+    "mode": "browse",
+    "filters": {
+      "form_ids": [
+        1
+      ]
+    },
+    "sort": {
+      "by": "title",
+      "order": "asc"
+    },
+    "limit": 2,
+    "offset": 0
+  },
+  "warnings": []
+}

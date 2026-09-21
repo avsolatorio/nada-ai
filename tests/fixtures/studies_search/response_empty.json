@@ -1,0 +1,22 @@
+{
+  "engine": "opensearch",
+  "found": 0,
+  "limit": 15,
+  "offset": 0,
+  "truncated": false,
+  "result_cap": 100,
+  "search_counts_by_type": {},
+  "hits": [],
+  "applied": {
+    "query": "xyzzy qwerty flurbo",
+    "mode": "hybrid",
+    "filters": {},
+    "sort": {
+      "by": "relevance",
+      "order": "desc"
+    },
+    "limit": 15,
+    "offset": 0
+  },
+  "warnings": []
+}
