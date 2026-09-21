@@ -1,7 +1,8 @@
-"""Composable index template + optional cluster hardening for OpenSearch.
+"""Composable index templates + optional cluster hardening for OpenSearch.
 
-If the index is auto-created (e.g. first bulk without an explicit ``indices.create``),
-a matching **composable index template** still applies ``knn_vector`` + facet mappings.
+If an index is auto-created (e.g. first bulk without an explicit ``indices.create``), a matching **composable index
+template** still applies the right mappings. There is one template per index, each matching its index name exactly:
+the chunk index (``index_name``) and the study index (``studies_index``).
 
 Cluster setting ``action.auto_create_index`` can be tightened (requires manager-level
 permissions); see :class:`nada_ai.settings.Settings`.
@@ -12,36 +13,56 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from nada_ai.search.backend.opensearch.mapping import index_body
+from nada_ai.search.backend.opensearch.mapping import index_body, studies_index_body
 from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 
+def _template_name(index: str) -> str:
+    """Stable template name derived from an index name (cluster-wide unique)."""
+    return f"nada-ai-{index.replace('/', '-')}-template"
+
+
 def composable_index_template_name(settings: Settings) -> str:
-    """Stable template name derived from ``index_name`` (cluster-wide unique)."""
-    safe = settings.index_name.replace("/", "-")
-    return f"nada-ai-{safe}-template"
+    """Template name of the chunk index."""
+    return _template_name(settings.index_name)
+
+
+def studies_index_template_name(settings: Settings) -> str:
+    """Template name of the study index."""
+    return _template_name(settings.studies_index)
 
 
 def composable_index_template_body(settings: Settings, embedding_dimension: int) -> dict[str, Any]:
-    """Body for ``indices.put_index_template`` (OpenSearch composable templates)."""
-    base = settings.index_name
-    patterns = [base, f"{base}-*"]
+    """Body for ``indices.put_index_template`` of the chunk index."""
     return {
-        "index_patterns": patterns,
+        "index_patterns": [settings.index_name],
         "template": index_body(embedding_dimension),
         "priority": settings.opensearch_index_template_priority,
     }
 
 
+def studies_index_template_body(settings: Settings) -> dict[str, Any]:
+    """Body for ``indices.put_index_template`` of the study index."""
+    return {
+        "index_patterns": [settings.studies_index],
+        "template": studies_index_body(),
+        "priority": settings.opensearch_index_template_priority,
+    }
+
+
 def put_composable_index_template(client: Any, settings: Settings, embedding_dimension: int) -> dict[str, Any]:
-    """Install or replace the composable index template for ``index_name`` (+ suffix pattern)."""
-    name = composable_index_template_name(settings)
-    body = composable_index_template_body(settings, embedding_dimension)
-    client.indices.put_index_template(name=name, body=body)
-    logger.info("Installed composable index template %s patterns=%s", name, body["index_patterns"])
-    return {"template": name, "index_patterns": body["index_patterns"], "priority": body["priority"]}
+    """Install or replace the composable index templates of both indices (chunks and studies)."""
+    installed: dict[str, Any] = {}
+    for name, body in (
+        (composable_index_template_name(settings), composable_index_template_body(settings, embedding_dimension)),
+        (studies_index_template_name(settings), studies_index_template_body(settings)),
+    ):
+        client.indices.put_index_template(name=name, body=body)
+        logger.info("Installed composable index template %s patterns=%s", name, body["index_patterns"])
+        installed[name] = {"index_patterns": body["index_patterns"], "priority": body["priority"]}
+    return {"templates": installed}
 
 
 def _normalize_auto_create_index(value: str) -> str | bool:

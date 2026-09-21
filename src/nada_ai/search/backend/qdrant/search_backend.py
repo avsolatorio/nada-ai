@@ -14,14 +14,13 @@ from nada_ai.search.canonical import stored_filter_field_name
 from nada_ai.search.dynamic_filters import (
     FILTER_FACETS_KEY,
     aggregate_dynamic_facet_rows_multi,
-    dynamic_facet_qdrant_key,
+    dynamic_facet_field,
     resolve_facet_fields,
 )
 from nada_ai.search.explain_filters import compute_filter_match
 from nada_ai.search.ports import RecommendParams, SearchOutcome, SearchParams
 from nada_ai.search.vector_fusion import fuse_chunk_embeddings
 from nada_ai.settings import Settings
-
 
 FacetSelection = tuple[list[str], list[str]]
 
@@ -201,7 +200,7 @@ class QdrantSearchBackend:
         async def one_dynamic(field: str) -> tuple[str, list[dict[str, Any]]]:
             resp = await self._client.facet(
                 collection_name=self._collection(),
-                key=dynamic_facet_qdrant_key(field),
+                key=dynamic_facet_field(field),
                 facet_filter=facet_filter,
                 limit=200,
             )

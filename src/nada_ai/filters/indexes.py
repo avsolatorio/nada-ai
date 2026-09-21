@@ -1,4 +1,4 @@
-"""Ensure Qdrant payload indexes and OpenSearch mappings for dynamic filters."""
+"""Ensure Qdrant payload indexes and the OpenSearch flat filter mapping for dynamic filters."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from typing import Any
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 
-from nada_ai.search.dynamic_filters import dynamic_facet_qdrant_key, load_dynamic_facet_keys
+from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, METADATA_OBJECT_KEY, filter_facets_mapping
+from nada_ai.search.dynamic_filters import dynamic_facet_field, load_dynamic_facet_keys
 from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ def _create_keyword_index(
 
 
 def qdrant_filter_facets_index_paths(settings: Settings | None = None) -> tuple[str, ...]:
-    return tuple(dynamic_facet_qdrant_key(key) for key in sorted(load_dynamic_facet_keys(settings)))
+    return tuple(dynamic_facet_field(key) for key in sorted(load_dynamic_facet_keys(settings)))
 
 
 def qdrant_dynamic_facet_indexes_ready(client: QdrantClient, collection: str, settings: Settings | None = None) -> bool:
@@ -69,7 +70,7 @@ def ensure_qdrant_filter_field_indexes_for_keys(
     """
     results: dict[str, str] = {}
     for key in sorted({str(k) for k in keys}):
-        path = dynamic_facet_qdrant_key(key)
+        path = dynamic_facet_field(key)
         results[path] = _create_keyword_index(client, collection, path, strict=strict)
     return results
 
@@ -98,22 +99,23 @@ def ensure_qdrant_filter_field_indexes(
     return results
 
 
-def ensure_opensearch_filter_fields_mapping(client: Any, index_name: str) -> dict[str, Any]:
-    """Add nested ``metadata.filter_fields`` mapping to an existing OpenSearch index."""
-    body = {
-        "properties": {
-            "metadata": {
-                "properties": {
-                    "filter_fields": {
-                        "type": "nested",
-                        "properties": {
-                            "key": {"type": "keyword"},
-                            "value": {"type": "keyword"},
-                        },
-                    }
-                }
-            }
-        }
+def ensure_opensearch_filter_facets_mapping(client: Any, settings: Settings) -> dict[str, Any]:
+    """(Re)apply the flat ``filter_facets`` mapping and its dynamic templates to both OpenSearch indexes.
+
+    New indexes already have it (see ``search.backend.opensearch.mapping``); this repairs one created without it.
+    """
+    chunk_facets, chunk_templates = filter_facets_mapping(f"{METADATA_OBJECT_KEY}.")
+    study_facets, study_templates = filter_facets_mapping()
+    bodies = {
+        settings.index_name: {
+            "dynamic_templates": chunk_templates,
+            "properties": {METADATA_OBJECT_KEY: {"properties": {FILTER_FACETS_KEY: chunk_facets}}},
+        },
+        settings.studies_index: {
+            "dynamic_templates": study_templates,
+            "properties": {FILTER_FACETS_KEY: study_facets},
+        },
     }
-    resp = client.indices.put_mapping(index=index_name, body=body)
-    return {"index": index_name, "mapping": body, "raw": resp}
+    return {
+        "indexes": {name: client.indices.put_mapping(index=name, body=body) for name, body in bodies.items()},
+    }

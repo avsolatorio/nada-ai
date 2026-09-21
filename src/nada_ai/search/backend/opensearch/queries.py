@@ -303,7 +303,7 @@ def merge_facets_into_body(
     static_fields: list[str] | None,
     dynamic_fields: list[str] | None = None,
 ) -> None:
-    """Mutates ``body`` to add facet aggregations (static terms + dynamic nested)."""
+    """Mutates ``body`` to add facet aggregations (static and dynamic terms)."""
     extra = _facet_aggs(static_fields, dynamic_fields)
     if not extra:
         return

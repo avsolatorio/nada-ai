@@ -63,7 +63,7 @@ def get(idno: str) -> None:
 
 
 def ensure_indexes() -> None:
-    """Ensure Qdrant ``filter_facets`` payload indexes / OpenSearch nested mapping."""
+    """Ensure Qdrant ``filter_facets`` payload indexes / the OpenSearch flat ``filter_facets`` mapping."""
     settings = Settings()
     res = ensure_filter_indexes_op_service(settings)
     print(json.dumps(res, indent=2))

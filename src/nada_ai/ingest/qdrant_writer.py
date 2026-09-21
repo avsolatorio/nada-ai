@@ -35,7 +35,7 @@ _KEYWORD_INDEX_FIELDS = frozenset(
         "geographies",
     }
 )
-_INTEGER_INDEX_FIELDS = frozenset({"year_start", "year_end", "years"})
+_INTEGER_INDEX_FIELDS = frozenset({"sid", "year_start", "year_end", "years"})
 
 
 def _client(settings: Settings) -> QdrantClient:

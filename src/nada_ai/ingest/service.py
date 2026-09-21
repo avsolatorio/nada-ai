@@ -21,6 +21,7 @@ from nada_ai.search.backend.opensearch.index_template import (
     put_composable_index_template,
 )
 from nada_ai.search.backend.opensearch.ml.setup import ensure_text_embedding_ingest_pipeline
+from nada_ai.search.backend.opensearch.studies import sids_for_idnos
 from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -174,21 +175,8 @@ def _delete_qdrant(settings: Settings, idno: str) -> dict[str, Any]:
 
 
 def _delete_opensearch(settings: Settings, idno: str) -> dict[str, Any]:
-    from nada_ai.search.backend.opensearch.mapping import metadata_field
-
-    client = build_client(settings)
-    try:
-        body = {"query": {"term": {metadata_field("idno"): idno}}}
-        resp = client.delete_by_query(index=settings.index_name, body=body, refresh=True)
-        return {
-            "backend": "opensearch",
-            "index": settings.index_name,
-            "idno": idno,
-            "deleted": int(resp.get("deleted") or 0),
-            "total": resp.get("total"),
-        }
-    finally:
-        _close_quiet(client)
+    out = _delete_opensearch_by(settings, idnos=[idno])
+    return {"backend": "opensearch", "index": settings.index_name, "idno": idno, **out}
 
 
 def delete_by_idnos_op(settings: Settings, idnos: list[str]) -> dict[str, Any]:
@@ -231,18 +219,98 @@ def _delete_qdrant_batch(settings: Settings, idnos: list[str]) -> dict[str, Any]
 
 
 def _delete_opensearch_batch(settings: Settings, idnos: list[str]) -> dict[str, Any]:
+    out = _delete_opensearch_by(settings, idnos=idnos)
+    return {"backend": "opensearch", "index": settings.index_name, "idnos": idnos, **out}
+
+
+def delete_by_sid_op(settings: Settings, sid: int) -> dict[str, Any]:
+    """Delete every indexed document/point of one study, keyed by the NADA internal id ``sid``."""
+    return delete_by_sids_op(settings, [sid])
+
+
+def delete_by_sids_op(settings: Settings, sids: list[int]) -> dict[str, Any]:
+    """Delete every indexed document/point of the given NADA internal study ids. Works with both backends.
+
+    The ``sid`` is the key nada-ai stores in ``metadata.sid`` on each document (see ``search.documents``).
+
+    Unlike the idno operations this does not report to NADA's ``search_index_state``: those reports are
+    still keyed by idno, and reporting by id needs a NADA-side change (tracked in the plan).
+    """
+    clean = list(dict.fromkeys(int(s) for s in sids))
+    if not clean or any(s <= 0 for s in clean):
+        raise ValueError("sids must be a non-empty list of positive integers")
+    if settings.search_backend == "qdrant":
+        return _delete_qdrant_by_sids(settings, clean)
+    return _delete_opensearch_by_sids(settings, clean)
+
+
+def _delete_qdrant_by_sids(settings: Settings, sids: list[int]) -> dict[str, Any]:
+    from qdrant_client.http import models as qm
+
+    from nada_ai.ingest.qdrant_writer import _client as make_client
     from nada_ai.search.backend.opensearch.mapping import metadata_field
 
+    client = make_client(settings)
+    coll = settings.qdrant_collection
+    try:
+        result = client.delete(
+            collection_name=coll,
+            points_selector=qm.FilterSelector(
+                filter=qm.Filter(must=[qm.FieldCondition(key=metadata_field("sid"), match=qm.MatchAny(any=sids))])
+            ),
+        )
+        return {
+            "backend": "qdrant",
+            "collection": coll,
+            "sids": sids,
+            "operation": result.status.value if result else "unknown",
+        }
+    finally:
+        client.close()
+
+
+def _delete_opensearch_by_sids(settings: Settings, sids: list[int]) -> dict[str, Any]:
+    out = _delete_opensearch_by(settings, sids=sids)
+    return {"backend": "opensearch", "index": settings.index_name, "sids": sids, **out}
+
+
+def _delete_opensearch_by(
+    settings: Settings, *, idnos: list[str] | None = None, sids: list[int] | None = None
+) -> dict[str, Any]:
+    """Delete studies from both OpenSearch indexes, by NADA idno and/or internal id ``sid``.
+
+    The study index stores NADA's own ``idno``, so a delete by idno first looks up the study's ``sid`` there;
+    chunks are then removed by ``sid`` as well as by their stored idno (which comes from the record's schema and
+    can differ from NADA's), so none are left behind.
+    """
+    from nada_ai.search.backend.opensearch.mapping import metadata_field
+
+    idnos = idnos or []
+    sid_set = set(sids or [])
     client = build_client(settings)
     try:
-        body = {"query": {"terms": {metadata_field("idno"): idnos}}}
-        resp = client.delete_by_query(index=settings.index_name, body=body, refresh=True)
+        sid_set.update(sids_for_idnos(client, settings.studies_index, idnos).values())
+
+        chunk_match: list[dict[str, Any]] = []
+        study_match: list[dict[str, Any]] = []
+        if idnos:
+            chunk_match.append({"terms": {metadata_field("idno"): idnos}})
+            study_match.append({"terms": {"idno": idnos}})
+        if sid_set:
+            chunk_match.append({"terms": {metadata_field("sid"): sorted(sid_set)}})
+            study_match.append({"terms": {"sid": sorted(sid_set)}})
+
+        def delete(index: str, should: list[dict[str, Any]]) -> dict[str, Any]:
+            body = {"query": {"bool": {"should": should, "minimum_should_match": 1}}}
+            return client.delete_by_query(index=index, body=body, refresh=True, ignore_unavailable=True)
+
+        chunks = delete(settings.index_name, chunk_match)
+        studies = delete(settings.studies_index, study_match)
         return {
-            "backend": "opensearch",
-            "index": settings.index_name,
-            "idnos": idnos,
-            "deleted": int(resp.get("deleted") or 0),
-            "total": resp.get("total"),
+            "deleted": int(chunks.get("deleted") or 0),
+            "total": chunks.get("total"),
+            "studies_index": settings.studies_index,
+            "studies_deleted": int(studies.get("deleted") or 0),
         }
     finally:
         _close_quiet(client)

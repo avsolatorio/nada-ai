@@ -222,8 +222,7 @@ async def facets_backfill(
     pipeline that did not write the flat map.
 
     For OpenSearch the request succeeds immediately with ``skipped: true`` —
-    OpenSearch uses nested ``filter_fields`` queries directly and does not
-    require the flat map.
+    OpenSearch has only ever stored the flat map, so there is nothing to backfill.
     """
     if s.settings.search_backend != "qdrant":
         result = await asyncio.to_thread(backfill_facets_op, s.settings)

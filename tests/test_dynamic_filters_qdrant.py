@@ -3,7 +3,7 @@
 from qdrant_client.http import models as qm
 
 from nada_ai.search.backend.qdrant.filters import filters_to_qdrant_filter
-from nada_ai.search.dynamic_filters import dynamic_facet_qdrant_key, dynamic_filters_to_qdrant_conditions
+from nada_ai.search.dynamic_filters import dynamic_facet_field, dynamic_filters_to_qdrant_conditions
 
 
 def test_dynamic_filters_use_filter_facets_paths():
@@ -12,8 +12,8 @@ def test_dynamic_filters_use_filter_facets_paths():
     assert all(isinstance(c, qm.FieldCondition) for c in conds)
     keys = {c.key for c in conds}
     assert keys == {
-        dynamic_facet_qdrant_key("countries"),
-        dynamic_facet_qdrant_key("repositoryid"),
+        dynamic_facet_field("countries"),
+        dynamic_facet_field("repositoryid"),
     }
 
 

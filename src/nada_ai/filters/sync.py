@@ -6,11 +6,10 @@ import json
 import logging
 from typing import Any, TypedDict
 
-from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 
 from nada_ai.filters.indexes import (
-    ensure_opensearch_filter_fields_mapping,
+    ensure_opensearch_filter_facets_mapping,
     ensure_qdrant_filter_field_indexes,
     ensure_qdrant_filter_field_indexes_for_keys,
     qdrant_dynamic_facet_indexes_ready,
@@ -18,11 +17,13 @@ from nada_ai.filters.indexes import (
 from nada_ai.ingest.qdrant_writer import _client as qdrant_client
 from nada_ai.search.backend.opensearch.client import build_client
 from nada_ai.search.backend.opensearch.mapping import METADATA_OBJECT_KEY, metadata_field
+from nada_ai.search.backend.opensearch.studies import sids_for_idnos
 from nada_ai.search.dynamic_filters import (
     FILTER_FACETS_KEY,
     FILTER_FIELDS_KEY,
     FIXED_FILTER_KEYS,
     facets_map_from_filter_fields_rows,
+    facets_to_filter_field_rows,
     load_dynamic_facet_keys,
     load_excluded_facet_keys,
     normalize_external_filters,
@@ -172,28 +173,44 @@ def _sync_qdrant(settings: Settings, idno: str, normalized: list[dict[str, list[
 
 
 def _sync_opensearch(settings: Settings, idno: str, normalized: list[dict[str, list[str]]]) -> FilterSyncResult:
-    index_name = settings.index_name
+    """Rewrite one study's flat ``filter_facets`` on its chunk documents and on its study document.
+
+    The study is found by NADA idno in the study index; chunks are matched by ``sid`` as well as by their stored
+    idno (the record's schema idno, which can differ from NADA's).
+    """
     client = build_client(settings)
     try:
-        count_body = {"query": {"term": {metadata_field("idno"): idno}}}
-        count_resp = client.count(index=index_name, body=count_body)
-        point_count = int(count_resp.get("count") or 0)
-        if point_count == 0:
+        sids = sorted(sids_for_idnos(client, settings.studies_index, [idno]).values())
+        chunk_match: list[dict[str, Any]] = [{"term": {metadata_field("idno"): idno}}]
+        if sids:
+            chunk_match.append({"terms": {metadata_field("sid"): sids}})
+        chunk_query = {"bool": {"should": chunk_match, "minimum_should_match": 1}}
+
+        count_resp = client.count(index=settings.index_name, body={"query": chunk_query}, ignore_unavailable=True)
+        if int(count_resp.get("count") or 0) == 0 and not sids:
             return FilterSyncResult(idno=idno, updated_points=0, found=False)
 
-        update_body = {
-            "query": {"term": {metadata_field("idno"): idno}},
-            "script": {
-                "source": (
-                    "if (ctx._source.metadata == null) { ctx._source.metadata = new HashMap(); } "
-                    "ctx._source.metadata.filter_fields = params.ff;"
-                ),
-                "params": {"ff": normalized},
-            },
+        facets = normalized_to_facets_map(normalized)
+        chunk_script = {
+            "source": (
+                "if (ctx._source.metadata == null) { ctx._source.metadata = new HashMap(); } "
+                "ctx._source.metadata.filter_facets = params.facets;"
+            ),
+            "params": {"facets": facets},
         }
-        resp = client.update_by_query(index=index_name, body=update_body, refresh=True)
-        updated = int(resp.get("updated") or 0)
-        return FilterSyncResult(idno=idno, updated_points=updated, found=True)
+        resp = client.update_by_query(
+            index=settings.index_name, body={"query": chunk_query, "script": chunk_script}, refresh=True
+        )
+        client.update_by_query(
+            index=settings.studies_index,
+            body={
+                "query": {"term": {"idno": idno}},
+                "script": {"source": "ctx._source.filter_facets = params.facets;", "params": {"facets": facets}},
+            },
+            refresh=True,
+            ignore_unavailable=True,
+        )
+        return FilterSyncResult(idno=idno, updated_points=int(resp.get("updated") or 0), found=True)
     finally:
         try:
             client.transport.close()
@@ -381,31 +398,32 @@ def get_filter_fields_for_idno(settings: Settings, idno: str) -> dict[str, Any]:
         finally:
             client.close()
 
-    index_name = settings.index_name
     client = build_client(settings)
     try:
+        sids = sorted(sids_for_idnos(client, settings.studies_index, [idno]).values())
+        should: list[dict[str, Any]] = [{"term": {metadata_field("idno"): idno}}]
+        if sids:
+            should.append({"terms": {metadata_field("sid"): sids}})
         body = {
             "size": 1,
-            "query": {"term": {metadata_field("idno"): idno}},
-            "_source": {"includes": [metadata_field(FILTER_FIELDS_KEY)]},
+            "track_total_hits": True,
+            "query": {"bool": {"should": should, "minimum_should_match": 1}},
+            "_source": {"includes": [metadata_field(FILTER_FACETS_KEY)]},
         }
-        resp = client.search(index=index_name, body=body)
+        resp = client.search(index=settings.index_name, body=body, ignore_unavailable=True)
         hits = resp.get("hits", {}).get("hits") or []
         total = resp.get("hits", {}).get("total") or {}
-        if isinstance(total, dict):
-            point_count = int(total.get("value") or 0)
-        else:
-            point_count = int(total or 0)
+        point_count = int(total.get("value") or 0) if isinstance(total, dict) else int(total or 0)
         if not hits:
             return {"idno": idno, "found": False, "point_count": 0, "filter_fields": None}
-        src = hits[0].get("_source") or {}
-        meta = src.get("metadata") or {}
+        meta = (hits[0].get("_source") or {}).get("metadata") or {}
+        facets = meta.get(FILTER_FACETS_KEY)
         return {
             "idno": idno,
             "found": True,
             "point_count": point_count,
-            "filter_fields": meta.get(FILTER_FIELDS_KEY),
-            "filter_facets": meta.get(FILTER_FACETS_KEY),
+            "filter_fields": facets_to_filter_field_rows(facets),
+            "filter_facets": facets,
         }
     finally:
         try:
@@ -432,7 +450,7 @@ def ensure_filter_indexes_op(settings: Settings) -> dict[str, Any]:
 
     client = build_client(settings)
     try:
-        mapping = ensure_opensearch_filter_fields_mapping(client, settings.index_name)
+        mapping = ensure_opensearch_filter_facets_mapping(client, settings)
         return {"backend": "opensearch", **mapping}
     finally:
         try:

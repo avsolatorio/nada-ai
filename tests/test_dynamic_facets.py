@@ -17,23 +17,14 @@ def test_resolve_facet_fields_defaults():
 
 
 def test_unwrap_dynamic_facet_buckets():
-    agg = {
-        "filtered": {
-            "values": {
-                "buckets": [
-                    {"key": "181", "doc_count": 5},
-                    {"key": "7", "doc_count": 2},
-                ]
-            }
-        }
-    }
+    agg = {"buckets": [{"key": 181, "doc_count": 5}, {"key": 7, "doc_count": 2}]}
     rows = unwrap_dynamic_facet_buckets("countries", agg)
-    assert rows == [{"value": "181", "count": 5}, {"value": "7", "count": 2}]
+    assert rows == [{"value": 181, "count": 5}, {"value": 7, "count": 2}]
 
 
-def test_dynamic_facet_aggs_has_nested_path():
+def test_dynamic_facet_aggs_are_flat_terms_aggregations():
     aggs = dynamic_facet_aggs(["doctype"])
-    assert aggs["doctype"]["nested"]["path"] == "metadata.filter_fields"
+    assert aggs["doctype"] == {"terms": {"field": "metadata.filter_facets.doctype", "size": 200}}
 
 
 def test_aggregate_dynamic_facet_rows_scopes_by_key():
@@ -81,7 +72,7 @@ def test_normalized_to_facets_map():
     assert normalized_to_facets_map(normalized) == {"countries": ["181"], "years": ["2015", "2016"]}
 
 
-def test_dynamic_facet_qdrant_key():
-    from nada_ai.search.dynamic_filters import dynamic_facet_qdrant_key
+def test_dynamic_facet_field():
+    from nada_ai.search.dynamic_filters import dynamic_facet_field
 
-    assert dynamic_facet_qdrant_key("doctype") == "metadata.filter_facets.doctype"
+    assert dynamic_facet_field("doctype") == "metadata.filter_facets.doctype"
