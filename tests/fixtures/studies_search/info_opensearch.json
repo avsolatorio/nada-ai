@@ -1,0 +1,104 @@
+{
+  "engine": "opensearch",
+  "engine_version": "3.6.0",
+  "capabilities": {
+    "studies_search": true,
+    "lexical": true,
+    "semantic": true,
+    "hybrid": true,
+    "browse": true,
+    "facets": false,
+    "variables_search": false,
+    "citations_search": false
+  },
+  "id_key": "sid",
+  "filters": [
+    {
+      "key": "types",
+      "type": "string_list",
+      "description": "NADA dataset types (surveys.type); any-of"
+    },
+    {
+      "key": "countries",
+      "type": "int_list",
+      "description": "Country ids; any-of"
+    },
+    {
+      "key": "year_from",
+      "type": "int",
+      "description": "Data collection year lower bound (inclusive)"
+    },
+    {
+      "key": "year_to",
+      "type": "int",
+      "description": "Data collection year upper bound (inclusive)"
+    },
+    {
+      "key": "repository",
+      "type": "string",
+      "description": "Active repository scope (primary or secondary)"
+    },
+    {
+      "key": "collections",
+      "type": "string_list",
+      "description": "Repository ids (collection facet); any-of"
+    },
+    {
+      "key": "form_ids",
+      "type": "int_list",
+      "description": "Data access form ids; any-of"
+    },
+    {
+      "key": "data_class_ids",
+      "type": "int_list",
+      "description": "Data classification ids; any-of"
+    },
+    {
+      "key": "tags",
+      "type": "string_list",
+      "description": "Study tags; any-of"
+    },
+    {
+      "key": "facets",
+      "type": "facet_map",
+      "description": "User-defined facets: name -> term ids (any-of per name)"
+    },
+    {
+      "key": "sids",
+      "type": "int_list",
+      "description": "Restrict to these internal study ids"
+    },
+    {
+      "key": "created_from",
+      "type": "int",
+      "description": "Created timestamp lower bound (unix seconds)"
+    },
+    {
+      "key": "created_to",
+      "type": "int",
+      "description": "Created timestamp upper bound (unix seconds)"
+    }
+  ],
+  "sort_fields": [
+    "relevance",
+    "title",
+    "nation",
+    "year",
+    "popularity",
+    "created",
+    "changed"
+  ],
+  "limits": {
+    "max_limit": 100,
+    "max_offset": 10000,
+    "query_result_cap": 100,
+    "max_query_length": 500
+  },
+  "index": {
+    "name": "nada-metadata",
+    "generation": "2026-09-20T09:15:00Z",
+    "studies": 1198,
+    "embedding_model": "microsoft/harrier-oss-v1-270m",
+    "embedding_dim": 640
+  }
+}

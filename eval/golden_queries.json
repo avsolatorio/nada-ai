@@ -1,0 +1,7141 @@
+{
+ "about": "Golden queries (reviewed). Relevance is derived from catalog fields by the `rule` on each query (never from search output). Grades: 3 = right answer, 2 = clearly relevant, 1 = loosely related. Junk/test records (placeholder titles) never count as relevant. Every entry needs human review.",
+ "catalog": {
+  "published": 1391,
+  "junk": 65
+ },
+ "queries": [
+  {
+   "id": "nav-01",
+   "category": "navigational",
+   "query": "Integrated Household Living Conditions Survey 2005-2006",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "integrated",
+      "household",
+      "living",
+      "conditions",
+      "survey"
+     ],
+     "any": [],
+     "grade": 3,
+     "year": 2005
+    }
+   ],
+   "note": "one right answer expected at rank 1; same-family reports at grade 1 where noted",
+   "expect": null,
+   "relevant": {
+    "1400": 3
+   },
+   "examples": [
+    {
+     "sid": 1400,
+     "grade": 3,
+     "title": "Integrated Household Living Conditions Survey 2005-2006"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 1
+   }
+  },
+  {
+   "id": "nav-02",
+   "category": "navigational",
+   "query": "Rwanda Establishment Census 2023",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "establishment",
+      "census",
+      "2023"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "establishment",
+      "census"
+     ],
+     "any": [],
+     "grade": 1
+    }
+   ],
+   "note": "one right answer expected at rank 1; same-family reports at grade 1 where noted",
+   "expect": null,
+   "relevant": {
+    "1420": 3,
+    "1416": 1,
+    "1417": 1,
+    "1418": 1,
+    "1419": 1
+   },
+   "examples": [
+    {
+     "sid": 1420,
+     "grade": 3,
+     "title": "Rwanda Establishment Census 2023"
+    },
+    {
+     "sid": 1416,
+     "grade": 1,
+     "title": "Rwanda Establishment Census 2011"
+    },
+    {
+     "sid": 1417,
+     "grade": 1,
+     "title": "Rwanda Establishment Census 2014"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "1": 4,
+    "3": 1
+   }
+  },
+  {
+   "id": "nav-03",
+   "category": "navigational",
+   "query": "World Development Indicators Country Profile East Asia and Pacific 2021",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "development",
+      "indicators",
+      "east",
+      "asia",
+      "pacific"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "one right answer expected at rank 1; same-family reports at grade 1 where noted",
+   "expect": null,
+   "relevant": {
+    "266": 3
+   },
+   "examples": [
+    {
+     "sid": 266,
+     "grade": 3,
+     "title": "World Development Indicators, Country Profile, East Asia and Pacific - 2021"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 1
+   }
+  },
+  {
+   "id": "nav-04",
+   "category": "navigational",
+   "query": "Geocoded Disasters GDIS dataset",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "geocoded",
+      "disasters"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "one right answer expected at rank 1; same-family reports at grade 1 where noted",
+   "expect": null,
+   "relevant": {
+    "227": 3
+   },
+   "examples": [
+    {
+     "sid": 227,
+     "grade": 3,
+     "title": "Geocoded Disasters (GDIS) Dataset"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 1
+   }
+  },
+  {
+   "id": "nav-05",
+   "category": "navigational",
+   "query": "Boundaries of Somalia AFRICOVER",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "boundaries",
+      "somalia"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "one right answer expected at rank 1; same-family reports at grade 1 where noted",
+   "expect": null,
+   "relevant": {
+    "12": 3
+   },
+   "examples": [
+    {
+     "sid": 12,
+     "grade": 3,
+     "title": "Boundaries of Somalia - AFRICOVER"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 1
+   }
+  },
+  {
+   "id": "nav-06",
+   "category": "navigational",
+   "query": "Predicting Food Crises reproducible code",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "predicting",
+      "food",
+      "crises",
+      "working",
+      "paper",
+      "reproducible",
+      "code"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "predicting",
+      "food",
+      "crises"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "one right answer expected at rank 1; same-family reports at grade 1 where noted",
+   "expect": null,
+   "relevant": {
+    "170": 3,
+    "279": 3,
+    "280": 3,
+    "367": 2
+   },
+   "examples": [
+    {
+     "sid": 170,
+     "grade": 3,
+     "title": "Predicting Food Crises - Working Paper Reproducible Code"
+    },
+    {
+     "sid": 279,
+     "grade": 3,
+     "title": "Reproducible code for the World Bank Policy Research Working Paper No 9142 - Predicting Fo"
+    },
+    {
+     "sid": 280,
+     "grade": 3,
+     "title": "Reproducible code for the World Bank Policy Research Working Paper No 9142 - Predicting Fo"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 3,
+    "2": 1
+   }
+  },
+  {
+   "id": "nav-07",
+   "category": "navigational",
+   "query": "Rohingya refugee camps Cox's Bazar",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "rohingya",
+      "2021"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "rohingya"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "one right answer expected at rank 1; same-family reports at grade 1 where noted",
+   "expect": null,
+   "relevant": {
+    "256": 3,
+    "270": 3,
+    "371": 2
+   },
+   "examples": [
+    {
+     "sid": 256,
+     "grade": 3,
+     "title": "Bangladesh, Outline of camps of Rohingya refugees in Cox's Bazar, January 2021"
+    },
+    {
+     "sid": 270,
+     "grade": 3,
+     "title": "Bangladesh, Outline of camps of Rohingya refugees in Cox's Bazar, January 2021"
+    },
+    {
+     "sid": 371,
+     "grade": 2,
+     "title": "Bangladesh, Outline of camps of Rohingya refugees in Cox's Bazar, January 2022"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 2,
+    "2": 1
+   }
+  },
+  {
+   "id": "nav-08",
+   "category": "navigational",
+   "query": "Labour Force Survey Trends May 2022",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "labour",
+      "force",
+      "survey",
+      "trends",
+      "may",
+      "2022"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "labour",
+      "force",
+      "survey",
+      "trends",
+      "2022"
+     ],
+     "any": [],
+     "grade": 2
+    },
+    {
+     "in": "title",
+     "all": [
+      "labour",
+      "force",
+      "survey",
+      "trends"
+     ],
+     "any": [],
+     "grade": 1
+    }
+   ],
+   "note": "one right answer expected at rank 1; same-family reports at grade 1 where noted",
+   "expect": null,
+   "relevant": {
+    "912": 3,
+    "911": 2,
+    "913": 2,
+    "914": 2,
+    "832": 1,
+    "833": 1,
+    "854": 1,
+    "855": 1,
+    "856": 1,
+    "857": 1,
+    "871": 1,
+    "872": 1,
+    "873": 1,
+    "874": 1,
+    "887": 1,
+    "888": 1,
+    "889": 1,
+    "890": 1,
+    "1019": 1,
+    "1020": 1,
+    "1021": 1,
+    "1022": 1
+   },
+   "examples": [
+    {
+     "sid": 912,
+     "grade": 3,
+     "title": "Labour Force Survey Trends May 2022 (Q2)"
+    },
+    {
+     "sid": 911,
+     "grade": 2,
+     "title": "Labour Force Survey Trends February 2022 (Q1)"
+    },
+    {
+     "sid": 913,
+     "grade": 2,
+     "title": "Labour Force Survey Trends August 2022 (Q3)"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "1": 18,
+    "2": 3,
+    "3": 1
+   }
+  },
+  {
+   "id": "nav-09",
+   "category": "navigational",
+   "query": "Census of India 2011 Assam District Census Handbook Barpeta",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "barpeta"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "one right answer expected at rank 1; same-family reports at grade 1 where noted",
+   "expect": null,
+   "relevant": {
+    "116": 3,
+    "117": 3
+   },
+   "examples": [
+    {
+     "sid": 116,
+     "grade": 3,
+     "title": "Census of India 2011 - Assam - Series 19 - Part XII A - District Census Handbook, Barpeta"
+    },
+    {
+     "sid": 117,
+     "grade": 3,
+     "title": "Census of India 2011 - Assam - Series 19 - Part XII B - District Census Handbook, Barpeta"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 2
+   }
+  },
+  {
+   "id": "nav-10",
+   "category": "navigational",
+   "query": "Rwanda DHS 2019-20 Province Profile Kigali City",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "dhs",
+      "province",
+      "profile",
+      "kigali"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "one right answer expected at rank 1; same-family reports at grade 1 where noted",
+   "expect": null,
+   "relevant": {
+    "896": 3
+   },
+   "examples": [
+    {
+     "sid": 896,
+     "grade": 3,
+     "title": "Rwanda DHS 2019-20 Province Profile - Kigali City"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 1
+   }
+  },
+  {
+   "id": "nav-11",
+   "category": "navigational",
+   "query": "Visions in motion Nepal",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "visions",
+      "motion",
+      "nepal"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "one right answer expected at rank 1; same-family reports at grade 1 where noted",
+   "expect": null,
+   "relevant": {
+    "259": 3
+   },
+   "examples": [
+    {
+     "sid": 259,
+     "grade": 3,
+     "title": "Visions in motion - Nepal"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 1
+   }
+  },
+  {
+   "id": "nav-12",
+   "category": "navigational",
+   "query": "Afghanistan 1997 multiple indicator baseline MICS",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "afghanistan",
+      "multiple",
+      "indicator",
+      "baseline"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "one right answer expected at rank 1; same-family reports at grade 1 where noted",
+   "expect": null,
+   "relevant": {
+    "202": 3
+   },
+   "examples": [
+    {
+     "sid": 202,
+     "grade": 3,
+     "title": "Afghanistan 1997 multiple indicator baseline (MICS). Report to UNICEF. Communitiy Informat"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 1
+   }
+  },
+  {
+   "id": "topic-01",
+   "category": "topical",
+   "query": "gender statistics",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "gender",
+      "statistics"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "gender"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "broad: judge by precision@10 and recall of the title-matched set, not NDCG alone",
+   "expect": null,
+   "relevant": {
+    "705": 3,
+    "706": 3,
+    "707": 3,
+    "708": 3,
+    "719": 3,
+    "720": 3,
+    "721": 3,
+    "722": 3,
+    "723": 3,
+    "725": 3,
+    "728": 3,
+    "806": 3,
+    "850": 3,
+    "884": 3,
+    "983": 3,
+    "984": 3,
+    "985": 3,
+    "986": 3,
+    "987": 3,
+    "988": 3,
+    "989": 3,
+    "990": 3,
+    "991": 3,
+    "992": 3,
+    "993": 3,
+    "994": 3,
+    "995": 3,
+    "996": 3,
+    "997": 3,
+    "998": 3,
+    "999": 3,
+    "1000": 3,
+    "1001": 3,
+    "1002": 3,
+    "1003": 3,
+    "1004": 3,
+    "1005": 3,
+    "1006": 3,
+    "1007": 3,
+    "1008": 3,
+    "1009": 3,
+    "1010": 3,
+    "1011": 3,
+    "1239": 3,
+    "1240": 3,
+    "1241": 3,
+    "1242": 3,
+    "1243": 3,
+    "1244": 3,
+    "1245": 3,
+    "1246": 3,
+    "1247": 3,
+    "1248": 3,
+    "1249": 3,
+    "1250": 3,
+    "1251": 3,
+    "1252": 3,
+    "1253": 3,
+    "1254": 3,
+    "1255": 3,
+    "1256": 3,
+    "1257": 3,
+    "1258": 3,
+    "1259": 3,
+    "1260": 3,
+    "1261": 3,
+    "1262": 3,
+    "1263": 3,
+    "1264": 3,
+    "1265": 3,
+    "1266": 3,
+    "1267": 3,
+    "1268": 3,
+    "483": 2,
+    "502": 2,
+    "521": 2,
+    "686": 2,
+    "691": 2,
+    "696": 2,
+    "713": 2,
+    "727": 2,
+    "744": 2,
+    "798": 2,
+    "819": 2,
+    "820": 2,
+    "858": 2,
+    "859": 2,
+    "915": 2,
+    "916": 2,
+    "923": 2,
+    "957": 2,
+    "960": 2,
+    "1063": 2,
+    "1077": 2,
+    "1119": 2,
+    "1153": 2,
+    "1154": 2,
+    "1167": 2
+   },
+   "examples": [
+    {
+     "sid": 705,
+     "grade": 3,
+     "title": "Gender Statistics Profile Report - Kigali City 2013 (March 2013)"
+    },
+    {
+     "sid": 706,
+     "grade": 3,
+     "title": "Gender Statistics Profile Report - Northern Province 2013 (March 2013)"
+    },
+    {
+     "sid": 707,
+     "grade": 3,
+     "title": "Gender Statistics Profile Report - Southern Province 2013 (March 2013)"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "2": 25,
+    "3": 73
+   }
+  },
+  {
+   "id": "topic-02",
+   "category": "topical",
+   "query": "price index",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "price",
+      "index"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "indice",
+      "prix"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "broad: judge by precision@10 and recall of the title-matched set, not NDCG alone",
+   "expect": null,
+   "relevant": {
+    "926": 3,
+    "929": 3,
+    "930": 3,
+    "933": 3,
+    "936": 3,
+    "938": 3,
+    "941": 3,
+    "944": 3,
+    "947": 3,
+    "1079": 3,
+    "1082": 3,
+    "1085": 3,
+    "1088": 3,
+    "1091": 3,
+    "1092": 3,
+    "1095": 3,
+    "1098": 3,
+    "1101": 3,
+    "1104": 3,
+    "1107": 3,
+    "1110": 3,
+    "1157": 3,
+    "1160": 3,
+    "1163": 3,
+    "1180": 3,
+    "1183": 3,
+    "1186": 3,
+    "1189": 3,
+    "1192": 3,
+    "1195": 3,
+    "1198": 3,
+    "1201": 3,
+    "1206": 3,
+    "1211": 3,
+    "1306": 3,
+    "1309": 3,
+    "1312": 3,
+    "1315": 3,
+    "1318": 3,
+    "1321": 3,
+    "1324": 3,
+    "1327": 3,
+    "1330": 3,
+    "1333": 3,
+    "1336": 3,
+    "1350": 3,
+    "1353": 3,
+    "1356": 3,
+    "1371": 3,
+    "1374": 3,
+    "924": 2,
+    "927": 2,
+    "931": 2,
+    "934": 2,
+    "939": 2,
+    "942": 2,
+    "945": 2,
+    "948": 2,
+    "950": 2,
+    "1080": 2,
+    "1083": 2,
+    "1086": 2,
+    "1089": 2,
+    "1093": 2,
+    "1096": 2,
+    "1099": 2,
+    "1102": 2,
+    "1105": 2,
+    "1108": 2,
+    "1111": 2,
+    "1158": 2,
+    "1161": 2,
+    "1164": 2,
+    "1181": 2,
+    "1184": 2,
+    "1187": 2,
+    "1190": 2,
+    "1193": 2,
+    "1196": 2,
+    "1199": 2,
+    "1202": 2,
+    "1204": 2,
+    "1207": 2,
+    "1209": 2,
+    "1212": 2,
+    "1307": 2,
+    "1310": 2,
+    "1313": 2,
+    "1316": 2,
+    "1319": 2,
+    "1322": 2,
+    "1325": 2,
+    "1328": 2,
+    "1331": 2,
+    "1334": 2,
+    "1337": 2,
+    "1351": 2,
+    "1354": 2,
+    "1357": 2,
+    "1372": 2,
+    "1375": 2
+   },
+   "examples": [
+    {
+     "sid": 926,
+     "grade": 3,
+     "title": "Consumer Price Index (CPI) August 2023"
+    },
+    {
+     "sid": 929,
+     "grade": 3,
+     "title": "Consumer Price Index (CPI) December 2023"
+    },
+    {
+     "sid": 930,
+     "grade": 3,
+     "title": "Consumer Price Index (CPI) February 2023"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "2": 51,
+    "3": 50
+   }
+  },
+  {
+   "id": "topic-03",
+   "category": "topical",
+   "query": "external trade in goods",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "external",
+      "trade"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "trade",
+      "goods"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "broad: judge by precision@10 and recall of the title-matched set, not NDCG alone",
+   "expect": null,
+   "relevant": {
+    "865": 3,
+    "866": 3,
+    "867": 3,
+    "883": 3,
+    "900": 3,
+    "901": 3,
+    "902": 3,
+    "903": 3,
+    "904": 3,
+    "905": 3,
+    "906": 3,
+    "907": 3,
+    "967": 3,
+    "968": 3,
+    "969": 3,
+    "970": 3,
+    "971": 3,
+    "972": 3,
+    "973": 3,
+    "974": 3,
+    "975": 3,
+    "976": 3,
+    "977": 3,
+    "978": 3,
+    "979": 3,
+    "980": 3,
+    "981": 3,
+    "982": 3,
+    "1120": 3,
+    "1121": 3,
+    "1122": 3,
+    "1123": 3,
+    "1124": 3,
+    "1125": 3,
+    "1126": 3,
+    "1127": 3,
+    "1128": 3,
+    "1129": 3,
+    "1130": 3,
+    "1131": 3,
+    "1132": 3,
+    "1133": 3,
+    "1223": 3,
+    "1224": 3,
+    "1225": 3,
+    "1226": 3,
+    "1227": 3,
+    "1228": 3,
+    "1229": 3,
+    "1230": 3,
+    "1231": 3,
+    "1232": 3,
+    "1233": 3,
+    "1234": 3,
+    "1235": 3,
+    "1236": 3,
+    "1237": 3,
+    "1238": 3,
+    "1359": 3,
+    "1360": 3,
+    "1361": 3,
+    "1362": 3,
+    "1507": 2,
+    "1508": 2
+   },
+   "examples": [
+    {
+     "sid": 865,
+     "grade": 3,
+     "title": "Monthly Formal external trade in Goods statistics 2020 – December"
+    },
+    {
+     "sid": 866,
+     "grade": 3,
+     "title": "Monthly Formal external trade in Goods statistics 2020 – November"
+    },
+    {
+     "sid": 867,
+     "grade": 3,
+     "title": "Quarterly Formal external trade in Goods 2020"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 62,
+    "2": 2
+   }
+  },
+  {
+   "id": "topic-04",
+   "category": "topical",
+   "query": "labour force survey",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "labour",
+      "force",
+      "survey"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "labour",
+      "force"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "broad: judge by precision@10 and recall of the title-matched set, not NDCG alone",
+   "expect": null,
+   "relevant": {
+    "549": 3,
+    "808": 3,
+    "809": 3,
+    "818": 3,
+    "819": 3,
+    "820": 3,
+    "831": 3,
+    "832": 3,
+    "833": 3,
+    "853": 3,
+    "854": 3,
+    "855": 3,
+    "856": 3,
+    "857": 3,
+    "858": 3,
+    "859": 3,
+    "870": 3,
+    "871": 3,
+    "872": 3,
+    "873": 3,
+    "874": 3,
+    "886": 3,
+    "887": 3,
+    "888": 3,
+    "889": 3,
+    "890": 3,
+    "910": 3,
+    "911": 3,
+    "912": 3,
+    "913": 3,
+    "914": 3,
+    "915": 3,
+    "916": 3,
+    "1018": 3,
+    "1019": 3,
+    "1020": 3,
+    "1021": 3,
+    "1022": 3,
+    "1141": 3,
+    "1142": 3,
+    "1143": 3,
+    "1144": 3,
+    "1147": 3,
+    "1148": 3,
+    "1150": 3,
+    "1153": 3,
+    "1154": 3,
+    "1293": 3,
+    "1296": 3,
+    "1298": 3,
+    "1299": 3,
+    "1300": 3,
+    "1302": 3,
+    "1368": 3,
+    "1370": 3,
+    "1426": 3,
+    "1427": 3,
+    "1428": 3,
+    "746": 2,
+    "1152": 2,
+    "1295": 2,
+    "1429": 2,
+    "1430": 2,
+    "1431": 2,
+    "1432": 2,
+    "1433": 2
+   },
+   "examples": [
+    {
+     "sid": 549,
+     "grade": 3,
+     "title": "Labour Force Survey 2017, Global Labour Database Harmonized Dataset"
+    },
+    {
+     "sid": 808,
+     "grade": 3,
+     "title": "Labour Force survey August 2016"
+    },
+    {
+     "sid": 809,
+     "grade": 3,
+     "title": "Labour Force Survey -Pilot-2016"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 58,
+    "2": 8
+   }
+  },
+  {
+   "id": "topic-05",
+   "category": "topical",
+   "query": "district census handbook",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "district",
+      "census",
+      "handbook"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "broad: judge by precision@10 and recall of the title-matched set, not NDCG alone",
+   "expect": null,
+   "relevant": {
+    "36": 3,
+    "37": 3,
+    "38": 3,
+    "39": 3,
+    "40": 3,
+    "41": 3,
+    "42": 3,
+    "43": 3,
+    "44": 3,
+    "45": 3,
+    "46": 3,
+    "47": 3,
+    "48": 3,
+    "49": 3,
+    "50": 3,
+    "51": 3,
+    "52": 3,
+    "53": 3,
+    "54": 3,
+    "55": 3,
+    "56": 3,
+    "57": 3,
+    "58": 3,
+    "59": 3,
+    "60": 3,
+    "61": 3,
+    "62": 3,
+    "63": 3,
+    "64": 3,
+    "65": 3,
+    "66": 3,
+    "67": 3,
+    "68": 3,
+    "69": 3,
+    "70": 3,
+    "71": 3,
+    "72": 3,
+    "73": 3,
+    "74": 3,
+    "75": 3,
+    "76": 3,
+    "77": 3,
+    "78": 3,
+    "79": 3,
+    "80": 3,
+    "81": 3,
+    "82": 3,
+    "83": 3,
+    "84": 3,
+    "85": 3,
+    "86": 3,
+    "87": 3,
+    "88": 3,
+    "89": 3,
+    "90": 3,
+    "91": 3,
+    "92": 3,
+    "93": 3,
+    "94": 3,
+    "95": 3,
+    "96": 3,
+    "97": 3,
+    "98": 3,
+    "99": 3,
+    "100": 3,
+    "101": 3,
+    "102": 3,
+    "103": 3,
+    "104": 3,
+    "105": 3,
+    "106": 3,
+    "107": 3,
+    "108": 3,
+    "109": 3,
+    "110": 3,
+    "111": 3,
+    "112": 3,
+    "113": 3,
+    "114": 3,
+    "115": 3,
+    "116": 3,
+    "117": 3,
+    "118": 3,
+    "119": 3,
+    "120": 3,
+    "121": 3,
+    "122": 3,
+    "123": 3,
+    "124": 3,
+    "125": 3,
+    "126": 3,
+    "127": 3,
+    "128": 3,
+    "129": 3,
+    "130": 3,
+    "131": 3,
+    "132": 3,
+    "133": 3,
+    "134": 3,
+    "135": 3,
+    "136": 3,
+    "137": 3,
+    "138": 3,
+    "139": 3,
+    "140": 3,
+    "141": 3,
+    "142": 3,
+    "143": 3,
+    "144": 3,
+    "145": 3,
+    "146": 3,
+    "147": 3,
+    "148": 3,
+    "149": 3,
+    "150": 3,
+    "151": 3,
+    "152": 3,
+    "153": 3,
+    "154": 3,
+    "155": 3,
+    "156": 3,
+    "157": 3,
+    "158": 3,
+    "159": 3,
+    "160": 3,
+    "161": 3,
+    "162": 3,
+    "163": 3,
+    "164": 3,
+    "165": 3,
+    "166": 3,
+    "167": 3
+   },
+   "examples": [
+    {
+     "sid": 36,
+     "grade": 3,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII A - District Census Handbook,"
+    },
+    {
+     "sid": 37,
+     "grade": 3,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII B - District Census Handbook,"
+    },
+    {
+     "sid": 38,
+     "grade": 3,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII A - District Census Handbook,"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 132
+   }
+  },
+  {
+   "id": "topic-06",
+   "category": "topical",
+   "query": "agriculture",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "agricultur*"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "text",
+     "all": [
+      "agricultur*"
+     ],
+     "any": [],
+     "grade": 1
+    }
+   ],
+   "note": "broad: judge by precision@10 and recall of the title-matched set, not NDCG alone",
+   "expect": null,
+   "relevant": {
+    "180": 3,
+    "223": 3,
+    "360": 3,
+    "413": 3,
+    "567": 3,
+    "687": 3,
+    "787": 3,
+    "788": 3,
+    "789": 3,
+    "810": 3,
+    "811": 3,
+    "812": 3,
+    "822": 3,
+    "825": 3,
+    "835": 3,
+    "862": 3,
+    "875": 3,
+    "876": 3,
+    "877": 3,
+    "879": 3,
+    "891": 3,
+    "892": 3,
+    "918": 3,
+    "920": 3,
+    "921": 3,
+    "923": 3,
+    "1054": 3,
+    "1072": 3,
+    "1073": 3,
+    "1074": 3,
+    "1171": 3,
+    "1172": 3,
+    "1176": 3,
+    "1177": 3,
+    "1178": 3,
+    "1339": 3,
+    "1340": 3,
+    "1342": 3,
+    "1345": 3,
+    "1377": 3,
+    "1379": 3,
+    "1411": 3,
+    "1412": 3,
+    "1413": 3,
+    "1439": 3,
+    "1440": 3,
+    "1441": 3,
+    "1442": 3,
+    "1443": 3,
+    "1444": 3,
+    "1447": 3,
+    "1448": 3,
+    "1449": 3,
+    "1450": 3,
+    "1451": 3,
+    "1452": 3,
+    "1453": 3,
+    "1463": 3,
+    "1464": 3,
+    "1477": 3,
+    "1567": 3,
+    "185": 1,
+    "200": 1,
+    "218": 1,
+    "219": 1,
+    "232": 1,
+    "242": 1,
+    "246": 1,
+    "266": 1,
+    "268": 1,
+    "276": 1,
+    "305": 1,
+    "310": 1,
+    "324": 1,
+    "370": 1,
+    "430": 1,
+    "431": 1,
+    "434": 1,
+    "439": 1,
+    "453": 1,
+    "481": 1,
+    "519": 1,
+    "520": 1,
+    "1383": 1,
+    "1384": 1,
+    "1385": 1,
+    "1386": 1,
+    "1387": 1,
+    "1388": 1,
+    "1389": 1,
+    "1390": 1,
+    "1391": 1,
+    "1392": 1,
+    "1393": 1,
+    "1394": 1,
+    "1396": 1,
+    "1399": 1,
+    "1400": 1,
+    "1401": 1,
+    "1402": 1,
+    "1403": 1,
+    "1404": 1,
+    "1405": 1,
+    "1406": 1,
+    "1408": 1,
+    "1428": 1,
+    "1431": 1,
+    "1432": 1,
+    "1433": 1,
+    "1434": 1,
+    "1460": 1,
+    "1461": 1,
+    "1462": 1,
+    "1468": 1,
+    "1475": 1,
+    "1476": 1,
+    "1482": 1,
+    "1483": 1,
+    "1484": 1,
+    "1485": 1,
+    "1487": 1,
+    "1576": 1,
+    "1580": 1
+   },
+   "examples": [
+    {
+     "sid": 180,
+     "grade": 3,
+     "title": "National Census of Agriculture 2013"
+    },
+    {
+     "sid": 223,
+     "grade": 3,
+     "title": "Agricultural machinery, tractors"
+    },
+    {
+     "sid": 360,
+     "grade": 3,
+     "title": "Cambodia Agriculture Survey 2020"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 61,
+    "1": 62
+   }
+  },
+  {
+   "id": "topic-07",
+   "category": "topical",
+   "query": "poverty",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "poverty"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "text",
+     "all": [
+      "poverty"
+     ],
+     "any": [],
+     "grade": 1
+    }
+   ],
+   "note": "broad: judge by precision@10 and recall of the title-matched set, not NDCG alone",
+   "expect": null,
+   "relevant": {
+    "234": 3,
+    "241": 3,
+    "315": 3,
+    "349": 3,
+    "377": 3,
+    "408": 3,
+    "640": 3,
+    "644": 3,
+    "646": 3,
+    "651": 3,
+    "652": 3,
+    "685": 3,
+    "710": 3,
+    "749": 3,
+    "795": 3,
+    "799": 3,
+    "801": 3,
+    "846": 3,
+    "961": 3,
+    "1068": 3,
+    "1118": 3,
+    "1568": 3,
+    "8": 1,
+    "9": 1,
+    "232": 1,
+    "242": 1,
+    "264": 1,
+    "266": 1,
+    "278": 1,
+    "310": 1,
+    "324": 1,
+    "360": 1,
+    "383": 1,
+    "388": 1,
+    "413": 1,
+    "430": 1,
+    "431": 1,
+    "434": 1,
+    "500": 1,
+    "549": 1,
+    "551": 1,
+    "1388": 1,
+    "1389": 1,
+    "1392": 1,
+    "1393": 1,
+    "1394": 1,
+    "1398": 1,
+    "1399": 1,
+    "1400": 1,
+    "1401": 1,
+    "1402": 1,
+    "1403": 1,
+    "1404": 1,
+    "1405": 1,
+    "1406": 1,
+    "1409": 1,
+    "1421": 1,
+    "1424": 1,
+    "1437": 1,
+    "1439": 1,
+    "1440": 1,
+    "1441": 1,
+    "1442": 1,
+    "1443": 1,
+    "1444": 1,
+    "1454": 1,
+    "1456": 1,
+    "1460": 1
+   },
+   "examples": [
+    {
+     "sid": 234,
+     "grade": 3,
+     "title": "High Resolution Poverty Map (Geospatial Data), Angola, 2020"
+    },
+    {
+     "sid": 241,
+     "grade": 3,
+     "title": "High Resolution Poverty Map, Benin, 2020"
+    },
+    {
+     "sid": 315,
+     "grade": 3,
+     "title": "Differences in Household Composition - Hidden Dimensions of Poverty and Displacement in So"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "1": 46,
+    "3": 22
+   }
+  },
+  {
+   "id": "topic-08",
+   "category": "topical",
+   "query": "health",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "health*"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "text",
+     "all": [
+      "health*"
+     ],
+     "any": [],
+     "grade": 1
+    }
+   ],
+   "note": "broad: judge by precision@10 and recall of the title-matched set, not NDCG alone",
+   "expect": null,
+   "relevant": {
+    "452": 3,
+    "488": 3,
+    "489": 3,
+    "515": 3,
+    "637": 3,
+    "643": 3,
+    "650": 3,
+    "678": 3,
+    "679": 3,
+    "680": 3,
+    "681": 3,
+    "839": 3,
+    "840": 3,
+    "841": 3,
+    "842": 3,
+    "843": 3,
+    "844": 3,
+    "845": 3,
+    "847": 3,
+    "848": 3,
+    "1221": 3,
+    "1396": 3,
+    "1397": 3,
+    "1398": 3,
+    "1414": 3,
+    "1415": 3,
+    "1423": 3,
+    "1424": 3,
+    "2": 1,
+    "6": 1,
+    "22": 1,
+    "168": 1,
+    "170": 1,
+    "180": 1,
+    "186": 1,
+    "198": 1,
+    "209": 1,
+    "220": 1,
+    "222": 1,
+    "228": 1,
+    "230": 1,
+    "232": 1,
+    "234": 1,
+    "241": 1,
+    "242": 1,
+    "246": 1,
+    "262": 1,
+    "266": 1,
+    "268": 1,
+    "271": 1,
+    "276": 1,
+    "277": 1,
+    "278": 1,
+    "279": 1,
+    "280": 1,
+    "281": 1,
+    "288": 1,
+    "304": 1,
+    "306": 1,
+    "310": 1,
+    "320": 1,
+    "325": 1,
+    "331": 1,
+    "344": 1,
+    "353": 1,
+    "370": 1,
+    "383": 1,
+    "388": 1,
+    "417": 1,
+    "431": 1,
+    "433": 1,
+    "434": 1,
+    "449": 1,
+    "450": 1,
+    "481": 1,
+    "483": 1,
+    "484": 1,
+    "520": 1,
+    "550": 1,
+    "552": 1,
+    "636": 1,
+    "1383": 1,
+    "1388": 1,
+    "1389": 1,
+    "1391": 1,
+    "1392": 1,
+    "1393": 1,
+    "1394": 1,
+    "1395": 1,
+    "1399": 1,
+    "1400": 1,
+    "1401": 1,
+    "1402": 1,
+    "1403": 1,
+    "1404": 1,
+    "1405": 1,
+    "1406": 1,
+    "1408": 1,
+    "1425": 1,
+    "1426": 1,
+    "1427": 1,
+    "1428": 1,
+    "1429": 1,
+    "1430": 1,
+    "1431": 1,
+    "1432": 1,
+    "1433": 1,
+    "1434": 1,
+    "1435": 1,
+    "1445": 1,
+    "1460": 1,
+    "1567": 1
+   },
+   "examples": [
+    {
+     "sid": 452,
+     "grade": 3,
+     "title": "World Health Survey 2003"
+    },
+    {
+     "sid": 488,
+     "grade": 3,
+     "title": "South Africa Demographic and Health Survey 1998 - 2016"
+    },
+    {
+     "sid": 489,
+     "grade": 3,
+     "title": "Demographic and Health Survey 2001-02 - IPUMS Subset"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "1": 84,
+    "3": 28
+   }
+  },
+  {
+   "id": "topic-09",
+   "category": "topical",
+   "query": "education",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "education*"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "text",
+     "all": [
+      "education*"
+     ],
+     "any": [],
+     "grade": 1
+    }
+   ],
+   "note": "broad: judge by precision@10 and recall of the title-matched set, not NDCG alone",
+   "expect": null,
+   "relevant": {
+    "257": 3,
+    "493": 3,
+    "515": 3,
+    "689": 3,
+    "712": 3,
+    "740": 3,
+    "797": 3,
+    "959": 3,
+    "1059": 3,
+    "1290": 3,
+    "1569": 3,
+    "2": 1,
+    "22": 1,
+    "36": 1,
+    "37": 1,
+    "38": 1,
+    "39": 1,
+    "40": 1,
+    "41": 1,
+    "42": 1,
+    "43": 1,
+    "44": 1,
+    "45": 1,
+    "46": 1,
+    "47": 1,
+    "48": 1,
+    "49": 1,
+    "50": 1,
+    "51": 1,
+    "52": 1,
+    "53": 1,
+    "54": 1,
+    "55": 1,
+    "56": 1,
+    "57": 1,
+    "58": 1,
+    "59": 1,
+    "60": 1,
+    "61": 1,
+    "62": 1,
+    "63": 1,
+    "64": 1,
+    "65": 1,
+    "66": 1,
+    "67": 1,
+    "68": 1,
+    "69": 1,
+    "70": 1,
+    "71": 1,
+    "72": 1,
+    "73": 1,
+    "74": 1,
+    "75": 1,
+    "76": 1,
+    "77": 1,
+    "78": 1,
+    "79": 1,
+    "80": 1,
+    "81": 1,
+    "82": 1,
+    "83": 1,
+    "84": 1,
+    "85": 1,
+    "86": 1,
+    "87": 1,
+    "88": 1,
+    "89": 1,
+    "90": 1,
+    "91": 1,
+    "92": 1,
+    "93": 1,
+    "94": 1,
+    "95": 1,
+    "96": 1,
+    "97": 1,
+    "98": 1,
+    "99": 1,
+    "100": 1,
+    "101": 1,
+    "102": 1,
+    "103": 1,
+    "104": 1,
+    "105": 1,
+    "106": 1,
+    "107": 1,
+    "108": 1,
+    "109": 1,
+    "110": 1,
+    "111": 1,
+    "112": 1,
+    "113": 1,
+    "114": 1,
+    "115": 1,
+    "116": 1,
+    "117": 1,
+    "118": 1,
+    "119": 1,
+    "120": 1,
+    "121": 1,
+    "122": 1,
+    "123": 1,
+    "124": 1,
+    "125": 1,
+    "126": 1,
+    "127": 1,
+    "128": 1,
+    "129": 1,
+    "130": 1,
+    "131": 1,
+    "132": 1,
+    "133": 1,
+    "134": 1,
+    "135": 1,
+    "136": 1,
+    "137": 1,
+    "138": 1,
+    "139": 1,
+    "140": 1,
+    "141": 1,
+    "142": 1,
+    "143": 1,
+    "144": 1,
+    "145": 1,
+    "146": 1,
+    "147": 1,
+    "148": 1,
+    "149": 1,
+    "150": 1,
+    "151": 1,
+    "152": 1,
+    "153": 1,
+    "154": 1,
+    "155": 1,
+    "156": 1,
+    "157": 1,
+    "158": 1,
+    "159": 1,
+    "160": 1,
+    "161": 1,
+    "162": 1,
+    "163": 1,
+    "164": 1,
+    "165": 1,
+    "166": 1,
+    "167": 1,
+    "186": 1,
+    "200": 1,
+    "202": 1,
+    "209": 1,
+    "220": 1,
+    "222": 1,
+    "228": 1,
+    "230": 1,
+    "232": 1,
+    "242": 1,
+    "246": 1,
+    "248": 1,
+    "262": 1,
+    "266": 1,
+    "268": 1,
+    "276": 1,
+    "277": 1,
+    "288": 1,
+    "304": 1,
+    "306": 1,
+    "310": 1,
+    "320": 1,
+    "325": 1,
+    "331": 1,
+    "344": 1,
+    "370": 1,
+    "375": 1,
+    "383": 1,
+    "384": 1,
+    "385": 1,
+    "403": 1,
+    "411": 1,
+    "417": 1,
+    "431": 1,
+    "433": 1,
+    "434": 1,
+    "437": 1,
+    "449": 1,
+    "450": 1,
+    "453": 1,
+    "483": 1,
+    "488": 1,
+    "489": 1,
+    "520": 1,
+    "549": 1,
+    "550": 1,
+    "551": 1,
+    "552": 1,
+    "1381": 1,
+    "1382": 1,
+    "1387": 1,
+    "1394": 1,
+    "1395": 1,
+    "1396": 1,
+    "1397": 1,
+    "1398": 1,
+    "1399": 1,
+    "1400": 1,
+    "1401": 1,
+    "1402": 1,
+    "1403": 1,
+    "1404": 1,
+    "1405": 1,
+    "1406": 1,
+    "1408": 1,
+    "1410": 1,
+    "1414": 1,
+    "1423": 1,
+    "1424": 1,
+    "1425": 1,
+    "1426": 1,
+    "1427": 1,
+    "1428": 1,
+    "1429": 1,
+    "1430": 1,
+    "1431": 1,
+    "1432": 1,
+    "1433": 1,
+    "1434": 1,
+    "1435": 1,
+    "1437": 1,
+    "1445": 1,
+    "1446": 1,
+    "1454": 1,
+    "1456": 1,
+    "1460": 1,
+    "1565": 1,
+    "1573": 1
+   },
+   "examples": [
+    {
+     "sid": 257,
+     "grade": 3,
+     "title": "World Bank, GEMS program, Project : P168551 - Rwanda Quality Basic Education for Human Cap"
+    },
+    {
+     "sid": 493,
+     "grade": 3,
+     "title": "Support to Reaching All Children with Education Program Impact Evaluation 2020-2022"
+    },
+    {
+     "sid": 515,
+     "grade": 3,
+     "title": "Reconciling Multi-Level Rights-Based Commitments in Development : Assessing the Legal and "
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "1": 222,
+    "3": 11
+   }
+  },
+  {
+   "id": "topic-10",
+   "category": "topical",
+   "query": "gross domestic product",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "gross",
+      "domestic",
+      "product"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "gdp"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "broad: judge by precision@10 and recall of the title-matched set, not NDCG alone",
+   "expect": null,
+   "relevant": {
+    "310": 3,
+    "555": 3,
+    "556": 3,
+    "557": 3,
+    "558": 3,
+    "559": 3,
+    "560": 3,
+    "561": 3,
+    "562": 3,
+    "563": 3,
+    "564": 3,
+    "565": 3,
+    "566": 3,
+    "567": 3,
+    "568": 3,
+    "569": 3,
+    "570": 3,
+    "571": 3,
+    "580": 3,
+    "581": 3,
+    "582": 3,
+    "583": 3,
+    "584": 3,
+    "585": 3,
+    "586": 3,
+    "587": 3,
+    "588": 3,
+    "589": 3,
+    "590": 3,
+    "591": 3,
+    "592": 3,
+    "593": 3,
+    "594": 3,
+    "595": 3,
+    "596": 3,
+    "597": 3,
+    "598": 3,
+    "599": 3,
+    "600": 3,
+    "601": 3,
+    "602": 3,
+    "603": 3,
+    "604": 3,
+    "605": 3,
+    "606": 3,
+    "607": 3,
+    "608": 3,
+    "609": 3,
+    "610": 3,
+    "611": 3,
+    "612": 3,
+    "613": 3,
+    "614": 3,
+    "615": 3,
+    "616": 3,
+    "617": 3,
+    "630": 3,
+    "631": 3,
+    "632": 3,
+    "633": 3,
+    "634": 3,
+    "635": 3,
+    "1012": 3,
+    "1013": 3,
+    "1135": 3,
+    "1136": 3,
+    "1137": 3,
+    "1138": 3,
+    "1269": 3,
+    "1270": 3,
+    "1271": 3,
+    "1272": 3,
+    "1273": 3,
+    "1488": 3,
+    "1500": 3,
+    "1504": 3,
+    "1530": 3,
+    "1535": 3,
+    "1538": 3,
+    "1541": 3
+   },
+   "examples": [
+    {
+     "sid": 310,
+     "grade": 3,
+     "title": "Gross Domestic Product (GDP) per Capita, Local Currency Unit, Constant"
+    },
+    {
+     "sid": 555,
+     "grade": 3,
+     "title": "Gross Domestic Product (GDP) at current prices (Frw billions)"
+    },
+    {
+     "sid": 556,
+     "grade": 3,
+     "title": "Gross Domestic Product (GDP) at current price, Growth rate (%)"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 80
+   }
+  },
+  {
+   "id": "topic-11",
+   "category": "topical",
+   "query": "population census",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "population",
+      "census"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "census"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "broad: judge by precision@10 and recall of the title-matched set, not NDCG alone",
+   "expect": null,
+   "relevant": {
+    "222": 3,
+    "262": 3,
+    "272": 3,
+    "450": 3,
+    "550": 3,
+    "639": 3,
+    "641": 3,
+    "642": 3,
+    "736": 3,
+    "917": 3,
+    "1052": 3,
+    "1053": 3,
+    "1387": 3,
+    "1437": 3,
+    "1438": 3,
+    "34": 2,
+    "35": 2,
+    "36": 2,
+    "37": 2,
+    "38": 2,
+    "39": 2,
+    "40": 2,
+    "41": 2,
+    "42": 2,
+    "43": 2,
+    "44": 2,
+    "45": 2,
+    "46": 2,
+    "47": 2,
+    "48": 2,
+    "49": 2,
+    "50": 2,
+    "51": 2,
+    "52": 2,
+    "53": 2,
+    "54": 2,
+    "55": 2,
+    "56": 2,
+    "57": 2,
+    "58": 2,
+    "59": 2,
+    "60": 2,
+    "61": 2,
+    "62": 2,
+    "63": 2,
+    "64": 2,
+    "65": 2,
+    "66": 2,
+    "67": 2,
+    "68": 2,
+    "69": 2,
+    "70": 2,
+    "71": 2,
+    "72": 2,
+    "73": 2,
+    "74": 2,
+    "75": 2,
+    "76": 2,
+    "77": 2,
+    "78": 2,
+    "79": 2,
+    "80": 2,
+    "81": 2,
+    "82": 2,
+    "83": 2,
+    "84": 2,
+    "85": 2,
+    "86": 2,
+    "87": 2,
+    "88": 2,
+    "89": 2,
+    "90": 2,
+    "91": 2,
+    "92": 2,
+    "93": 2,
+    "94": 2,
+    "95": 2,
+    "96": 2,
+    "97": 2,
+    "98": 2,
+    "99": 2,
+    "100": 2,
+    "101": 2,
+    "102": 2,
+    "103": 2,
+    "104": 2,
+    "105": 2,
+    "106": 2,
+    "107": 2,
+    "108": 2,
+    "109": 2,
+    "110": 2,
+    "111": 2,
+    "112": 2,
+    "113": 2,
+    "114": 2,
+    "115": 2,
+    "116": 2,
+    "117": 2,
+    "118": 2,
+    "119": 2,
+    "120": 2,
+    "121": 2,
+    "122": 2,
+    "123": 2,
+    "124": 2,
+    "125": 2,
+    "126": 2,
+    "127": 2,
+    "128": 2,
+    "129": 2,
+    "130": 2,
+    "131": 2,
+    "132": 2,
+    "133": 2,
+    "134": 2,
+    "135": 2,
+    "136": 2,
+    "137": 2,
+    "138": 2,
+    "139": 2,
+    "140": 2,
+    "141": 2,
+    "142": 2,
+    "143": 2,
+    "144": 2,
+    "145": 2,
+    "146": 2,
+    "147": 2,
+    "148": 2,
+    "149": 2,
+    "150": 2,
+    "151": 2,
+    "152": 2,
+    "153": 2,
+    "154": 2,
+    "155": 2,
+    "156": 2,
+    "157": 2,
+    "158": 2,
+    "159": 2,
+    "160": 2,
+    "161": 2,
+    "162": 2,
+    "163": 2,
+    "164": 2,
+    "165": 2,
+    "166": 2,
+    "167": 2,
+    "180": 2,
+    "205": 2,
+    "206": 2,
+    "207": 2,
+    "453": 2,
+    "648": 2,
+    "733": 2,
+    "1166": 2,
+    "1416": 2,
+    "1417": 2,
+    "1418": 2,
+    "1419": 2,
+    "1420": 2,
+    "1580": 2
+   },
+   "examples": [
+    {
+     "sid": 222,
+     "grade": 3,
+     "title": "Population and Housing Census 2011 - IPUMS Subset"
+    },
+    {
+     "sid": 262,
+     "grade": 3,
+     "title": "5th Census of Population 1992 - IPUMS Subset"
+    },
+    {
+     "sid": 272,
+     "grade": 3,
+     "title": "5th Census of Population 1992 - IPUMS Subset"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "2": 148,
+    "3": 15
+   }
+  },
+  {
+   "id": "topic-12",
+   "category": "topical",
+   "query": "household consumption expenditure",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "household",
+      "expenditure"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "expenditure"
+     ],
+     "any": [],
+     "grade": 2
+    },
+    {
+     "in": "title",
+     "all": [
+      "consumption"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "broad: judge by precision@10 and recall of the title-matched set, not NDCG alone",
+   "expect": null,
+   "relevant": {
+    "228": 2,
+    "563": 2,
+    "564": 2,
+    "576": 2,
+    "580": 2,
+    "581": 2,
+    "582": 2,
+    "591": 2,
+    "592": 2,
+    "593": 2,
+    "604": 2,
+    "605": 2,
+    "606": 2,
+    "618": 2,
+    "619": 2,
+    "620": 2,
+    "688": 2,
+    "1075": 2,
+    "1173": 2,
+    "1179": 2,
+    "1348": 2,
+    "1349": 2,
+    "1380": 2,
+    "1461": 2,
+    "1462": 2
+   },
+   "examples": [
+    {
+     "sid": 228,
+     "grade": 2,
+     "title": "Domestic Tourism Expenditure, July 2014 - June 2015, Round 72"
+    },
+    {
+     "sid": 563,
+     "grade": 2,
+     "title": "Total final consumption expenditure, Government (% of GDP)"
+    },
+    {
+     "sid": 564,
+     "grade": 2,
+     "title": "Total final consumption expenditure, Private (% of GDP)"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "2": 25
+   }
+  },
+  {
+   "id": "acr-01",
+   "category": "acronym",
+   "query": "DHS",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "dhs"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "demographic",
+      "health",
+      "survey*"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "short token: lexical should be strong; checks that expansion (long form) is also found",
+   "expect": null,
+   "relevant": {
+    "488": 3,
+    "489": 3,
+    "637": 3,
+    "643": 3,
+    "650": 3,
+    "678": 3,
+    "679": 3,
+    "680": 3,
+    "681": 3,
+    "839": 3,
+    "840": 3,
+    "841": 3,
+    "842": 3,
+    "843": 3,
+    "844": 3,
+    "845": 3,
+    "847": 3,
+    "848": 3,
+    "861": 3,
+    "895": 3,
+    "896": 3,
+    "897": 3,
+    "898": 3,
+    "899": 3,
+    "1221": 3,
+    "1396": 3,
+    "1397": 3,
+    "1398": 3,
+    "1414": 3,
+    "1415": 3,
+    "1424": 3
+   },
+   "examples": [
+    {
+     "sid": 488,
+     "grade": 3,
+     "title": "South Africa Demographic and Health Survey 1998 - 2016"
+    },
+    {
+     "sid": 489,
+     "grade": 3,
+     "title": "Demographic and Health Survey 2001-02 - IPUMS Subset"
+    },
+    {
+     "sid": 637,
+     "grade": 3,
+     "title": "Demographic and Health Survey 2000 Key Findings"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 31
+   }
+  },
+  {
+   "id": "acr-02",
+   "category": "acronym",
+   "query": "LFS",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "lfs"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "labour",
+      "force",
+      "survey"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "short token: lexical should be strong; checks that expansion (long form) is also found",
+   "expect": null,
+   "relevant": {
+    "320": 3,
+    "494": 3,
+    "549": 3,
+    "808": 3,
+    "809": 3,
+    "817": 3,
+    "818": 3,
+    "819": 3,
+    "820": 3,
+    "831": 3,
+    "832": 3,
+    "833": 3,
+    "853": 3,
+    "854": 3,
+    "855": 3,
+    "856": 3,
+    "857": 3,
+    "858": 3,
+    "859": 3,
+    "870": 3,
+    "871": 3,
+    "872": 3,
+    "873": 3,
+    "874": 3,
+    "886": 3,
+    "887": 3,
+    "888": 3,
+    "889": 3,
+    "890": 3,
+    "910": 3,
+    "911": 3,
+    "912": 3,
+    "913": 3,
+    "914": 3,
+    "915": 3,
+    "916": 3,
+    "1018": 3,
+    "1019": 3,
+    "1020": 3,
+    "1021": 3,
+    "1022": 3,
+    "1141": 3,
+    "1142": 3,
+    "1143": 3,
+    "1144": 3,
+    "1147": 3,
+    "1148": 3,
+    "1150": 3,
+    "1153": 3,
+    "1154": 3,
+    "1293": 3,
+    "1296": 3,
+    "1298": 3,
+    "1299": 3,
+    "1300": 3,
+    "1302": 3,
+    "1368": 3,
+    "1370": 3,
+    "1426": 3,
+    "1427": 3,
+    "1428": 3
+   },
+   "examples": [
+    {
+     "sid": 320,
+     "grade": 3,
+     "title": "Labor Force Survey, LFS 2017"
+    },
+    {
+     "sid": 494,
+     "grade": 3,
+     "title": "Vanuatu LFS Questionnaire 2024 - ILO"
+    },
+    {
+     "sid": 549,
+     "grade": 3,
+     "title": "Labour Force Survey 2017, Global Labour Database Harmonized Dataset"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 61
+   }
+  },
+  {
+   "id": "acr-03",
+   "category": "acronym",
+   "query": "GDP",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "gdp"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "gross",
+      "domestic",
+      "product"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "short token: lexical should be strong; checks that expansion (long form) is also found",
+   "expect": null,
+   "relevant": {
+    "310": 3,
+    "555": 3,
+    "556": 3,
+    "557": 3,
+    "558": 3,
+    "559": 3,
+    "560": 3,
+    "561": 3,
+    "562": 3,
+    "563": 3,
+    "564": 3,
+    "565": 3,
+    "566": 3,
+    "567": 3,
+    "568": 3,
+    "569": 3,
+    "570": 3,
+    "571": 3,
+    "580": 3,
+    "581": 3,
+    "582": 3,
+    "583": 3,
+    "584": 3,
+    "585": 3,
+    "586": 3,
+    "587": 3,
+    "588": 3,
+    "589": 3,
+    "590": 3,
+    "591": 3,
+    "592": 3,
+    "593": 3,
+    "594": 3,
+    "595": 3,
+    "596": 3,
+    "597": 3,
+    "598": 3,
+    "599": 3,
+    "600": 3,
+    "601": 3,
+    "602": 3,
+    "603": 3,
+    "604": 3,
+    "605": 3,
+    "606": 3,
+    "607": 3,
+    "608": 3,
+    "609": 3,
+    "610": 3,
+    "611": 3,
+    "612": 3,
+    "613": 3,
+    "614": 3,
+    "615": 3,
+    "616": 3,
+    "617": 3,
+    "630": 3,
+    "631": 3,
+    "632": 3,
+    "633": 3,
+    "634": 3,
+    "635": 3,
+    "1012": 3,
+    "1013": 3,
+    "1135": 3,
+    "1136": 3,
+    "1137": 3,
+    "1138": 3,
+    "1269": 3,
+    "1270": 3,
+    "1271": 3,
+    "1272": 3,
+    "1273": 3,
+    "1488": 3,
+    "1500": 3,
+    "1504": 3,
+    "1530": 3,
+    "1535": 3,
+    "1538": 3,
+    "1541": 3
+   },
+   "examples": [
+    {
+     "sid": 310,
+     "grade": 3,
+     "title": "Gross Domestic Product (GDP) per Capita, Local Currency Unit, Constant"
+    },
+    {
+     "sid": 555,
+     "grade": 3,
+     "title": "Gross Domestic Product (GDP) at current prices (Frw billions)"
+    },
+    {
+     "sid": 556,
+     "grade": 3,
+     "title": "Gross Domestic Product (GDP) at current price, Growth rate (%)"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 80
+   }
+  },
+  {
+   "id": "acr-04",
+   "category": "acronym",
+   "query": "MICS",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "mics"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "multiple",
+      "indicator",
+      "cluster"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "multiple",
+      "indicator",
+      "baseline"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "short token: lexical should be strong; checks that expansion (long form) is also found",
+   "expect": null,
+   "relevant": {
+    "202": 3,
+    "277": 3,
+    "304": 3,
+    "306": 3,
+    "433": 3,
+    "552": 3
+   },
+   "examples": [
+    {
+     "sid": 202,
+     "grade": 3,
+     "title": "Afghanistan 1997 multiple indicator baseline (MICS). Report to UNICEF. Communitiy Informat"
+    },
+    {
+     "sid": 277,
+     "grade": 3,
+     "title": "Multiple Indicator Cluster Survey 2006"
+    },
+    {
+     "sid": 304,
+     "grade": 3,
+     "title": "Multiple Indicator Cluster Survey 2009, Round 3"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 6
+   }
+  },
+  {
+   "id": "acr-05",
+   "category": "acronym",
+   "query": "WDI",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "wdi"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "world",
+      "development",
+      "indicators"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "short token: lexical should be strong; checks that expansion (long form) is also found",
+   "expect": null,
+   "relevant": {
+    "266": 3,
+    "1460": 3
+   },
+   "examples": [
+    {
+     "sid": 266,
+     "grade": 3,
+     "title": "World Development Indicators, Country Profile, East Asia and Pacific - 2021"
+    },
+    {
+     "sid": 1460,
+     "grade": 3,
+     "title": "World Bank, World Development Indicators (WDI)"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 2
+   }
+  },
+  {
+   "id": "acr-06",
+   "category": "acronym",
+   "query": "RPHC",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "rphc*"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "short token: lexical should be strong; checks that expansion (long form) is also found",
+   "expect": null,
+   "relevant": {
+    "655": 3,
+    "656": 3,
+    "657": 3,
+    "658": 3,
+    "659": 3,
+    "660": 3,
+    "661": 3,
+    "662": 3,
+    "663": 3,
+    "664": 3,
+    "665": 3,
+    "666": 3,
+    "667": 3,
+    "668": 3,
+    "669": 3,
+    "670": 3,
+    "671": 3,
+    "672": 3,
+    "673": 3,
+    "674": 3,
+    "675": 3,
+    "676": 3,
+    "732": 3,
+    "733": 3,
+    "734": 3,
+    "735": 3,
+    "737": 3,
+    "738": 3,
+    "739": 3,
+    "740": 3,
+    "741": 3,
+    "742": 3,
+    "743": 3,
+    "744": 3,
+    "745": 3,
+    "746": 3,
+    "747": 3,
+    "748": 3,
+    "749": 3,
+    "750": 3,
+    "751": 3,
+    "752": 3,
+    "753": 3,
+    "755": 3,
+    "756": 3,
+    "760": 3,
+    "761": 3,
+    "762": 3,
+    "763": 3,
+    "764": 3,
+    "765": 3,
+    "766": 3,
+    "767": 3,
+    "768": 3,
+    "769": 3,
+    "770": 3,
+    "771": 3,
+    "772": 3,
+    "773": 3,
+    "774": 3,
+    "775": 3,
+    "776": 3,
+    "777": 3,
+    "778": 3,
+    "779": 3,
+    "780": 3,
+    "781": 3,
+    "782": 3,
+    "783": 3,
+    "784": 3,
+    "785": 3,
+    "786": 3,
+    "1023": 3,
+    "1024": 3,
+    "1025": 3,
+    "1026": 3,
+    "1027": 3,
+    "1028": 3,
+    "1029": 3,
+    "1030": 3,
+    "1031": 3,
+    "1032": 3,
+    "1033": 3,
+    "1034": 3,
+    "1035": 3,
+    "1036": 3,
+    "1037": 3,
+    "1038": 3,
+    "1039": 3,
+    "1040": 3,
+    "1041": 3,
+    "1042": 3,
+    "1043": 3,
+    "1044": 3,
+    "1045": 3,
+    "1046": 3,
+    "1047": 3,
+    "1048": 3,
+    "1049": 3,
+    "1050": 3,
+    "1051": 3,
+    "1054": 3,
+    "1055": 3,
+    "1056": 3,
+    "1057": 3,
+    "1058": 3,
+    "1059": 3,
+    "1060": 3,
+    "1061": 3,
+    "1062": 3,
+    "1063": 3,
+    "1064": 3,
+    "1065": 3,
+    "1066": 3,
+    "1067": 3,
+    "1068": 3,
+    "1069": 3,
+    "1070": 3,
+    "1071": 3,
+    "1166": 3,
+    "1167": 3,
+    "1168": 3
+   },
+   "examples": [
+    {
+     "sid": 655,
+     "grade": 3,
+     "title": "RPHC4 District Profile - Kicukiro 2009"
+    },
+    {
+     "sid": 656,
+     "grade": 3,
+     "title": "RPHC4 District Profile - Nyarugenge 2009"
+    },
+    {
+     "sid": 657,
+     "grade": 3,
+     "title": "RPHC4 District Profile - Burera 2009"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 122
+   }
+  },
+  {
+   "id": "acr-07",
+   "category": "acronym",
+   "query": "CPI",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "cpi"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "consumer",
+      "price",
+      "index"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "short token: lexical should be strong; checks that expansion (long form) is also found",
+   "expect": null,
+   "relevant": {
+    "925": 3,
+    "926": 3,
+    "928": 3,
+    "929": 3,
+    "930": 3,
+    "932": 3,
+    "933": 3,
+    "935": 3,
+    "936": 3,
+    "937": 3,
+    "938": 3,
+    "940": 3,
+    "941": 3,
+    "943": 3,
+    "944": 3,
+    "946": 3,
+    "947": 3,
+    "949": 3,
+    "951": 3,
+    "1079": 3,
+    "1081": 3,
+    "1082": 3,
+    "1084": 3,
+    "1085": 3,
+    "1087": 3,
+    "1088": 3,
+    "1090": 3,
+    "1091": 3,
+    "1092": 3,
+    "1094": 3,
+    "1095": 3,
+    "1097": 3,
+    "1098": 3,
+    "1100": 3,
+    "1101": 3,
+    "1103": 3,
+    "1104": 3,
+    "1106": 3,
+    "1107": 3,
+    "1109": 3,
+    "1110": 3,
+    "1112": 3,
+    "1180": 3,
+    "1182": 3,
+    "1183": 3,
+    "1185": 3,
+    "1186": 3,
+    "1188": 3,
+    "1189": 3,
+    "1191": 3,
+    "1192": 3,
+    "1194": 3,
+    "1195": 3,
+    "1197": 3,
+    "1198": 3,
+    "1200": 3,
+    "1201": 3,
+    "1203": 3,
+    "1205": 3,
+    "1206": 3,
+    "1208": 3,
+    "1210": 3,
+    "1211": 3,
+    "1213": 3,
+    "1350": 3,
+    "1352": 3,
+    "1353": 3,
+    "1355": 3,
+    "1356": 3,
+    "1358": 3
+   },
+   "examples": [
+    {
+     "sid": 925,
+     "grade": 3,
+     "title": "IGIPIMO CYIHINDAGURIKA RYIBICIRO (CPI) UKWEZI KWA MATA 2023"
+    },
+    {
+     "sid": 926,
+     "grade": 3,
+     "title": "Consumer Price Index (CPI) August 2023"
+    },
+    {
+     "sid": 928,
+     "grade": 3,
+     "title": "IGIPIMO CYIHINDAGURIKA RYIBICIRO (CPI) UKWEZI KWA KANAMA 2023"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 70
+   }
+  },
+  {
+   "id": "sem-01",
+   "category": "semantic",
+   "query": "cost of living",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "price",
+      "index"
+     ],
+     "any": [],
+     "grade": 2
+    },
+    {
+     "in": "title",
+     "all": [
+      "indice",
+      "prix"
+     ],
+     "any": [],
+     "grade": 2
+    },
+    {
+     "in": "title",
+     "all": [
+      "inflation"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "consumer",
+      "price"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "cpi"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "paraphrase: rules are a proxy, expect the reviewer to correct grades; lexical-only is expected to under-perform here",
+   "expect": null,
+   "relevant": {
+    "240": 3,
+    "925": 3,
+    "926": 3,
+    "928": 3,
+    "929": 3,
+    "930": 3,
+    "932": 3,
+    "933": 3,
+    "935": 3,
+    "936": 3,
+    "937": 3,
+    "938": 3,
+    "940": 3,
+    "941": 3,
+    "943": 3,
+    "944": 3,
+    "946": 3,
+    "947": 3,
+    "949": 3,
+    "951": 3,
+    "1079": 3,
+    "1081": 3,
+    "1082": 3,
+    "1084": 3,
+    "1085": 3,
+    "1087": 3,
+    "1088": 3,
+    "1090": 3,
+    "1091": 3,
+    "1092": 3,
+    "1094": 3,
+    "1095": 3,
+    "1097": 3,
+    "1098": 3,
+    "1100": 3,
+    "1101": 3,
+    "1103": 3,
+    "1104": 3,
+    "1106": 3,
+    "1107": 3,
+    "1109": 3,
+    "1110": 3,
+    "1112": 3,
+    "1180": 3,
+    "1182": 3,
+    "1183": 3,
+    "1185": 3,
+    "1186": 3,
+    "1188": 3,
+    "1189": 3,
+    "1191": 3,
+    "1192": 3,
+    "1194": 3,
+    "1195": 3,
+    "1197": 3,
+    "1198": 3,
+    "1200": 3,
+    "1201": 3,
+    "1203": 3,
+    "1205": 3,
+    "1206": 3,
+    "1208": 3,
+    "1210": 3,
+    "1211": 3,
+    "1213": 3,
+    "1350": 3,
+    "1352": 3,
+    "1353": 3,
+    "1355": 3,
+    "1356": 3,
+    "1358": 3,
+    "924": 2,
+    "927": 2,
+    "931": 2,
+    "934": 2,
+    "939": 2,
+    "942": 2,
+    "945": 2,
+    "948": 2,
+    "950": 2,
+    "1080": 2,
+    "1083": 2,
+    "1086": 2,
+    "1089": 2,
+    "1093": 2,
+    "1096": 2,
+    "1099": 2,
+    "1102": 2,
+    "1105": 2,
+    "1108": 2,
+    "1111": 2,
+    "1157": 2,
+    "1158": 2,
+    "1160": 2,
+    "1161": 2,
+    "1163": 2,
+    "1164": 2,
+    "1181": 2,
+    "1184": 2,
+    "1187": 2,
+    "1190": 2,
+    "1193": 2,
+    "1196": 2,
+    "1199": 2,
+    "1202": 2,
+    "1204": 2,
+    "1207": 2,
+    "1209": 2,
+    "1212": 2,
+    "1306": 2,
+    "1307": 2,
+    "1309": 2,
+    "1310": 2,
+    "1312": 2,
+    "1313": 2,
+    "1315": 2,
+    "1316": 2,
+    "1318": 2,
+    "1319": 2,
+    "1321": 2,
+    "1322": 2,
+    "1324": 2,
+    "1325": 2,
+    "1327": 2,
+    "1328": 2,
+    "1330": 2,
+    "1331": 2,
+    "1333": 2,
+    "1334": 2,
+    "1336": 2,
+    "1337": 2,
+    "1351": 2,
+    "1354": 2,
+    "1357": 2,
+    "1371": 2,
+    "1372": 2,
+    "1374": 2,
+    "1375": 2
+   },
+   "examples": [
+    {
+     "sid": 240,
+     "grade": 3,
+     "title": "Monthly estimates of food prices and inflation by country (modeled estimates based on WFP "
+    },
+    {
+     "sid": 925,
+     "grade": 3,
+     "title": "IGIPIMO CYIHINDAGURIKA RYIBICIRO (CPI) UKWEZI KWA MATA 2023"
+    },
+    {
+     "sid": 926,
+     "grade": 3,
+     "title": "Consumer Price Index (CPI) August 2023"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 71,
+    "2": 67
+   }
+  },
+  {
+   "id": "sem-02",
+   "category": "semantic",
+   "query": "unemployment rate",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "labour",
+      "force"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "unemployment"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "labor",
+      "force"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "employment"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "paraphrase: rules are a proxy, expect the reviewer to correct grades; lexical-only is expected to under-perform here",
+   "expect": null,
+   "relevant": {
+    "320": 3,
+    "549": 3,
+    "746": 3,
+    "808": 3,
+    "809": 3,
+    "818": 3,
+    "819": 3,
+    "820": 3,
+    "831": 3,
+    "832": 3,
+    "833": 3,
+    "853": 3,
+    "854": 3,
+    "855": 3,
+    "856": 3,
+    "857": 3,
+    "858": 3,
+    "859": 3,
+    "870": 3,
+    "871": 3,
+    "872": 3,
+    "873": 3,
+    "874": 3,
+    "886": 3,
+    "887": 3,
+    "888": 3,
+    "889": 3,
+    "890": 3,
+    "910": 3,
+    "911": 3,
+    "912": 3,
+    "913": 3,
+    "914": 3,
+    "915": 3,
+    "916": 3,
+    "1018": 3,
+    "1019": 3,
+    "1020": 3,
+    "1021": 3,
+    "1022": 3,
+    "1141": 3,
+    "1142": 3,
+    "1143": 3,
+    "1144": 3,
+    "1147": 3,
+    "1148": 3,
+    "1150": 3,
+    "1152": 3,
+    "1153": 3,
+    "1154": 3,
+    "1293": 3,
+    "1295": 3,
+    "1296": 3,
+    "1298": 3,
+    "1299": 3,
+    "1300": 3,
+    "1302": 3,
+    "1368": 3,
+    "1370": 3,
+    "1425": 3,
+    "1426": 3,
+    "1427": 3,
+    "1428": 3,
+    "1429": 3,
+    "1430": 3,
+    "1431": 3,
+    "1432": 3,
+    "1433": 3
+   },
+   "examples": [
+    {
+     "sid": 320,
+     "grade": 3,
+     "title": "Labor Force Survey, LFS 2017"
+    },
+    {
+     "sid": 549,
+     "grade": 3,
+     "title": "Labour Force Survey 2017, Global Labour Database Harmonized Dataset"
+    },
+    {
+     "sid": 746,
+     "grade": 3,
+     "title": "RPHC-4: Thematic Report: Labour Force Participation 2012"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 68
+   }
+  },
+  {
+   "id": "sem-03",
+   "category": "semantic",
+   "query": "how many people live in each district",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "district",
+      "profile"
+     ],
+     "any": [],
+     "grade": 2
+    },
+    {
+     "in": "title",
+     "all": [
+      "district",
+      "census"
+     ],
+     "any": [],
+     "grade": 2
+    },
+    {
+     "in": "title",
+     "all": [
+      "district",
+      "statistical"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "paraphrase: rules are a proxy, expect the reviewer to correct grades; lexical-only is expected to under-perform here",
+   "expect": null,
+   "relevant": {
+    "36": 2,
+    "37": 2,
+    "38": 2,
+    "39": 2,
+    "40": 2,
+    "41": 2,
+    "42": 2,
+    "43": 2,
+    "44": 2,
+    "45": 2,
+    "46": 2,
+    "47": 2,
+    "48": 2,
+    "49": 2,
+    "50": 2,
+    "51": 2,
+    "52": 2,
+    "53": 2,
+    "54": 2,
+    "55": 2,
+    "56": 2,
+    "57": 2,
+    "58": 2,
+    "59": 2,
+    "60": 2,
+    "61": 2,
+    "62": 2,
+    "63": 2,
+    "64": 2,
+    "65": 2,
+    "66": 2,
+    "67": 2,
+    "68": 2,
+    "69": 2,
+    "70": 2,
+    "71": 2,
+    "72": 2,
+    "73": 2,
+    "74": 2,
+    "75": 2,
+    "76": 2,
+    "77": 2,
+    "78": 2,
+    "79": 2,
+    "80": 2,
+    "81": 2,
+    "82": 2,
+    "83": 2,
+    "84": 2,
+    "85": 2,
+    "86": 2,
+    "87": 2,
+    "88": 2,
+    "89": 2,
+    "90": 2,
+    "91": 2,
+    "92": 2,
+    "93": 2,
+    "94": 2,
+    "95": 2,
+    "96": 2,
+    "97": 2,
+    "98": 2,
+    "99": 2,
+    "100": 2,
+    "101": 2,
+    "102": 2,
+    "103": 2,
+    "104": 2,
+    "105": 2,
+    "106": 2,
+    "107": 2,
+    "108": 2,
+    "109": 2,
+    "110": 2,
+    "111": 2,
+    "112": 2,
+    "113": 2,
+    "114": 2,
+    "115": 2,
+    "116": 2,
+    "117": 2,
+    "118": 2,
+    "119": 2,
+    "120": 2,
+    "121": 2,
+    "122": 2,
+    "123": 2,
+    "124": 2,
+    "125": 2,
+    "126": 2,
+    "127": 2,
+    "128": 2,
+    "129": 2,
+    "130": 2,
+    "131": 2,
+    "132": 2,
+    "133": 2,
+    "134": 2,
+    "135": 2,
+    "136": 2,
+    "137": 2,
+    "138": 2,
+    "139": 2,
+    "140": 2,
+    "141": 2,
+    "142": 2,
+    "143": 2,
+    "144": 2,
+    "145": 2,
+    "146": 2,
+    "147": 2,
+    "148": 2,
+    "149": 2,
+    "150": 2,
+    "151": 2,
+    "152": 2,
+    "153": 2,
+    "154": 2,
+    "155": 2,
+    "156": 2,
+    "157": 2,
+    "158": 2,
+    "159": 2,
+    "160": 2,
+    "161": 2,
+    "162": 2,
+    "163": 2,
+    "164": 2,
+    "165": 2,
+    "166": 2,
+    "167": 2,
+    "655": 2,
+    "656": 2,
+    "657": 2,
+    "658": 2,
+    "659": 2,
+    "660": 2,
+    "661": 2,
+    "662": 2,
+    "663": 2,
+    "664": 2,
+    "665": 2,
+    "666": 2,
+    "667": 2,
+    "668": 2,
+    "669": 2,
+    "670": 2,
+    "671": 2,
+    "672": 2,
+    "673": 2,
+    "674": 2,
+    "675": 2,
+    "676": 2,
+    "755": 2,
+    "756": 2,
+    "760": 2,
+    "761": 2,
+    "762": 2,
+    "763": 2,
+    "764": 2,
+    "765": 2,
+    "766": 2,
+    "767": 2,
+    "768": 2,
+    "769": 2,
+    "770": 2,
+    "771": 2,
+    "772": 2,
+    "773": 2,
+    "774": 2,
+    "775": 2,
+    "776": 2,
+    "777": 2,
+    "778": 2,
+    "779": 2,
+    "780": 2,
+    "781": 2,
+    "782": 2,
+    "783": 2,
+    "784": 2,
+    "785": 2,
+    "786": 2,
+    "839": 2,
+    "840": 2,
+    "841": 2,
+    "842": 2,
+    "843": 2,
+    "1023": 2,
+    "1024": 2,
+    "1025": 2,
+    "1026": 2,
+    "1027": 2,
+    "1028": 2,
+    "1029": 2,
+    "1030": 2,
+    "1031": 2,
+    "1032": 2,
+    "1033": 2,
+    "1034": 2,
+    "1035": 2,
+    "1036": 2,
+    "1037": 2,
+    "1038": 2,
+    "1039": 2,
+    "1040": 2,
+    "1041": 2,
+    "1042": 2,
+    "1043": 2,
+    "1044": 2,
+    "1045": 2,
+    "1046": 2,
+    "1047": 2,
+    "1048": 2,
+    "1049": 2,
+    "1050": 2,
+    "1051": 2
+   },
+   "examples": [
+    {
+     "sid": 36,
+     "grade": 2,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII A - District Census Handbook,"
+    },
+    {
+     "sid": 37,
+     "grade": 2,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII B - District Census Handbook,"
+    },
+    {
+     "sid": 38,
+     "grade": 2,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII A - District Census Handbook,"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "2": 217
+   }
+  },
+  {
+   "id": "sem-04",
+   "category": "semantic",
+   "query": "violence against girls in schools",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "school",
+      "gender",
+      "violence"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "gender",
+      "based",
+      "violence"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "violence"
+     ],
+     "any": [],
+     "grade": 1
+    }
+   ],
+   "note": "paraphrase: rules are a proxy, expect the reviewer to correct grades; lexical-only is expected to under-perform here",
+   "expect": null,
+   "relevant": {
+    "483": 3,
+    "374": 1
+   },
+   "examples": [
+    {
+     "sid": 483,
+     "grade": 3,
+     "title": "Impact Evaluation of an Empowerment Pilot to Reduce School-Related Gender-Based Violence i"
+    },
+    {
+     "sid": 374,
+     "grade": 1,
+     "title": "ACLED - Anti-Civilian Violence"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "1": 1,
+    "3": 1
+   }
+  },
+  {
+   "id": "sem-05",
+   "category": "semantic",
+   "query": "people forced to leave their homes",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "displacement"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "refugee*"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "asylum"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "idp*"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "paraphrase: rules are a proxy, expect the reviewer to correct grades; lexical-only is expected to under-perform here",
+   "expect": null,
+   "relevant": {
+    "226": 3,
+    "256": 3,
+    "270": 3,
+    "315": 3,
+    "371": 3,
+    "500": 3,
+    "1166": 3,
+    "1168": 3
+   },
+   "examples": [
+    {
+     "sid": 226,
+     "grade": 3,
+     "title": "UNHCR Data on Displacement - Population Figures by Country of Origin and Country of Asylum"
+    },
+    {
+     "sid": 256,
+     "grade": 3,
+     "title": "Bangladesh, Outline of camps of Rohingya refugees in Cox's Bazar, January 2021"
+    },
+    {
+     "sid": 270,
+     "grade": 3,
+     "title": "Bangladesh, Outline of camps of Rohingya refugees in Cox's Bazar, January 2021"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 8
+   }
+  },
+  {
+   "id": "sem-06",
+   "category": "semantic",
+   "query": "farming and land use",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "arable",
+      "land"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "agricultur*"
+     ],
+     "any": [],
+     "grade": 2
+    },
+    {
+     "in": "title",
+     "all": [
+      "land"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "paraphrase: rules are a proxy, expect the reviewer to correct grades; lexical-only is expected to under-perform here",
+   "expect": null,
+   "relevant": {
+    "1462": 3,
+    "1465": 3,
+    "1466": 3,
+    "1467": 3,
+    "180": 2,
+    "223": 2,
+    "360": 2,
+    "413": 2,
+    "434": 2,
+    "567": 2,
+    "687": 2,
+    "787": 2,
+    "788": 2,
+    "789": 2,
+    "810": 2,
+    "811": 2,
+    "812": 2,
+    "822": 2,
+    "825": 2,
+    "835": 2,
+    "862": 2,
+    "875": 2,
+    "876": 2,
+    "877": 2,
+    "879": 2,
+    "891": 2,
+    "892": 2,
+    "918": 2,
+    "920": 2,
+    "921": 2,
+    "923": 2,
+    "1054": 2,
+    "1072": 2,
+    "1073": 2,
+    "1074": 2,
+    "1171": 2,
+    "1172": 2,
+    "1176": 2,
+    "1177": 2,
+    "1178": 2,
+    "1339": 2,
+    "1340": 2,
+    "1342": 2,
+    "1345": 2,
+    "1377": 2,
+    "1379": 2,
+    "1411": 2,
+    "1412": 2,
+    "1413": 2,
+    "1439": 2,
+    "1440": 2,
+    "1441": 2,
+    "1442": 2,
+    "1443": 2,
+    "1444": 2,
+    "1447": 2,
+    "1448": 2,
+    "1449": 2,
+    "1450": 2,
+    "1451": 2,
+    "1452": 2,
+    "1453": 2,
+    "1463": 2,
+    "1464": 2,
+    "1468": 2,
+    "1469": 2,
+    "1470": 2,
+    "1471": 2,
+    "1472": 2,
+    "1473": 2,
+    "1474": 2,
+    "1476": 2,
+    "1477": 2,
+    "1479": 2,
+    "1480": 2,
+    "1481": 2,
+    "1567": 2
+   },
+   "examples": [
+    {
+     "sid": 1462,
+     "grade": 3,
+     "title": "Fertilizer consumption (kilograms per hectare of arable land)"
+    },
+    {
+     "sid": 1465,
+     "grade": 3,
+     "title": "Arable land (hectares)"
+    },
+    {
+     "sid": 1466,
+     "grade": 3,
+     "title": "Arable land (hectares per person)"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "2": 73,
+    "3": 4
+   }
+  },
+  {
+   "id": "sem-07",
+   "category": "semantic",
+   "query": "overall economic growth",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "growth",
+      "rate"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "gdp"
+     ],
+     "any": [],
+     "grade": 2
+    },
+    {
+     "in": "title",
+     "all": [
+      "gross",
+      "domestic",
+      "product"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "paraphrase: rules are a proxy, expect the reviewer to correct grades; lexical-only is expected to under-perform here",
+   "expect": null,
+   "relevant": {
+    "556": 3,
+    "558": 3,
+    "560": 3,
+    "617": 3,
+    "618": 3,
+    "619": 3,
+    "620": 3,
+    "621": 3,
+    "622": 3,
+    "623": 3,
+    "624": 3,
+    "625": 3,
+    "626": 3,
+    "627": 3,
+    "628": 3,
+    "629": 3,
+    "631": 3,
+    "632": 3,
+    "310": 2,
+    "555": 2,
+    "557": 2,
+    "559": 2,
+    "561": 2,
+    "562": 2,
+    "563": 2,
+    "564": 2,
+    "565": 2,
+    "566": 2,
+    "567": 2,
+    "568": 2,
+    "569": 2,
+    "570": 2,
+    "571": 2,
+    "580": 2,
+    "581": 2,
+    "582": 2,
+    "583": 2,
+    "584": 2,
+    "585": 2,
+    "586": 2,
+    "587": 2,
+    "588": 2,
+    "589": 2,
+    "590": 2,
+    "591": 2,
+    "592": 2,
+    "593": 2,
+    "594": 2,
+    "595": 2,
+    "596": 2,
+    "597": 2,
+    "598": 2,
+    "599": 2,
+    "600": 2,
+    "601": 2,
+    "602": 2,
+    "603": 2,
+    "604": 2,
+    "605": 2,
+    "606": 2,
+    "607": 2,
+    "608": 2,
+    "609": 2,
+    "610": 2,
+    "611": 2,
+    "612": 2,
+    "613": 2,
+    "614": 2,
+    "615": 2,
+    "616": 2,
+    "630": 2,
+    "633": 2,
+    "634": 2,
+    "635": 2,
+    "1012": 2,
+    "1013": 2,
+    "1135": 2,
+    "1136": 2,
+    "1137": 2,
+    "1138": 2,
+    "1269": 2,
+    "1270": 2,
+    "1271": 2,
+    "1272": 2,
+    "1273": 2,
+    "1488": 2,
+    "1500": 2,
+    "1504": 2,
+    "1530": 2,
+    "1535": 2,
+    "1538": 2,
+    "1541": 2
+   },
+   "examples": [
+    {
+     "sid": 556,
+     "grade": 3,
+     "title": "Gross Domestic Product (GDP) at current price, Growth rate (%)"
+    },
+    {
+     "sid": 558,
+     "grade": 3,
+     "title": "Gross Domestic Product (GDP) at constant 2024 prices, Growth rate (%)"
+    },
+    {
+     "sid": 560,
+     "grade": 3,
+     "title": "Implicit Gross Domestic Product (GDP) deflator, Growth rate (%)"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "2": 74,
+    "3": 18
+   }
+  },
+  {
+   "id": "sem-08",
+   "category": "semantic",
+   "query": "money sent home by migrants",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "remittance*"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "secondary",
+      "income"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "paraphrase: rules are a proxy, expect the reviewer to correct grades; lexical-only is expected to under-perform here",
+   "expect": null,
+   "relevant": {
+    "1502": 3,
+    "1534": 3,
+    "1535": 3,
+    "1501": 2,
+    "1513": 2,
+    "1532": 2
+   },
+   "examples": [
+    {
+     "sid": 1502,
+     "grade": 3,
+     "title": "Personal remittances, paid (current US$)"
+    },
+    {
+     "sid": 1534,
+     "grade": 3,
+     "title": "Personal remittances, received (current US$)"
+    },
+    {
+     "sid": 1535,
+     "grade": 3,
+     "title": "Personal remittances, received (% of GDP)"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "2": 3,
+    "3": 3
+   }
+  },
+  {
+   "id": "sem-09",
+   "category": "semantic",
+   "query": "children's nutrition and stunting",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "nutrition"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "stunting"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "child*",
+      "health"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "paraphrase: rules are a proxy, expect the reviewer to correct grades; lexical-only is expected to under-perform here",
+   "expect": null,
+   "relevant": {
+    "1393": 3
+   },
+   "examples": [
+    {
+     "sid": 1393,
+     "grade": 3,
+     "title": "Comprehensive Food Security and Vulnerability Analysis and Nutrition Survey 2012"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 1
+   }
+  },
+  {
+   "id": "sem-10",
+   "category": "semantic",
+   "query": "imports and exports",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "imports"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "exports"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "external",
+      "trade"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "trade",
+      "goods"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "paraphrase: rules are a proxy, expect the reviewer to correct grades; lexical-only is expected to under-perform here",
+   "expect": null,
+   "relevant": {
+    "585": 3,
+    "586": 3,
+    "587": 3,
+    "588": 3,
+    "589": 3,
+    "590": 3,
+    "598": 3,
+    "599": 3,
+    "600": 3,
+    "601": 3,
+    "602": 3,
+    "603": 3,
+    "611": 3,
+    "612": 3,
+    "613": 3,
+    "614": 3,
+    "615": 3,
+    "616": 3,
+    "624": 3,
+    "625": 3,
+    "626": 3,
+    "627": 3,
+    "628": 3,
+    "629": 3,
+    "865": 3,
+    "866": 3,
+    "867": 3,
+    "883": 3,
+    "900": 3,
+    "901": 3,
+    "902": 3,
+    "903": 3,
+    "904": 3,
+    "905": 3,
+    "906": 3,
+    "907": 3,
+    "967": 3,
+    "968": 3,
+    "969": 3,
+    "970": 3,
+    "971": 3,
+    "972": 3,
+    "973": 3,
+    "974": 3,
+    "975": 3,
+    "976": 3,
+    "977": 3,
+    "978": 3,
+    "979": 3,
+    "980": 3,
+    "981": 3,
+    "982": 3,
+    "1120": 3,
+    "1121": 3,
+    "1122": 3,
+    "1123": 3,
+    "1124": 3,
+    "1125": 3,
+    "1126": 3,
+    "1127": 3,
+    "1128": 3,
+    "1129": 3,
+    "1130": 3,
+    "1131": 3,
+    "1132": 3,
+    "1133": 3,
+    "1223": 3,
+    "1224": 3,
+    "1225": 3,
+    "1226": 3,
+    "1227": 3,
+    "1228": 3,
+    "1229": 3,
+    "1230": 3,
+    "1231": 3,
+    "1232": 3,
+    "1233": 3,
+    "1234": 3,
+    "1235": 3,
+    "1236": 3,
+    "1237": 3,
+    "1238": 3,
+    "1359": 3,
+    "1360": 3,
+    "1361": 3,
+    "1362": 3,
+    "1489": 3,
+    "1491": 3,
+    "1492": 3,
+    "1493": 3,
+    "1494": 3,
+    "1496": 3,
+    "1497": 3,
+    "1498": 3,
+    "1517": 3,
+    "1518": 3,
+    "1519": 3,
+    "1521": 3,
+    "1522": 3,
+    "1523": 3,
+    "1524": 3,
+    "1526": 3,
+    "1527": 3,
+    "1528": 3,
+    "1507": 2,
+    "1508": 2
+   },
+   "examples": [
+    {
+     "sid": 585,
+     "grade": 3,
+     "title": "GDP in current price, Resource balance, Exports of goods & services"
+    },
+    {
+     "sid": 586,
+     "grade": 3,
+     "title": "GDP in current price, Resource balance, Exports of goods & services - Goods (fob)"
+    },
+    {
+     "sid": 587,
+     "grade": 3,
+     "title": "GDP in current price, Resource balance, Exports of goods & services - Services"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 104,
+    "2": 2
+   }
+  },
+  {
+   "id": "ctry-01",
+   "category": "topic+filter",
+   "query": "gender",
+   "filters": {
+    "countries": [
+     181
+    ]
+   },
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "gender"
+     ],
+     "any": [],
+     "grade": 3,
+     "nation": "Rwanda"
+    },
+    {
+     "in": "text",
+     "all": [
+      "gender"
+     ],
+     "any": [],
+     "grade": 1,
+     "nation": "Rwanda"
+    }
+   ],
+   "note": "nation=Rwanda: filter alone must exclude every other country; relevance limited to that nation",
+   "expect": null,
+   "relevant": {
+    "686": 3,
+    "691": 3,
+    "696": 3,
+    "705": 3,
+    "706": 3,
+    "707": 3,
+    "708": 3,
+    "713": 3,
+    "719": 3,
+    "720": 3,
+    "721": 3,
+    "722": 3,
+    "723": 3,
+    "725": 3,
+    "727": 3,
+    "728": 3,
+    "744": 3,
+    "798": 3,
+    "806": 3,
+    "819": 3,
+    "820": 3,
+    "850": 3,
+    "858": 3,
+    "859": 3,
+    "884": 3,
+    "915": 3,
+    "916": 3,
+    "923": 3,
+    "957": 3,
+    "960": 3,
+    "983": 3,
+    "984": 3,
+    "985": 3,
+    "986": 3,
+    "987": 3,
+    "988": 3,
+    "989": 3,
+    "990": 3,
+    "991": 3,
+    "992": 3,
+    "993": 3,
+    "994": 3,
+    "995": 3,
+    "996": 3,
+    "997": 3,
+    "998": 3,
+    "999": 3,
+    "1000": 3,
+    "1001": 3,
+    "1002": 3,
+    "1003": 3,
+    "1004": 3,
+    "1005": 3,
+    "1006": 3,
+    "1007": 3,
+    "1008": 3,
+    "1009": 3,
+    "1010": 3,
+    "1011": 3,
+    "1063": 3,
+    "1077": 3,
+    "1119": 3,
+    "1153": 3,
+    "1154": 3,
+    "1167": 3,
+    "1239": 3,
+    "1240": 3,
+    "1241": 3,
+    "1242": 3,
+    "1243": 3,
+    "1244": 3,
+    "1245": 3,
+    "1246": 3,
+    "1247": 3,
+    "1248": 3,
+    "1249": 3,
+    "1250": 3,
+    "1251": 3,
+    "1252": 3,
+    "1253": 3,
+    "1254": 3,
+    "1255": 3,
+    "1256": 3,
+    "1257": 3,
+    "1258": 3,
+    "1259": 3,
+    "1260": 3,
+    "1261": 3,
+    "1262": 3,
+    "1263": 3,
+    "1264": 3,
+    "1265": 3,
+    "1266": 3,
+    "1267": 3,
+    "1268": 3,
+    "1383": 1,
+    "1384": 1,
+    "1385": 1,
+    "1386": 1,
+    "1389": 1,
+    "1391": 1,
+    "1393": 1,
+    "1401": 1,
+    "1408": 1,
+    "1413": 1,
+    "1414": 1,
+    "1416": 1,
+    "1417": 1,
+    "1424": 1,
+    "1434": 1
+   },
+   "examples": [
+    {
+     "sid": 686,
+     "grade": 3,
+     "title": "EICV3 Gender Thematic Report 2011"
+    },
+    {
+     "sid": 691,
+     "grade": 3,
+     "title": "EICV3 THEMATIC REPORT Gender"
+    },
+    {
+     "sid": 696,
+     "grade": 3,
+     "title": "Gender Report: Rwanda Public Sector 2024"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 95,
+    "1": 15
+   }
+  },
+  {
+   "id": "ctry-02",
+   "category": "topic+filter",
+   "query": "population",
+   "filters": {
+    "countries": [
+     102
+    ]
+   },
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "population"
+     ],
+     "any": [],
+     "grade": 3,
+     "nation": "India"
+    },
+    {
+     "in": "title",
+     "all": [
+      "census"
+     ],
+     "any": [],
+     "grade": 2,
+     "nation": "India"
+    }
+   ],
+   "note": "nation=India: filter alone must exclude every other country; relevance limited to that nation",
+   "expect": null,
+   "relevant": {
+    "34": 2,
+    "36": 2,
+    "37": 2,
+    "38": 2,
+    "39": 2,
+    "40": 2,
+    "41": 2,
+    "42": 2,
+    "43": 2,
+    "44": 2,
+    "45": 2,
+    "46": 2,
+    "47": 2,
+    "48": 2,
+    "49": 2,
+    "50": 2,
+    "51": 2,
+    "52": 2,
+    "53": 2,
+    "54": 2,
+    "55": 2,
+    "56": 2,
+    "57": 2,
+    "58": 2,
+    "59": 2,
+    "60": 2,
+    "61": 2,
+    "62": 2,
+    "63": 2,
+    "64": 2,
+    "65": 2,
+    "66": 2,
+    "67": 2,
+    "68": 2,
+    "69": 2,
+    "70": 2,
+    "71": 2,
+    "72": 2,
+    "73": 2,
+    "74": 2,
+    "75": 2,
+    "76": 2,
+    "77": 2,
+    "78": 2,
+    "79": 2,
+    "80": 2,
+    "81": 2,
+    "82": 2,
+    "83": 2,
+    "84": 2,
+    "85": 2,
+    "86": 2,
+    "87": 2,
+    "88": 2,
+    "89": 2,
+    "90": 2,
+    "91": 2,
+    "92": 2,
+    "93": 2,
+    "94": 2,
+    "95": 2,
+    "96": 2,
+    "97": 2,
+    "98": 2,
+    "99": 2,
+    "100": 2,
+    "101": 2,
+    "102": 2,
+    "103": 2,
+    "104": 2,
+    "105": 2,
+    "106": 2,
+    "107": 2,
+    "108": 2,
+    "109": 2,
+    "110": 2,
+    "111": 2,
+    "112": 2,
+    "113": 2,
+    "114": 2,
+    "115": 2,
+    "116": 2,
+    "117": 2,
+    "118": 2,
+    "119": 2,
+    "120": 2,
+    "121": 2,
+    "122": 2,
+    "123": 2,
+    "124": 2,
+    "125": 2,
+    "126": 2,
+    "127": 2,
+    "128": 2,
+    "129": 2,
+    "130": 2,
+    "131": 2,
+    "132": 2,
+    "133": 2,
+    "134": 2,
+    "135": 2,
+    "136": 2,
+    "137": 2,
+    "138": 2,
+    "139": 2,
+    "140": 2,
+    "141": 2,
+    "142": 2,
+    "143": 2,
+    "144": 2,
+    "145": 2,
+    "146": 2,
+    "147": 2,
+    "148": 2,
+    "149": 2,
+    "150": 2,
+    "151": 2,
+    "152": 2,
+    "153": 2,
+    "154": 2,
+    "155": 2,
+    "156": 2,
+    "157": 2,
+    "158": 2,
+    "159": 2,
+    "160": 2,
+    "161": 2,
+    "162": 2,
+    "163": 2,
+    "164": 2,
+    "165": 2,
+    "166": 2,
+    "167": 2,
+    "205": 2,
+    "206": 2,
+    "207": 2,
+    "1580": 2
+   },
+   "examples": [
+    {
+     "sid": 34,
+     "grade": 2,
+     "title": "Census of India 2011 - Administrative Atlas - Andaman and Nicobar Islands"
+    },
+    {
+     "sid": 36,
+     "grade": 2,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII A - District Census Handbook,"
+    },
+    {
+     "sid": 37,
+     "grade": 2,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII B - District Census Handbook,"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "2": 137
+   }
+  },
+  {
+   "id": "ctry-03",
+   "category": "topic+filter",
+   "query": "price index",
+   "filters": {
+    "countries": [
+     181
+    ]
+   },
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "price",
+      "index"
+     ],
+     "any": [],
+     "grade": 3,
+     "nation": "Rwanda"
+    },
+    {
+     "in": "title",
+     "all": [
+      "indice",
+      "prix"
+     ],
+     "any": [],
+     "grade": 3,
+     "nation": "Rwanda"
+    }
+   ],
+   "note": "nation=Rwanda: filter alone must exclude every other country; relevance limited to that nation",
+   "expect": null,
+   "relevant": {
+    "924": 3,
+    "926": 3,
+    "927": 3,
+    "929": 3,
+    "930": 3,
+    "931": 3,
+    "933": 3,
+    "934": 3,
+    "936": 3,
+    "938": 3,
+    "939": 3,
+    "941": 3,
+    "942": 3,
+    "944": 3,
+    "945": 3,
+    "947": 3,
+    "948": 3,
+    "950": 3,
+    "1079": 3,
+    "1080": 3,
+    "1082": 3,
+    "1083": 3,
+    "1085": 3,
+    "1086": 3,
+    "1088": 3,
+    "1089": 3,
+    "1091": 3,
+    "1092": 3,
+    "1093": 3,
+    "1095": 3,
+    "1096": 3,
+    "1098": 3,
+    "1099": 3,
+    "1101": 3,
+    "1102": 3,
+    "1104": 3,
+    "1105": 3,
+    "1107": 3,
+    "1108": 3,
+    "1110": 3,
+    "1111": 3,
+    "1157": 3,
+    "1158": 3,
+    "1160": 3,
+    "1161": 3,
+    "1163": 3,
+    "1164": 3,
+    "1180": 3,
+    "1181": 3,
+    "1183": 3,
+    "1184": 3,
+    "1186": 3,
+    "1187": 3,
+    "1189": 3,
+    "1190": 3,
+    "1192": 3,
+    "1193": 3,
+    "1195": 3,
+    "1196": 3,
+    "1198": 3,
+    "1199": 3,
+    "1201": 3,
+    "1202": 3,
+    "1204": 3,
+    "1206": 3,
+    "1207": 3,
+    "1209": 3,
+    "1211": 3,
+    "1212": 3,
+    "1306": 3,
+    "1307": 3,
+    "1309": 3,
+    "1310": 3,
+    "1312": 3,
+    "1313": 3,
+    "1315": 3,
+    "1316": 3,
+    "1318": 3,
+    "1319": 3,
+    "1321": 3,
+    "1322": 3,
+    "1324": 3,
+    "1325": 3,
+    "1327": 3,
+    "1328": 3,
+    "1330": 3,
+    "1331": 3,
+    "1333": 3,
+    "1334": 3,
+    "1336": 3,
+    "1337": 3,
+    "1350": 3,
+    "1351": 3,
+    "1353": 3,
+    "1354": 3,
+    "1356": 3,
+    "1357": 3,
+    "1371": 3,
+    "1372": 3,
+    "1374": 3,
+    "1375": 3
+   },
+   "examples": [
+    {
+     "sid": 924,
+     "grade": 3,
+     "title": "INDICE DES PRIX A LA CONSOMMATION (IPC) AVRIL 2023"
+    },
+    {
+     "sid": 926,
+     "grade": 3,
+     "title": "Consumer Price Index (CPI) August 2023"
+    },
+    {
+     "sid": 927,
+     "grade": 3,
+     "title": "INDICE DES PRIX A LA CONSOMMATION (IPC) AOUT 2023"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 101
+   }
+  },
+  {
+   "id": "ctry-04",
+   "category": "topic+filter",
+   "query": "agriculture",
+   "filters": {
+    "countries": [
+     181
+    ]
+   },
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "agricultur*"
+     ],
+     "any": [],
+     "grade": 3,
+     "nation": "Rwanda"
+    },
+    {
+     "in": "text",
+     "all": [
+      "agricultur*"
+     ],
+     "any": [],
+     "grade": 1,
+     "nation": "Rwanda"
+    }
+   ],
+   "note": "nation=Rwanda: filter alone must exclude every other country; relevance limited to that nation",
+   "expect": null,
+   "relevant": {
+    "687": 3,
+    "787": 3,
+    "788": 3,
+    "789": 3,
+    "810": 3,
+    "811": 3,
+    "812": 3,
+    "822": 3,
+    "825": 3,
+    "835": 3,
+    "862": 3,
+    "875": 3,
+    "876": 3,
+    "877": 3,
+    "879": 3,
+    "891": 3,
+    "892": 3,
+    "918": 3,
+    "920": 3,
+    "921": 3,
+    "923": 3,
+    "1054": 3,
+    "1072": 3,
+    "1073": 3,
+    "1074": 3,
+    "1171": 3,
+    "1172": 3,
+    "1176": 3,
+    "1177": 3,
+    "1178": 3,
+    "1339": 3,
+    "1340": 3,
+    "1342": 3,
+    "1345": 3,
+    "1377": 3,
+    "1379": 3,
+    "1411": 3,
+    "1412": 3,
+    "1413": 3,
+    "1439": 3,
+    "1440": 3,
+    "1441": 3,
+    "1442": 3,
+    "1443": 3,
+    "1444": 3,
+    "1447": 3,
+    "1448": 3,
+    "1449": 3,
+    "1450": 3,
+    "1451": 3,
+    "1452": 3,
+    "1453": 3,
+    "434": 1,
+    "1383": 1,
+    "1384": 1,
+    "1385": 1,
+    "1386": 1,
+    "1387": 1,
+    "1388": 1,
+    "1389": 1,
+    "1390": 1,
+    "1391": 1,
+    "1392": 1,
+    "1393": 1,
+    "1394": 1,
+    "1396": 1,
+    "1399": 1,
+    "1400": 1,
+    "1401": 1,
+    "1402": 1,
+    "1403": 1,
+    "1404": 1,
+    "1405": 1,
+    "1406": 1,
+    "1408": 1,
+    "1428": 1,
+    "1431": 1,
+    "1432": 1,
+    "1433": 1,
+    "1434": 1
+   },
+   "examples": [
+    {
+     "sid": 687,
+     "grade": 3,
+     "title": "EICV3 THEMATIC REPORT Agriculture"
+    },
+    {
+     "sid": 787,
+     "grade": 3,
+     "title": "Seasonal Agriculture Survey Annual Report 2014"
+    },
+    {
+     "sid": 788,
+     "grade": 3,
+     "title": "Seasonal Agriculture Survey Season A 2015"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "1": 28,
+    "3": 52
+   }
+  },
+  {
+   "id": "ctry-05",
+   "category": "topic+filter",
+   "query": "handbook",
+   "filters": {
+    "countries": [
+     102
+    ]
+   },
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "handbook"
+     ],
+     "any": [],
+     "grade": 3,
+     "nation": "India"
+    }
+   ],
+   "note": "nation=India: filter alone must exclude every other country; relevance limited to that nation",
+   "expect": null,
+   "relevant": {
+    "36": 3,
+    "37": 3,
+    "38": 3,
+    "39": 3,
+    "40": 3,
+    "41": 3,
+    "42": 3,
+    "43": 3,
+    "44": 3,
+    "45": 3,
+    "46": 3,
+    "47": 3,
+    "48": 3,
+    "49": 3,
+    "50": 3,
+    "51": 3,
+    "52": 3,
+    "53": 3,
+    "54": 3,
+    "55": 3,
+    "56": 3,
+    "57": 3,
+    "58": 3,
+    "59": 3,
+    "60": 3,
+    "61": 3,
+    "62": 3,
+    "63": 3,
+    "64": 3,
+    "65": 3,
+    "66": 3,
+    "67": 3,
+    "68": 3,
+    "69": 3,
+    "70": 3,
+    "71": 3,
+    "72": 3,
+    "73": 3,
+    "74": 3,
+    "75": 3,
+    "76": 3,
+    "77": 3,
+    "78": 3,
+    "79": 3,
+    "80": 3,
+    "81": 3,
+    "82": 3,
+    "83": 3,
+    "84": 3,
+    "85": 3,
+    "86": 3,
+    "87": 3,
+    "88": 3,
+    "89": 3,
+    "90": 3,
+    "91": 3,
+    "92": 3,
+    "93": 3,
+    "94": 3,
+    "95": 3,
+    "96": 3,
+    "97": 3,
+    "98": 3,
+    "99": 3,
+    "100": 3,
+    "101": 3,
+    "102": 3,
+    "103": 3,
+    "104": 3,
+    "105": 3,
+    "106": 3,
+    "107": 3,
+    "108": 3,
+    "109": 3,
+    "110": 3,
+    "111": 3,
+    "112": 3,
+    "113": 3,
+    "114": 3,
+    "115": 3,
+    "116": 3,
+    "117": 3,
+    "118": 3,
+    "119": 3,
+    "120": 3,
+    "121": 3,
+    "122": 3,
+    "123": 3,
+    "124": 3,
+    "125": 3,
+    "126": 3,
+    "127": 3,
+    "128": 3,
+    "129": 3,
+    "130": 3,
+    "131": 3,
+    "132": 3,
+    "133": 3,
+    "134": 3,
+    "135": 3,
+    "136": 3,
+    "137": 3,
+    "138": 3,
+    "139": 3,
+    "140": 3,
+    "141": 3,
+    "142": 3,
+    "143": 3,
+    "144": 3,
+    "145": 3,
+    "146": 3,
+    "147": 3,
+    "148": 3,
+    "149": 3,
+    "150": 3,
+    "151": 3,
+    "152": 3,
+    "153": 3,
+    "154": 3,
+    "155": 3,
+    "156": 3,
+    "157": 3,
+    "158": 3,
+    "159": 3,
+    "160": 3,
+    "161": 3,
+    "162": 3,
+    "163": 3,
+    "164": 3,
+    "165": 3,
+    "166": 3,
+    "167": 3
+   },
+   "examples": [
+    {
+     "sid": 36,
+     "grade": 3,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII A - District Census Handbook,"
+    },
+    {
+     "sid": 37,
+     "grade": 3,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII B - District Census Handbook,"
+    },
+    {
+     "sid": 38,
+     "grade": 3,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII A - District Census Handbook,"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 132
+   }
+  },
+  {
+   "id": "typo-01",
+   "category": "typo",
+   "query": "povery",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "poverty"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "text",
+     "all": [
+      "poverty"
+     ],
+     "any": [],
+     "grade": 1
+    }
+   ],
+   "note": "one letter dropped",
+   "expect": null,
+   "relevant": {
+    "234": 3,
+    "241": 3,
+    "315": 3,
+    "349": 3,
+    "377": 3,
+    "408": 3,
+    "640": 3,
+    "644": 3,
+    "646": 3,
+    "651": 3,
+    "652": 3,
+    "685": 3,
+    "710": 3,
+    "749": 3,
+    "795": 3,
+    "799": 3,
+    "801": 3,
+    "846": 3,
+    "961": 3,
+    "1068": 3,
+    "1118": 3,
+    "1568": 3,
+    "8": 1,
+    "9": 1,
+    "232": 1,
+    "242": 1,
+    "264": 1,
+    "266": 1,
+    "278": 1,
+    "310": 1,
+    "324": 1,
+    "360": 1,
+    "383": 1,
+    "388": 1,
+    "413": 1,
+    "430": 1,
+    "431": 1,
+    "434": 1,
+    "500": 1,
+    "549": 1,
+    "551": 1,
+    "1388": 1,
+    "1389": 1,
+    "1392": 1,
+    "1393": 1,
+    "1394": 1,
+    "1398": 1,
+    "1399": 1,
+    "1400": 1,
+    "1401": 1,
+    "1402": 1,
+    "1403": 1,
+    "1404": 1,
+    "1405": 1,
+    "1406": 1,
+    "1409": 1,
+    "1421": 1,
+    "1424": 1,
+    "1437": 1,
+    "1439": 1,
+    "1440": 1,
+    "1441": 1,
+    "1442": 1,
+    "1443": 1,
+    "1444": 1,
+    "1454": 1,
+    "1456": 1,
+    "1460": 1
+   },
+   "examples": [
+    {
+     "sid": 234,
+     "grade": 3,
+     "title": "High Resolution Poverty Map (Geospatial Data), Angola, 2020"
+    },
+    {
+     "sid": 241,
+     "grade": 3,
+     "title": "High Resolution Poverty Map, Benin, 2020"
+    },
+    {
+     "sid": 315,
+     "grade": 3,
+     "title": "Differences in Household Composition - Hidden Dimensions of Poverty and Displacement in So"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "1": 46,
+    "3": 22
+   }
+  },
+  {
+   "id": "typo-02",
+   "category": "typo",
+   "query": "agricultre",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "agricultur*"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "one letter dropped",
+   "expect": null,
+   "relevant": {
+    "180": 3,
+    "223": 3,
+    "360": 3,
+    "413": 3,
+    "567": 3,
+    "687": 3,
+    "787": 3,
+    "788": 3,
+    "789": 3,
+    "810": 3,
+    "811": 3,
+    "812": 3,
+    "822": 3,
+    "825": 3,
+    "835": 3,
+    "862": 3,
+    "875": 3,
+    "876": 3,
+    "877": 3,
+    "879": 3,
+    "891": 3,
+    "892": 3,
+    "918": 3,
+    "920": 3,
+    "921": 3,
+    "923": 3,
+    "1054": 3,
+    "1072": 3,
+    "1073": 3,
+    "1074": 3,
+    "1171": 3,
+    "1172": 3,
+    "1176": 3,
+    "1177": 3,
+    "1178": 3,
+    "1339": 3,
+    "1340": 3,
+    "1342": 3,
+    "1345": 3,
+    "1377": 3,
+    "1379": 3,
+    "1411": 3,
+    "1412": 3,
+    "1413": 3,
+    "1439": 3,
+    "1440": 3,
+    "1441": 3,
+    "1442": 3,
+    "1443": 3,
+    "1444": 3,
+    "1447": 3,
+    "1448": 3,
+    "1449": 3,
+    "1450": 3,
+    "1451": 3,
+    "1452": 3,
+    "1453": 3,
+    "1463": 3,
+    "1464": 3,
+    "1477": 3,
+    "1567": 3
+   },
+   "examples": [
+    {
+     "sid": 180,
+     "grade": 3,
+     "title": "National Census of Agriculture 2013"
+    },
+    {
+     "sid": 223,
+     "grade": 3,
+     "title": "Agricultural machinery, tractors"
+    },
+    {
+     "sid": 360,
+     "grade": 3,
+     "title": "Cambodia Agriculture Survey 2020"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 61
+   }
+  },
+  {
+   "id": "typo-03",
+   "category": "typo",
+   "query": "labor force",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "labour",
+      "force"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "US spelling vs the catalog's British spelling",
+   "expect": null,
+   "relevant": {
+    "549": 3,
+    "746": 3,
+    "808": 3,
+    "809": 3,
+    "818": 3,
+    "819": 3,
+    "820": 3,
+    "831": 3,
+    "832": 3,
+    "833": 3,
+    "853": 3,
+    "854": 3,
+    "855": 3,
+    "856": 3,
+    "857": 3,
+    "858": 3,
+    "859": 3,
+    "870": 3,
+    "871": 3,
+    "872": 3,
+    "873": 3,
+    "874": 3,
+    "886": 3,
+    "887": 3,
+    "888": 3,
+    "889": 3,
+    "890": 3,
+    "910": 3,
+    "911": 3,
+    "912": 3,
+    "913": 3,
+    "914": 3,
+    "915": 3,
+    "916": 3,
+    "1018": 3,
+    "1019": 3,
+    "1020": 3,
+    "1021": 3,
+    "1022": 3,
+    "1141": 3,
+    "1142": 3,
+    "1143": 3,
+    "1144": 3,
+    "1147": 3,
+    "1148": 3,
+    "1150": 3,
+    "1152": 3,
+    "1153": 3,
+    "1154": 3,
+    "1293": 3,
+    "1295": 3,
+    "1296": 3,
+    "1298": 3,
+    "1299": 3,
+    "1300": 3,
+    "1302": 3,
+    "1368": 3,
+    "1370": 3,
+    "1426": 3,
+    "1427": 3,
+    "1428": 3,
+    "1429": 3,
+    "1430": 3,
+    "1431": 3,
+    "1432": 3,
+    "1433": 3
+   },
+   "examples": [
+    {
+     "sid": 549,
+     "grade": 3,
+     "title": "Labour Force Survey 2017, Global Labour Database Harmonized Dataset"
+    },
+    {
+     "sid": 746,
+     "grade": 3,
+     "title": "RPHC-4: Thematic Report: Labour Force Participation 2012"
+    },
+    {
+     "sid": 808,
+     "grade": 3,
+     "title": "Labour Force survey August 2016"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 66
+   }
+  },
+  {
+   "id": "typo-04",
+   "category": "typo",
+   "query": "unemploymnet",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "unemployment"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "labour",
+      "force"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "transposition",
+   "expect": null,
+   "relevant": {
+    "549": 2,
+    "746": 2,
+    "808": 2,
+    "809": 2,
+    "818": 2,
+    "819": 2,
+    "820": 2,
+    "831": 2,
+    "832": 2,
+    "833": 2,
+    "853": 2,
+    "854": 2,
+    "855": 2,
+    "856": 2,
+    "857": 2,
+    "858": 2,
+    "859": 2,
+    "870": 2,
+    "871": 2,
+    "872": 2,
+    "873": 2,
+    "874": 2,
+    "886": 2,
+    "887": 2,
+    "888": 2,
+    "889": 2,
+    "890": 2,
+    "910": 2,
+    "911": 2,
+    "912": 2,
+    "913": 2,
+    "914": 2,
+    "915": 2,
+    "916": 2,
+    "1018": 2,
+    "1019": 2,
+    "1020": 2,
+    "1021": 2,
+    "1022": 2,
+    "1141": 2,
+    "1142": 2,
+    "1143": 2,
+    "1144": 2,
+    "1147": 2,
+    "1148": 2,
+    "1150": 2,
+    "1152": 2,
+    "1153": 2,
+    "1154": 2,
+    "1293": 2,
+    "1295": 2,
+    "1296": 2,
+    "1298": 2,
+    "1299": 2,
+    "1300": 2,
+    "1302": 2,
+    "1368": 2,
+    "1370": 2,
+    "1426": 2,
+    "1427": 2,
+    "1428": 2,
+    "1429": 2,
+    "1430": 2,
+    "1431": 2,
+    "1432": 2,
+    "1433": 2
+   },
+   "examples": [
+    {
+     "sid": 549,
+     "grade": 2,
+     "title": "Labour Force Survey 2017, Global Labour Database Harmonized Dataset"
+    },
+    {
+     "sid": 746,
+     "grade": 2,
+     "title": "RPHC-4: Thematic Report: Labour Force Participation 2012"
+    },
+    {
+     "sid": 808,
+     "grade": 2,
+     "title": "Labour Force survey August 2016"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "2": 66
+   }
+  },
+  {
+   "id": "typo-05",
+   "category": "typo",
+   "query": "cencus india",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "census",
+      "india"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "typo + country",
+   "expect": null,
+   "relevant": {
+    "34": 3,
+    "36": 3,
+    "37": 3,
+    "38": 3,
+    "39": 3,
+    "40": 3,
+    "41": 3,
+    "42": 3,
+    "43": 3,
+    "44": 3,
+    "45": 3,
+    "46": 3,
+    "47": 3,
+    "48": 3,
+    "49": 3,
+    "50": 3,
+    "51": 3,
+    "52": 3,
+    "53": 3,
+    "54": 3,
+    "55": 3,
+    "56": 3,
+    "57": 3,
+    "58": 3,
+    "59": 3,
+    "60": 3,
+    "61": 3,
+    "62": 3,
+    "63": 3,
+    "64": 3,
+    "65": 3,
+    "66": 3,
+    "67": 3,
+    "68": 3,
+    "69": 3,
+    "70": 3,
+    "71": 3,
+    "72": 3,
+    "73": 3,
+    "74": 3,
+    "75": 3,
+    "76": 3,
+    "77": 3,
+    "78": 3,
+    "79": 3,
+    "80": 3,
+    "81": 3,
+    "82": 3,
+    "83": 3,
+    "84": 3,
+    "85": 3,
+    "86": 3,
+    "87": 3,
+    "88": 3,
+    "89": 3,
+    "90": 3,
+    "91": 3,
+    "92": 3,
+    "93": 3,
+    "94": 3,
+    "95": 3,
+    "96": 3,
+    "97": 3,
+    "98": 3,
+    "99": 3,
+    "100": 3,
+    "101": 3,
+    "102": 3,
+    "103": 3,
+    "104": 3,
+    "105": 3,
+    "106": 3,
+    "107": 3,
+    "108": 3,
+    "109": 3,
+    "110": 3,
+    "111": 3,
+    "112": 3,
+    "113": 3,
+    "114": 3,
+    "115": 3,
+    "116": 3,
+    "117": 3,
+    "118": 3,
+    "119": 3,
+    "120": 3,
+    "121": 3,
+    "122": 3,
+    "123": 3,
+    "124": 3,
+    "125": 3,
+    "126": 3,
+    "127": 3,
+    "128": 3,
+    "129": 3,
+    "130": 3,
+    "131": 3,
+    "132": 3,
+    "133": 3,
+    "134": 3,
+    "135": 3,
+    "136": 3,
+    "137": 3,
+    "138": 3,
+    "139": 3,
+    "140": 3,
+    "141": 3,
+    "142": 3,
+    "143": 3,
+    "144": 3,
+    "145": 3,
+    "146": 3,
+    "147": 3,
+    "148": 3,
+    "149": 3,
+    "150": 3,
+    "151": 3,
+    "152": 3,
+    "153": 3,
+    "154": 3,
+    "155": 3,
+    "156": 3,
+    "157": 3,
+    "158": 3,
+    "159": 3,
+    "160": 3,
+    "161": 3,
+    "162": 3,
+    "163": 3,
+    "164": 3,
+    "165": 3,
+    "166": 3,
+    "167": 3,
+    "205": 3,
+    "206": 3,
+    "207": 3
+   },
+   "examples": [
+    {
+     "sid": 34,
+     "grade": 3,
+     "title": "Census of India 2011 - Administrative Atlas - Andaman and Nicobar Islands"
+    },
+    {
+     "sid": 36,
+     "grade": 3,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII A - District Census Handbook,"
+    },
+    {
+     "sid": 37,
+     "grade": 3,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII B - District Census Handbook,"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 136
+   }
+  },
+  {
+   "id": "typo-06",
+   "category": "typo",
+   "query": "expenditue",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "expenditure"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "one letter dropped",
+   "expect": null,
+   "relevant": {
+    "228": 3,
+    "563": 3,
+    "564": 3,
+    "576": 3,
+    "580": 3,
+    "581": 3,
+    "582": 3,
+    "591": 3,
+    "592": 3,
+    "593": 3,
+    "604": 3,
+    "605": 3,
+    "606": 3,
+    "618": 3,
+    "619": 3,
+    "620": 3,
+    "1075": 3,
+    "1173": 3,
+    "1348": 3,
+    "1349": 3,
+    "1380": 3
+   },
+   "examples": [
+    {
+     "sid": 228,
+     "grade": 3,
+     "title": "Domestic Tourism Expenditure, July 2014 - June 2015, Round 72"
+    },
+    {
+     "sid": 563,
+     "grade": 3,
+     "title": "Total final consumption expenditure, Government (% of GDP)"
+    },
+    {
+     "sid": 564,
+     "grade": 3,
+     "title": "Total final consumption expenditure, Private (% of GDP)"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 21
+   }
+  },
+  {
+   "id": "fr-01",
+   "category": "multilingual",
+   "query": "indice des prix à la consommation",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "indice",
+      "prix"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "price",
+      "index"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "French query over a mixed catalog; semantic leg should bridge to English titles (grade 2)",
+   "expect": null,
+   "relevant": {
+    "924": 3,
+    "927": 3,
+    "931": 3,
+    "934": 3,
+    "939": 3,
+    "942": 3,
+    "945": 3,
+    "948": 3,
+    "950": 3,
+    "1080": 3,
+    "1083": 3,
+    "1086": 3,
+    "1089": 3,
+    "1093": 3,
+    "1096": 3,
+    "1099": 3,
+    "1102": 3,
+    "1105": 3,
+    "1108": 3,
+    "1111": 3,
+    "1158": 3,
+    "1161": 3,
+    "1164": 3,
+    "1181": 3,
+    "1184": 3,
+    "1187": 3,
+    "1190": 3,
+    "1193": 3,
+    "1196": 3,
+    "1199": 3,
+    "1202": 3,
+    "1204": 3,
+    "1207": 3,
+    "1209": 3,
+    "1212": 3,
+    "1307": 3,
+    "1310": 3,
+    "1313": 3,
+    "1316": 3,
+    "1319": 3,
+    "1322": 3,
+    "1325": 3,
+    "1328": 3,
+    "1331": 3,
+    "1334": 3,
+    "1337": 3,
+    "1351": 3,
+    "1354": 3,
+    "1357": 3,
+    "1372": 3,
+    "1375": 3,
+    "926": 2,
+    "929": 2,
+    "930": 2,
+    "933": 2,
+    "936": 2,
+    "938": 2,
+    "941": 2,
+    "944": 2,
+    "947": 2,
+    "1079": 2,
+    "1082": 2,
+    "1085": 2,
+    "1088": 2,
+    "1091": 2,
+    "1092": 2,
+    "1095": 2,
+    "1098": 2,
+    "1101": 2,
+    "1104": 2,
+    "1107": 2,
+    "1110": 2,
+    "1157": 2,
+    "1160": 2,
+    "1163": 2,
+    "1180": 2,
+    "1183": 2,
+    "1186": 2,
+    "1189": 2,
+    "1192": 2,
+    "1195": 2,
+    "1198": 2,
+    "1201": 2,
+    "1206": 2,
+    "1211": 2,
+    "1306": 2,
+    "1309": 2,
+    "1312": 2,
+    "1315": 2,
+    "1318": 2,
+    "1321": 2,
+    "1324": 2,
+    "1327": 2,
+    "1330": 2,
+    "1333": 2,
+    "1336": 2,
+    "1350": 2,
+    "1353": 2,
+    "1356": 2,
+    "1371": 2,
+    "1374": 2
+   },
+   "examples": [
+    {
+     "sid": 924,
+     "grade": 3,
+     "title": "INDICE DES PRIX A LA CONSOMMATION (IPC) AVRIL 2023"
+    },
+    {
+     "sid": 927,
+     "grade": 3,
+     "title": "INDICE DES PRIX A LA CONSOMMATION (IPC) AOUT 2023"
+    },
+    {
+     "sid": 931,
+     "grade": 3,
+     "title": "INDICE DES PRIX A LA CONSOMMATION (IPC) FEVRIER 2023"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 51,
+    "2": 50
+   }
+  },
+  {
+   "id": "fr-02",
+   "category": "multilingual",
+   "query": "recensement de la population",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "recensement"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "population",
+      "census"
+     ],
+     "any": [],
+     "grade": 2
+    },
+    {
+     "in": "title",
+     "all": [
+      "rphc*"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "French query over a mixed catalog; semantic leg should bridge to English titles (grade 2)",
+   "expect": null,
+   "relevant": {
+    "1381": 3,
+    "1382": 3,
+    "222": 2,
+    "262": 2,
+    "272": 2,
+    "450": 2,
+    "550": 2,
+    "639": 2,
+    "641": 2,
+    "642": 2,
+    "655": 2,
+    "656": 2,
+    "657": 2,
+    "658": 2,
+    "659": 2,
+    "660": 2,
+    "661": 2,
+    "662": 2,
+    "663": 2,
+    "664": 2,
+    "665": 2,
+    "666": 2,
+    "667": 2,
+    "668": 2,
+    "669": 2,
+    "670": 2,
+    "671": 2,
+    "672": 2,
+    "673": 2,
+    "674": 2,
+    "675": 2,
+    "676": 2,
+    "732": 2,
+    "733": 2,
+    "734": 2,
+    "735": 2,
+    "736": 2,
+    "737": 2,
+    "738": 2,
+    "739": 2,
+    "740": 2,
+    "741": 2,
+    "742": 2,
+    "743": 2,
+    "744": 2,
+    "745": 2,
+    "746": 2,
+    "747": 2,
+    "748": 2,
+    "749": 2,
+    "750": 2,
+    "751": 2,
+    "752": 2,
+    "753": 2,
+    "755": 2,
+    "756": 2,
+    "760": 2,
+    "761": 2,
+    "762": 2,
+    "763": 2,
+    "764": 2,
+    "765": 2,
+    "766": 2,
+    "767": 2,
+    "768": 2,
+    "769": 2,
+    "770": 2,
+    "771": 2,
+    "772": 2,
+    "773": 2,
+    "774": 2,
+    "775": 2,
+    "776": 2,
+    "777": 2,
+    "778": 2,
+    "779": 2,
+    "780": 2,
+    "781": 2,
+    "782": 2,
+    "783": 2,
+    "784": 2,
+    "785": 2,
+    "786": 2,
+    "917": 2,
+    "1023": 2,
+    "1024": 2,
+    "1025": 2,
+    "1026": 2,
+    "1027": 2,
+    "1028": 2,
+    "1029": 2,
+    "1030": 2,
+    "1031": 2,
+    "1032": 2,
+    "1033": 2,
+    "1034": 2,
+    "1035": 2,
+    "1036": 2,
+    "1037": 2,
+    "1038": 2,
+    "1039": 2,
+    "1040": 2,
+    "1041": 2,
+    "1042": 2,
+    "1043": 2,
+    "1044": 2,
+    "1045": 2,
+    "1046": 2,
+    "1047": 2,
+    "1048": 2,
+    "1049": 2,
+    "1050": 2,
+    "1051": 2,
+    "1052": 2,
+    "1053": 2,
+    "1054": 2,
+    "1055": 2,
+    "1056": 2,
+    "1057": 2,
+    "1058": 2,
+    "1059": 2,
+    "1060": 2,
+    "1061": 2,
+    "1062": 2,
+    "1063": 2,
+    "1064": 2,
+    "1065": 2,
+    "1066": 2,
+    "1067": 2,
+    "1068": 2,
+    "1069": 2,
+    "1070": 2,
+    "1071": 2,
+    "1166": 2,
+    "1167": 2,
+    "1168": 2,
+    "1387": 2,
+    "1437": 2,
+    "1438": 2
+   },
+   "examples": [
+    {
+     "sid": 1381,
+     "grade": 3,
+     "title": "Recensement Général de la Population et de l'Habitat 1978"
+    },
+    {
+     "sid": 1382,
+     "grade": 3,
+     "title": "Recensement Général de la Population et de l'Habitat 1991"
+    },
+    {
+     "sid": 222,
+     "grade": 2,
+     "title": "Population and Housing Census 2011 - IPUMS Subset"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "2": 137,
+    "3": 2
+   }
+  },
+  {
+   "id": "fr-03",
+   "category": "multilingual",
+   "query": "enquête sur les conditions de vie des ménages",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "enquete",
+      "conditions"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "living",
+      "conditions",
+      "survey"
+     ],
+     "any": [],
+     "grade": 2
+    }
+   ],
+   "note": "French query over a mixed catalog; semantic leg should bridge to English titles (grade 2)",
+   "expect": null,
+   "relevant": {
+    "638": 3,
+    "647": 3,
+    "646": 2,
+    "684": 2,
+    "709": 2,
+    "711": 2,
+    "712": 2,
+    "713": 2,
+    "714": 2,
+    "715": 2,
+    "716": 2,
+    "717": 2,
+    "794": 2,
+    "795": 2,
+    "796": 2,
+    "797": 2,
+    "798": 2,
+    "799": 2,
+    "800": 2,
+    "801": 2,
+    "802": 2,
+    "803": 2,
+    "804": 2,
+    "953": 2,
+    "955": 2,
+    "956": 2,
+    "958": 2,
+    "959": 2,
+    "960": 2,
+    "961": 2,
+    "962": 2,
+    "963": 2,
+    "964": 2,
+    "965": 2,
+    "1394": 2,
+    "1399": 2,
+    "1400": 2,
+    "1401": 2,
+    "1402": 2,
+    "1403": 2,
+    "1404": 2,
+    "1405": 2,
+    "1406": 2,
+    "1407": 2
+   },
+   "examples": [
+    {
+     "sid": 638,
+     "grade": 3,
+     "title": "Rapport Final ENQUETE INTEGRALE SUR LES CONDITIONS DE VIE DES MENAGES AU RWANDA (2000  20"
+    },
+    {
+     "sid": 647,
+     "grade": 3,
+     "title": "Enquête Intégrale sur les Conditions de Vie des Ménages 2005-2006"
+    },
+    {
+     "sid": 646,
+     "grade": 2,
+     "title": "PRELIMINARY POVERTY UPDATE REPORT INTEGRATED LIVING CONDITIONS SURVEY 2005/06"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 2,
+    "2": 42
+   }
+  },
+  {
+   "id": "fr-04",
+   "category": "multilingual",
+   "query": "productivité agricole",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "productivite",
+      "agricole"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "French query over a mixed catalog; semantic leg should bridge to English titles (grade 2)",
+   "expect": null,
+   "relevant": {
+    "185": 3,
+    "218": 3,
+    "219": 3
+   },
+   "examples": [
+    {
+     "sid": 185,
+     "grade": 3,
+     "title": "World Bank, GEMS program, Project : P114236 - Projet d’Amélioration de la Productivité Agr"
+    },
+    {
+     "sid": 218,
+     "grade": 3,
+     "title": "World Bank, GEMS program, Project : P114236 - Projet d’Amélioration de la Productivité Agr"
+    },
+    {
+     "sid": 219,
+     "grade": 3,
+     "title": "World Bank, GEMS program, Project : P114236 - Projet d’Amélioration de la Productivité Agr"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 3
+   }
+  },
+  {
+   "id": "year-01",
+   "category": "year",
+   "query": "census 2011",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "census",
+      "2011"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "year is a token in titles; checks exact year outranks near years",
+   "expect": null,
+   "relevant": {
+    "34": 3,
+    "35": 3,
+    "36": 3,
+    "37": 3,
+    "38": 3,
+    "39": 3,
+    "40": 3,
+    "41": 3,
+    "42": 3,
+    "43": 3,
+    "44": 3,
+    "45": 3,
+    "46": 3,
+    "47": 3,
+    "48": 3,
+    "49": 3,
+    "50": 3,
+    "51": 3,
+    "52": 3,
+    "53": 3,
+    "54": 3,
+    "55": 3,
+    "56": 3,
+    "57": 3,
+    "58": 3,
+    "59": 3,
+    "60": 3,
+    "61": 3,
+    "62": 3,
+    "63": 3,
+    "64": 3,
+    "65": 3,
+    "66": 3,
+    "67": 3,
+    "68": 3,
+    "69": 3,
+    "70": 3,
+    "71": 3,
+    "72": 3,
+    "73": 3,
+    "74": 3,
+    "75": 3,
+    "76": 3,
+    "77": 3,
+    "78": 3,
+    "79": 3,
+    "80": 3,
+    "81": 3,
+    "82": 3,
+    "83": 3,
+    "84": 3,
+    "85": 3,
+    "86": 3,
+    "87": 3,
+    "88": 3,
+    "89": 3,
+    "90": 3,
+    "91": 3,
+    "92": 3,
+    "93": 3,
+    "94": 3,
+    "95": 3,
+    "96": 3,
+    "97": 3,
+    "98": 3,
+    "99": 3,
+    "100": 3,
+    "101": 3,
+    "102": 3,
+    "103": 3,
+    "104": 3,
+    "105": 3,
+    "106": 3,
+    "107": 3,
+    "108": 3,
+    "109": 3,
+    "110": 3,
+    "111": 3,
+    "112": 3,
+    "113": 3,
+    "114": 3,
+    "115": 3,
+    "116": 3,
+    "117": 3,
+    "118": 3,
+    "119": 3,
+    "120": 3,
+    "121": 3,
+    "122": 3,
+    "123": 3,
+    "124": 3,
+    "125": 3,
+    "126": 3,
+    "127": 3,
+    "128": 3,
+    "129": 3,
+    "130": 3,
+    "131": 3,
+    "132": 3,
+    "133": 3,
+    "134": 3,
+    "135": 3,
+    "136": 3,
+    "137": 3,
+    "138": 3,
+    "139": 3,
+    "140": 3,
+    "141": 3,
+    "142": 3,
+    "143": 3,
+    "144": 3,
+    "145": 3,
+    "146": 3,
+    "147": 3,
+    "148": 3,
+    "149": 3,
+    "150": 3,
+    "151": 3,
+    "152": 3,
+    "153": 3,
+    "154": 3,
+    "155": 3,
+    "156": 3,
+    "157": 3,
+    "158": 3,
+    "159": 3,
+    "160": 3,
+    "161": 3,
+    "162": 3,
+    "163": 3,
+    "164": 3,
+    "165": 3,
+    "166": 3,
+    "167": 3,
+    "205": 3,
+    "206": 3,
+    "207": 3,
+    "222": 3,
+    "1416": 3
+   },
+   "examples": [
+    {
+     "sid": 34,
+     "grade": 3,
+     "title": "Census of India 2011 - Administrative Atlas - Andaman and Nicobar Islands"
+    },
+    {
+     "sid": 35,
+     "grade": 3,
+     "title": "Census 2011 - Concepts & Definitions Used in Town and Village Amenities"
+    },
+    {
+     "sid": 36,
+     "grade": 3,
+     "title": "Census of India 2011 - Andhra Pradesh - Series 29 - Part XII A - District Census Handbook,"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 139
+   }
+  },
+  {
+   "id": "year-02",
+   "category": "year",
+   "query": "labour force survey 2022",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "labour",
+      "force",
+      "survey",
+      "2022"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "labour",
+      "force",
+      "survey"
+     ],
+     "any": [],
+     "grade": 1
+    }
+   ],
+   "note": "year is a token in titles; checks exact year outranks near years",
+   "expect": null,
+   "relevant": {
+    "910": 3,
+    "911": 3,
+    "912": 3,
+    "913": 3,
+    "914": 3,
+    "915": 3,
+    "916": 3,
+    "549": 1,
+    "808": 1,
+    "809": 1,
+    "818": 1,
+    "819": 1,
+    "820": 1,
+    "831": 1,
+    "832": 1,
+    "833": 1,
+    "853": 1,
+    "854": 1,
+    "855": 1,
+    "856": 1,
+    "857": 1,
+    "858": 1,
+    "859": 1,
+    "870": 1,
+    "871": 1,
+    "872": 1,
+    "873": 1,
+    "874": 1,
+    "886": 1,
+    "887": 1,
+    "888": 1,
+    "889": 1,
+    "890": 1,
+    "1018": 1,
+    "1019": 1,
+    "1020": 1,
+    "1021": 1,
+    "1022": 1,
+    "1141": 1,
+    "1142": 1,
+    "1143": 1,
+    "1144": 1,
+    "1147": 1,
+    "1148": 1,
+    "1150": 1,
+    "1153": 1,
+    "1154": 1,
+    "1293": 1,
+    "1296": 1,
+    "1298": 1,
+    "1299": 1,
+    "1300": 1,
+    "1302": 1,
+    "1368": 1,
+    "1370": 1,
+    "1426": 1,
+    "1427": 1,
+    "1428": 1
+   },
+   "examples": [
+    {
+     "sid": 910,
+     "grade": 3,
+     "title": "Labour Force Survey Annual Report 2022"
+    },
+    {
+     "sid": 911,
+     "grade": 3,
+     "title": "Labour Force Survey Trends February 2022 (Q1)"
+    },
+    {
+     "sid": 912,
+     "grade": 3,
+     "title": "Labour Force Survey Trends May 2022 (Q2)"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "1": 51,
+    "3": 7
+   }
+  },
+  {
+   "id": "year-03",
+   "category": "year",
+   "query": "gender statistics profile 2013",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "gender",
+      "statistics",
+      "profile",
+      "2013"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "gender",
+      "statistics",
+      "profile"
+     ],
+     "any": [],
+     "grade": 1
+    }
+   ],
+   "note": "year is a token in titles; checks exact year outranks near years",
+   "expect": null,
+   "relevant": {
+    "705": 3,
+    "706": 3,
+    "707": 3,
+    "708": 3,
+    "719": 3,
+    "720": 3,
+    "721": 3,
+    "722": 3,
+    "725": 3,
+    "983": 1,
+    "984": 1,
+    "985": 1,
+    "986": 1,
+    "987": 1,
+    "988": 1,
+    "989": 1,
+    "990": 1,
+    "991": 1,
+    "992": 1,
+    "993": 1,
+    "994": 1,
+    "995": 1,
+    "996": 1,
+    "997": 1,
+    "998": 1,
+    "999": 1,
+    "1000": 1,
+    "1001": 1,
+    "1002": 1,
+    "1003": 1,
+    "1004": 1,
+    "1005": 1,
+    "1006": 1,
+    "1007": 1,
+    "1008": 1,
+    "1009": 1,
+    "1010": 1,
+    "1011": 1,
+    "1239": 1,
+    "1240": 1,
+    "1241": 1,
+    "1242": 1,
+    "1243": 1,
+    "1244": 1,
+    "1245": 1,
+    "1246": 1,
+    "1247": 1,
+    "1248": 1,
+    "1249": 1,
+    "1250": 1,
+    "1251": 1,
+    "1252": 1,
+    "1253": 1,
+    "1254": 1,
+    "1255": 1,
+    "1256": 1,
+    "1257": 1,
+    "1258": 1,
+    "1259": 1,
+    "1260": 1,
+    "1261": 1,
+    "1262": 1,
+    "1263": 1,
+    "1264": 1,
+    "1265": 1,
+    "1266": 1,
+    "1267": 1,
+    "1268": 1
+   },
+   "examples": [
+    {
+     "sid": 705,
+     "grade": 3,
+     "title": "Gender Statistics Profile Report - Kigali City 2013 (March 2013)"
+    },
+    {
+     "sid": 706,
+     "grade": 3,
+     "title": "Gender Statistics Profile Report - Northern Province 2013 (March 2013)"
+    },
+    {
+     "sid": 707,
+     "grade": 3,
+     "title": "Gender Statistics Profile Report - Southern Province 2013 (March 2013)"
+    }
+   ],
+   "broad": true,
+   "counts": {
+    "3": 9,
+    "1": 59
+   }
+  },
+  {
+   "id": "year-04",
+   "category": "year",
+   "query": "Multiple Indicator Cluster Survey 2022",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "multiple",
+      "indicator",
+      "cluster",
+      "2022"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "multiple",
+      "indicator",
+      "cluster"
+     ],
+     "any": [],
+     "grade": 1
+    }
+   ],
+   "note": "year is a token in titles; checks exact year outranks near years",
+   "expect": null,
+   "relevant": {
+    "552": 3,
+    "277": 1,
+    "304": 1,
+    "306": 1,
+    "433": 1
+   },
+   "examples": [
+    {
+     "sid": 552,
+     "grade": 3,
+     "title": "Multiple Indicator Cluster Survey 2022-2023"
+    },
+    {
+     "sid": 277,
+     "grade": 1,
+     "title": "Multiple Indicator Cluster Survey 2006"
+    },
+    {
+     "sid": 304,
+     "grade": 1,
+     "title": "Multiple Indicator Cluster Survey 2009, Round 3"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "1": 4,
+    "3": 1
+   }
+  },
+  {
+   "id": "doc-01",
+   "category": "document",
+   "query": "environment and natural resources household survey thematic report",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "integrated",
+      "household",
+      "thematic",
+      "environment"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "title-derived stand-in; passage-level expectations (page numbers) need the reviewer and the indexed full text",
+   "expect": null,
+   "relevant": {
+    "714": 3,
+    "800": 3
+   },
+   "examples": [
+    {
+     "sid": 714,
+     "grade": 3,
+     "title": "Integrated Household Living Conditions Survey Thematic report  Environment and natural res"
+    },
+    {
+     "sid": 800,
+     "grade": 3,
+     "title": "Integrated Household Living Conditions Survey EICV5_Thematic report  Environment and natur"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 2
+   }
+  },
+  {
+   "id": "doc-02",
+   "category": "document",
+   "query": "industrial production index monthly report",
+   "filters": {},
+   "rule": [
+    {
+     "in": "title",
+     "all": [
+      "industrial",
+      "production"
+     ],
+     "any": [],
+     "grade": 3
+    },
+    {
+     "in": "title",
+     "all": [
+      "iip*"
+     ],
+     "any": [],
+     "grade": 3
+    }
+   ],
+   "note": "title-derived stand-in; passage-level expectations (page numbers) need the reviewer and the indexed full text",
+   "expect": null,
+   "relevant": {
+    "1276": 3,
+    "1277": 3,
+    "1278": 3,
+    "1279": 3,
+    "1280": 3,
+    "1281": 3,
+    "1282": 3,
+    "1283": 3,
+    "1284": 3,
+    "1285": 3,
+    "1286": 3,
+    "1287": 3,
+    "1364": 3,
+    "1365": 3,
+    "1366": 3,
+    "1367": 3
+   },
+   "examples": [
+    {
+     "sid": 1276,
+     "grade": 3,
+     "title": "Index of Industrial Production 2025 – April, PDF"
+    },
+    {
+     "sid": 1277,
+     "grade": 3,
+     "title": "Index of Industrial Production 2025 – August, PDF"
+    },
+    {
+     "sid": 1278,
+     "grade": 3,
+     "title": "Index of Industrial Production 2025 – December, PDF"
+    }
+   ],
+   "broad": false,
+   "counts": {
+    "3": 16
+   }
+  },
+  {
+   "id": "neg-01",
+   "category": "negative",
+   "query": "asdkjh qwpoiu zxcmnb",
+   "filters": {},
+   "rule": [],
+   "note": "gibberish",
+   "expect": "empty",
+   "relevant": {},
+   "examples": [],
+   "broad": false,
+   "counts": {}
+  },
+  {
+   "id": "neg-02",
+   "category": "negative",
+   "query": "chocolate cake recipe",
+   "filters": {},
+   "rule": [],
+   "note": "out of domain",
+   "expect": "empty",
+   "relevant": {},
+   "examples": [],
+   "broad": false,
+   "counts": {}
+  },
+  {
+   "id": "neg-03",
+   "category": "negative",
+   "query": "quantum computing hardware",
+   "filters": {},
+   "rule": [],
+   "note": "out of domain",
+   "expect": "empty",
+   "relevant": {},
+   "examples": [],
+   "broad": false,
+   "counts": {}
+  },
+  {
+   "id": "neg-04",
+   "category": "negative",
+   "query": "bitcoin price prediction",
+   "filters": {},
+   "rule": [],
+   "note": "shares the word price with the catalog; a lexical match on 'price' is a false positive",
+   "expect": "empty",
+   "relevant": {},
+   "examples": [],
+   "broad": false,
+   "counts": {}
+  },
+  {
+   "id": "neg-05",
+   "category": "negative",
+   "query": "Kubernetes cluster autoscaling",
+   "filters": {},
+   "rule": [],
+   "note": "out of domain, technical",
+   "expect": "empty",
+   "relevant": {},
+   "examples": [],
+   "broad": false,
+   "counts": {}
+  }
+ ]
+}

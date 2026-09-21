@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "index_not_ready",
+    "message": "The search index is empty or is being rebuilt",
+    "details": {
+      "index": "nada-metadata"
+    }
+  }
+}

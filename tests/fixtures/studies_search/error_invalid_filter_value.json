@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "invalid_filter_value",
+    "message": "year_from must be less than or equal to year_to",
+    "details": {
+      "filter": "year_from"
+    }
+  }
+}

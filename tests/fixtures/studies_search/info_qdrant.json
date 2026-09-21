@@ -1,0 +1,25 @@
+{
+  "engine": "qdrant",
+  "engine_version": "1.18.0",
+  "capabilities": {
+    "studies_search": false,
+    "lexical": false,
+    "semantic": false,
+    "hybrid": false,
+    "browse": false,
+    "facets": false,
+    "variables_search": false,
+    "citations_search": false
+  },
+  "id_key": "sid",
+  "filters": [],
+  "sort_fields": [],
+  "limits": null,
+  "index": {
+    "name": "nada-metadata",
+    "generation": null,
+    "studies": null,
+    "embedding_model": "microsoft/harrier-oss-v1-270m",
+    "embedding_dim": 640
+  }
+}

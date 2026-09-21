@@ -1,0 +1,54 @@
+{
+  "query": null,
+  "mode": "auto",
+  "filters": {
+    "types": [
+      "survey"
+    ],
+    "countries": [
+      16,
+      191
+    ],
+    "year_from": 2000,
+    "year_to": 2020,
+    "repository": "demo",
+    "collections": [
+      "demo",
+      "test2"
+    ],
+    "form_ids": [
+      1,
+      2
+    ],
+    "data_class_ids": [
+      1
+    ],
+    "tags": [
+      "poverty"
+    ],
+    "facets": {
+      "authentity": [
+        565,
+        566
+      ],
+      "funding": [
+        567
+      ]
+    },
+    "sids": [
+      2,
+      3,
+      4
+    ],
+    "created_from": 1700000000,
+    "created_to": 1800000000
+  },
+  "sort": {
+    "by": "title",
+    "order": "asc"
+  },
+  "limit": 50,
+  "offset": 100,
+  "include_facets": false,
+  "include_debug": false
+}

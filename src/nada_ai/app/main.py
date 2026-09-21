@@ -14,6 +14,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, Response
 from opensearchpy.exceptions import NotFoundError, RequestError
 
@@ -23,6 +24,7 @@ from nada_ai.app.audit_admin import audit_router
 from nada_ai.app.auth import require_role, resolve_principal
 from nada_ai.app.catalog_admin import catalog_router
 from nada_ai.app.facets_admin import facets_router
+from nada_ai.app.info import info_router
 from nada_ai.app.keys_admin import keys_router
 from nada_ai.app.keys_store import Role
 from nada_ai.app.logging_setup import configure_logging
@@ -41,6 +43,8 @@ from nada_ai.app.schemas import (
     coerce_search_facets,
 )
 from nada_ai.app.state import AppState, ensure_embedding_initialized, get_state, state
+from nada_ai.app.studies_errors import StudiesApiError, studies_error_handler
+from nada_ai.app.studies_search import studies_router, studies_validation_handler
 from nada_ai.mcp_server import mcp
 from nada_ai.search.backend.opensearch.client import build_async_client
 from nada_ai.search.dynamic_filters import load_dynamic_facet_keys
@@ -115,6 +119,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="NADA AI Search", version=__version__, lifespan=lifespan)
+app.add_exception_handler(StudiesApiError, studies_error_handler)
+app.add_exception_handler(RequestValidationError, studies_validation_handler)
+app.include_router(info_router)
+app.include_router(studies_router)
 app.include_router(admin_router)
 app.include_router(jobs_router)
 app.include_router(catalog_router)
