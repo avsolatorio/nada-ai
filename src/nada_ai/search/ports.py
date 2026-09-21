@@ -25,6 +25,8 @@ class SearchParams:
     facet_fields: list[str] | None
     use_idno_fast_path: bool
     vector_score_threshold: float | None = None
+    #: False skips the count behind ``total`` (vector and hybrid modes); callers that never read it save the scan.
+    include_total: bool = True
 
 
 @dataclass(kw_only=True)

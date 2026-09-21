@@ -303,8 +303,12 @@ class QdrantSearchBackend:
         query_vector: list[float],
         base_fl: qm.Filter | None,
         score_threshold: float | None,
+        *,
+        include_total: bool = True,
     ) -> tuple[int, str, bool]:
-        """Return (total, total_basis, capped_similarity_count)."""
+        """Return (total, total_basis, capped_similarity_count); ``include_total=False`` skips the counting."""
+        if not include_total:
+            return 0, "not_computed", False
         if score_threshold is None:
             n = await self._count_points(coll, base_fl)
             return n, "metadata_filters_only", False
@@ -634,7 +638,7 @@ class QdrantSearchBackend:
             gsize = inner_size
             group_limit = params.from_ + params.size
             (total, total_basis, capped_sim), groups_resp = await asyncio.gather(
-                self._vector_total_for_response(coll, params.query_vector, base_fl, thr),
+                self._vector_total_for_response(coll, params.query_vector, base_fl, thr, include_total=params.include_total),
                 self._client.query_points_groups(
                     collection_name=coll,
                     group_by=stored_filter_field_name(params.collapse_field),
@@ -683,7 +687,7 @@ class QdrantSearchBackend:
 
         off = params.from_
         (total, total_basis, capped_sim), resp = await asyncio.gather(
-            self._vector_total_for_response(coll, params.query_vector, base_fl, thr),
+            self._vector_total_for_response(coll, params.query_vector, base_fl, thr, include_total=params.include_total),
             self._client.query_points(
                 collection_name=coll,
                 query=q,
@@ -824,7 +828,7 @@ class QdrantSearchBackend:
                 scroll_filter=kw_flt,
             )
         (total, total_basis, capped_sim), vec_resp, text_ids = await asyncio.gather(
-            self._vector_total_for_response(coll, params.query_vector, base_fl, thr),
+            self._vector_total_for_response(coll, params.query_vector, base_fl, thr, include_total=params.include_total),
             self._client.query_points(
                 collection_name=coll,
                 query=qm.NearestQuery(nearest=params.query_vector),
