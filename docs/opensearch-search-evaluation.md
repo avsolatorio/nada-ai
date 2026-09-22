@@ -267,3 +267,27 @@ single alphanumeric-with-separators token (so it never re-fragments an idno).
 alias on every other engine remains unfindable here; that still needs a database-side lookup if it is wanted, the way
 `qdrant_db`'s driver already does it.
 
+## Update: a title naming every query word is promoted ahead of the fused order
+
+Hybrid's rank fusion only counts a study's position in each leg, not how decisive a match is. `high resolution
+angola` found study 234 ("High Resolution Poverty Map (Geospatial Data), Angola, 2020" — every query word is in the
+title) ranked 5th: four studies the semantic leg also happened to return outranked it, each counted equally by RRF
+regardless of how weak their own relevance was.
+
+**Alternatives tried and rejected** (measured on the golden queries): weighting the keyword leg higher (1.5-2x) did
+not move study 234 at all, and cost the paraphrase category (0.54 -> 0.39). A margin-based guard ("keep the keyword
+leg's top result first when it leads the runner-up by 20%") worked for this case (nDCG 0.857) but fired on 22 of 67
+queries and depends on OpenSearch's raw scores, which shift with any boost or phrase-bonus tuning.
+
+**What shipped**: `_title_is_complete_match()` checks, for each of the keyword leg's own candidates (already
+fetched for fusion, so no extra request), whether every real word of the query (stopwords aside) appears somewhere
+in that study's title. Any that qualify are moved to the front of the fused list, in their keyword rank order;
+everything else keeps the normal fused order behind them. It depends only on the words themselves, not on scores, so
+it is unaffected by later boost or weight tuning. Only the relevance-sort path is affected; another sort's union
+query and plain `lexical` mode are untouched (`lexical` already ranked study 234 first on its own: a title match
+scores far above anything else, boost 40 plus the phrase bonus).
+
+Measured: hybrid nDCG@10 0.852 -> 0.869, MRR 0.919 -> 0.927, p@10 0.665 -> 0.669; recall and the negative-query pass
+rate unchanged. `matched_by` is unaffected (a promoted study keeps whatever it already had, `["lexical"]` or both);
+this is a pure reordering, not a new kind of match.
+

@@ -18,6 +18,7 @@ counts. Filters are the flat ``filter_facets.<key>`` fields written at ingest on
 from __future__ import annotations
 
 import asyncio
+import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -353,7 +354,7 @@ def keyword_body(
         "from": offset,
         "size": limit,
         "track_total_hits": True,
-        "_source": ["sid", "idno", f"{FILTER_FACETS_KEY}.dataset_type"],
+        "_source": ["sid", "idno", "title", f"{FILTER_FACETS_KEY}.dataset_type"],
         "query": query,
         "sort": sort,
         "aggs": _type_aggregation(),
@@ -361,6 +362,40 @@ def keyword_body(
     if (post := types_post_filter(filters)) is not None:
         body["post_filter"] = post
     return body
+
+
+#: Stopwords the title-completeness check below ignores when reading what a query asks for (NADA's own English
+#: stopword list, application/config/noise_words.php): a query word does not have to appear in a title if nothing
+#: would have made that word searchable in the database's own search either.
+_QUERY_STOPWORDS = frozenset(
+    """
+    a able about across after all almost also am among an and any are as at be because been but by can cannot
+    could dear did do does either else ever every for from get got had has have he her hers him his how however
+    i if in into is it its just least let like likely may me might most must my neither no nor not of off often
+    on only or other our own rather said say says she should since so some than that the their them then there
+    these they this tis to too twas us wants was we were what when where which while who whom why will with
+    would yet you your
+    """.split()
+)
+
+_WORD = re.compile(r"[^\W\d_]+|\d+", re.UNICODE)
+
+
+def _title_words(text: str) -> set[str]:
+    """The words of a title or query, lowercased (no stemming, no accent folding -- good enough for a set-membership
+    check; the analyzed index fields do the real matching)."""
+    return set(_WORD.findall(text.casefold()))
+
+
+def _title_is_complete_match(query: str, title: str) -> bool:
+    """Whether every real word of ``query`` (stopwords aside) appears somewhere in ``title``, in any order.
+
+    Used to keep a study whose title plainly says what was searched from being outranked, in hybrid mode, by
+    studies the fusion happens to rank higher (see ``hybrid``): rank fusion only counts position, not how decisive
+    a keyword match is, so a title that names every word of the query is a stronger signal than a fused rank.
+    """
+    needed = _title_words(query) - _QUERY_STOPWORDS
+    return bool(needed) and needed <= _title_words(title)
 
 
 def _dataset_type(hit: dict[str, Any]) -> str:
@@ -643,6 +678,16 @@ async def hybrid(job: SearchJob) -> StudyPage:
     )
     keyword_head = [_keyword_ranked(h) for h in head_response["hits"]["hits"]]
     fused = rrf_fuse(keyword_head, block)
+
+    # A study whose title names every word of the query is put first, ahead of the fused order: rank fusion only
+    # counts position, and a related study the semantic leg also found can otherwise outrank a study that plainly
+    # is the answer (a title match on all 3 words beat only 1 of the 4 studies above it in the fused order).
+    titles = {int(h["_source"]["sid"]): h["_source"].get("title", "") for h in head_response["hits"]["hits"]}
+    complete = [r for r in fused if _title_is_complete_match(job.query, titles.get(r.sid, ""))]
+    if complete:
+        complete_ids = {r.sid for r in complete}
+        fused = complete + [r for r in fused if r.sid not in complete_ids]
+
     shown = [r for r in fused if not types or (r.dataset_type or "unknown") in types]
     descending = job.sort_order is SortOrder.desc
 
