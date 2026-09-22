@@ -145,7 +145,11 @@ def studies_index_body() -> dict[str, Any]:
     facets_mapping, templates = filter_facets_mapping()
     properties: dict[str, Any] = {
         "sid": {"type": "integer"},
-        "idno": {"type": "keyword", "fields": {"text": {"type": "text", "analyzer": "nada_text"}}},
+        "idno": {
+            "type": "keyword",
+            "normalizer": "nada_sort",
+            "fields": {"text": {"type": "text", "analyzer": "nada_text"}},
+        },
         **{field: {"type": "text", "analyzer": "nada_text"} for field in STUDY_TEXT_FIELDS},
         "title_sort": {"type": "keyword", "normalizer": "nada_sort"},
         "nation_sort": {"type": "keyword", "normalizer": "nada_sort"},
@@ -165,7 +169,11 @@ def studies_index_body() -> dict[str, Any]:
                 "number_of_replicas": 0,
                 "analysis": {
                     "analyzer": {
-                        "nada_text": {"type": "custom", "tokenizer": "standard", "filter": ["lowercase", "asciifolding"]}
+                        "nada_text": {
+                            "type": "custom",
+                            "tokenizer": "standard",
+                            "filter": ["lowercase", "asciifolding"],
+                        }
                     },
                     "normalizer": {"nada_sort": {"type": "custom", "filter": ["lowercase", "asciifolding"]}},
                 },

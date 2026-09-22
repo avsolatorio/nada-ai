@@ -26,8 +26,11 @@ from nada_ai.search.backend.opensearch.mapping import studies_index_body
 from nada_ai.search.backend.opensearch.studies_search import (
     EXECUTORS,
     LEXICAL_FIELDS,
+    PHRASE_BOOST,
+    PHRASE_SLOP,
     IndexNotReady,
     SearchJob,
+    exact_idno_match,
     keyword_body,
     lexical,
     lexical_query,
@@ -41,17 +44,25 @@ from nada_ai.settings import Settings
 # ---------------------------------------------------------------------------------------
 
 
-def test_lexical_fields_and_boosts_are_the_ones_nada_search_has_always_used() -> None:
+def test_what_identifies_and_describes_a_study_counts_most() -> None:
     assert LEXICAL_FIELDS == (
         "idno.text^60",
         "title^40",
         "nation^30",
         "authoring_entity^10",
-        "keywords^10",
-        "abstract",
+        "abstract^10",
+        "keywords",
         "methodology",
-        "var_keywords^15",
+        "var_keywords",
     )
+
+
+def test_the_long_blobs_count_least() -> None:
+    """``keywords`` and ``var_keywords`` hold thousands of characters of unrelated text: a word found somewhere in them
+    must not outweigh the abstract, or the title."""
+    boosts = {f.split("^")[0]: float(f.split("^")[1]) if "^" in f else 1.0 for f in LEXICAL_FIELDS}
+    assert boosts["keywords"] == boosts["var_keywords"] == 1.0
+    assert boosts["abstract"] > boosts["keywords"] and boosts["title"] > boosts["abstract"]
 
 
 def test_every_lexical_field_exists_in_the_study_mapping() -> None:
@@ -70,8 +81,8 @@ def test_idno_is_searchable_as_text_and_still_an_exact_keyword() -> None:
 
 
 def test_query_uses_fuzzy_most_fields_with_minimum_should_match() -> None:
-    match = lexical_query("consumer price index")["multi_match"]
-    assert match["query"] == "consumer price index"
+    match = lexical_query("consumer")["multi_match"]
+    assert match["query"] == "consumer"
     assert match["type"] == "most_fields"
     assert match["minimum_should_match"] == "2<75%"
     assert match["fuzziness"] == "AUTO:5,9"
@@ -82,7 +93,30 @@ def test_query_uses_fuzzy_most_fields_with_minimum_should_match() -> None:
 def test_query_text_is_data_not_syntax() -> None:
     """A multi_match never interprets operators, so user text cannot change the query structure."""
     text = 'title:"x" OR (a AND NOT b) *'
-    assert lexical_query(text)["multi_match"]["query"] == text
+    query = lexical_query(text)["bool"]
+    assert query["must"][0]["multi_match"]["query"] == text
+    assert query["should"][0]["multi_match"]["query"] == text
+    assert lexical_query("poverty")["multi_match"]["query"] == "poverty"
+
+
+def test_a_single_word_has_no_phrase_bonus() -> None:
+    assert list(lexical_query("poverty")) == ["multi_match"]
+
+
+def test_two_or_more_words_also_score_as_a_phrase_without_changing_what_matches() -> None:
+    query = lexical_query("foreign direct investment")["bool"]
+    assert list(query) == ["must", "should"]  # the phrase is optional: it adds to the score of studies already matched
+    (match,) = query["must"]
+    (phrase,) = query["should"]
+    assert match["multi_match"]["type"] == "most_fields" and match["multi_match"]["minimum_should_match"] == "2<75%"
+    assert phrase["multi_match"] == {
+        "query": "foreign direct investment",
+        "type": "phrase",
+        "fields": list(LEXICAL_FIELDS),
+        "slop": PHRASE_SLOP,
+        "boost": PHRASE_BOOST,
+    }
+    assert PHRASE_BOOST > 1
 
 
 def test_the_keyword_query_has_no_score_cutoff() -> None:
@@ -178,9 +212,25 @@ def _job(client: Any, **overrides: Any) -> SearchJob:
     return SearchJob(**fields)
 
 
-def _client(*responses: dict[str, Any], indexed: int = 10) -> MagicMock:
+def _is_idno_probe(body: dict[str, Any]) -> bool:
+    """The exact-idno check every relevance search makes first: a filter-only query with a ``term`` on ``idno``,
+    no ``must`` and no ``aggs``. Recognized so it never consumes a response meant for the search under test."""
+    clauses = body["query"]["bool"]
+    return "must" not in clauses and any("term" in f and "idno" in f["term"] for f in clauses.get("filter", []))
+
+
+def _client(*responses: dict[str, Any], indexed: int = 10, idno_match: dict[str, Any] | None = None) -> MagicMock:
+    """``idno_match``, if given, is what the exact-idno probe sees; by default it finds nothing, so every test below
+    keeps answering ``responses`` in order for the search itself."""
     client = MagicMock()
-    client.search = AsyncMock(side_effect=list(responses))
+    queue = list(responses)
+
+    async def search(index: str, body: dict[str, Any]) -> dict[str, Any]:
+        if _is_idno_probe(body):
+            return idno_match if idno_match is not None else _response([], counts={})
+        return queue.pop(0)
+
+    client.search = AsyncMock(side_effect=search)
     client.count = AsyncMock(return_value={"count": indexed})
     return client
 
@@ -276,6 +326,73 @@ def test_lexical_is_registered() -> None:
 
 
 # ---------------------------------------------------------------------------------------
+# Exact idno match
+# ---------------------------------------------------------------------------------------
+
+
+def _idno_hit(sid: int, idno: str, dataset_type: str = "survey") -> dict[str, Any]:
+    return {"_source": {"sid": sid, "idno": idno, "filter_facets": {"dataset_type": [dataset_type]}}}
+
+
+def _idno_response(hits: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"took": 1, "hits": {"total": {"value": len(hits)}, "hits": hits}}
+
+
+def test_a_matching_idno_is_a_term_query_on_the_idno_field() -> None:
+    client = _client(idno_match=_idno_response([_idno_hit(234, "AGO_2020_HRPM_GEO_v01_M", "geospatial")]))
+    page = asyncio.run(exact_idno_match(_job(client, query="AGO_2020_HRPM_GEO_v01_M")))
+    assert page is not None
+    assert (page.found, page.counts_by_type) == (1, {"geospatial": 1})
+    assert page.hits == [{"sid": 234, "idno": "AGO_2020_HRPM_GEO_v01_M", "score": None, "matched_by": ["idno"]}]
+    probe = client.search.call_args.kwargs["body"]
+    assert probe["query"]["bool"]["filter"][-1] == {"term": {"idno": "AGO_2020_HRPM_GEO_v01_M"}}
+    assert "must" not in probe["query"]["bool"]
+
+
+def test_the_match_is_case_and_accent_insensitive_because_the_field_is_normalized() -> None:
+    """OpenSearch does the folding (the ``idno`` field's ``nada_sort`` normalizer): the query here is sent as
+    typed, unchanged, and it is the index side that makes ago_2020... and AGO_2020... compare equal."""
+    client = _client(idno_match=_idno_response([_idno_hit(234, "AGO_2020_HRPM_GEO_v01_M")]))
+    page = asyncio.run(exact_idno_match(_job(client, query="ago_2020_hrpm_geo_v01_m")))
+    assert page is not None and page.found == 1
+    probe = client.search.call_args.kwargs["body"]
+    assert probe["query"]["bool"]["filter"][-1] == {"term": {"idno": "ago_2020_hrpm_geo_v01_m"}}
+
+
+def test_no_match_is_none_not_an_empty_page() -> None:
+    client = _client(idno_match=_idno_response([]))
+    assert asyncio.run(exact_idno_match(_job(client, query="does-not-exist"))) is None
+
+
+def test_a_multi_word_query_is_never_checked_as_an_idno() -> None:
+    client = _client()  # no idno_match configured; a probe call would raise (queue is empty)
+    assert asyncio.run(exact_idno_match(_job(client, query="poverty in rwanda"))) is None
+    client.search.assert_not_called()
+
+
+def test_the_sidebar_filters_apply_to_the_idno_match_too() -> None:
+    client = _client(idno_match=_idno_response([_idno_hit(234, "AGO_2020_HRPM_GEO_v01_M", "geospatial")]))
+    asyncio.run(exact_idno_match(_job(client, query="AGO_2020_HRPM_GEO_v01_M", filters=StudyFilters(countries=[16]))))
+    probe = client.search.call_args.kwargs["body"]
+    assert {"terms": {"filter_facets.countries": [16]}} in probe["query"]["bool"]["filter"]
+
+
+def test_the_dataset_type_tab_applies_to_the_idno_match_too() -> None:
+    client = _client(idno_match=_idno_response([]))
+    asyncio.run(exact_idno_match(_job(client, query="AGO_2020_HRPM_GEO_v01_M", filters=StudyFilters(types=["survey"]))))
+    probe = client.search.call_args.kwargs["body"]
+    assert {"terms": {"filter_facets.dataset_type": ["survey"]}} in probe["query"]["bool"]["filter"]
+
+
+def test_matches_are_paged_like_any_other_result() -> None:
+    hits = [_idno_hit(i, f"IDNO_{i}") for i in (1, 2, 3)]
+    client = _client(idno_match=_idno_response(hits))
+    page = asyncio.run(exact_idno_match(_job(client, query="IDNO", limit=2, offset=1)))
+    assert page is not None
+    assert (page.found, [h["sid"] for h in page.hits]) == (3, [2, 3])
+
+
+# ---------------------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------------------
 
@@ -327,7 +444,7 @@ def test_more_matches_than_can_be_paged_are_reported_as_truncated(monkeypatch: p
 
 def test_a_page_beyond_the_paging_depth_is_out_of_range_for_a_query_too(monkeypatch: pytest.MonkeyPatch) -> None:
     with _running(monkeypatch, _client(_response([]))) as client:
-        response = _post(client, {"query": "x", "mode": "lexical", "limit": 100, "offset": MAX_OFFSET - 99})
+        response = _post(client, {"query": "poverty", "mode": "lexical", "limit": 100, "offset": MAX_OFFSET - 99})
     assert response.status_code == 422
     assert ErrorResponse.model_validate(response.json()).error.code.value == "offset_out_of_range"
 
@@ -336,7 +453,7 @@ def test_explicit_lexical_and_another_sort(monkeypatch: pytest.MonkeyPatch) -> N
     rows = [_hit(2, None, "document"), _hit(4, None)]
     with _running(monkeypatch, _client(_response(rows, total=2))) as client:
         body = StudySearchResponse.model_validate(
-            _post(client, {"query": "x", "mode": "lexical", "sort": {"by": "title", "order": "asc"}}).json()
+            _post(client, {"query": "poverty", "mode": "lexical", "sort": {"by": "title", "order": "asc"}}).json()
         )
     assert body.applied.mode is EffectiveMode.lexical
     assert [h.sid for h in body.hits] == [2, 4]
@@ -347,7 +464,7 @@ def test_types_filter_over_a_query_keeps_the_contract_counts(monkeypatch: pytest
     response = _response([PAGE[0], PAGE[2]], total=2, counts={"survey": 2, "document": 1, "table": 1})
     with _running(monkeypatch, _client(response)) as client:
         body = StudySearchResponse.model_validate(
-            _post(client, {"query": "x", "mode": "lexical", "filters": {"types": ["survey"]}}).json()
+            _post(client, {"query": "poverty", "mode": "lexical", "filters": {"types": ["survey"]}}).json()
         )
     assert body.found == 2
     assert body.search_counts_by_type == {"survey": 2, "document": 1, "table": 1}
@@ -365,12 +482,27 @@ def test_a_query_that_matches_nothing_is_an_empty_result_not_an_error(monkeypatc
 
 def test_an_empty_index_is_index_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     with _running(monkeypatch, _client(_response([], counts={}), indexed=0)) as client:
-        response = _post(client, {"query": "x", "mode": "lexical"})
+        response = _post(client, {"query": "poverty", "mode": "lexical"})
     assert response.status_code == 503
     assert ErrorResponse.model_validate(response.json()).error.code.value == "index_not_ready"
 
 
 def test_debug_lists_every_opensearch_request(monkeypatch: pytest.MonkeyPatch) -> None:
     with _running(monkeypatch, _client(_response([_hit(4, 9.5)]))) as client:
-        body = _post(client, {"query": "x", "mode": "lexical", "include_debug": True}).json()
+        body = _post(client, {"query": "poverty", "mode": "lexical", "include_debug": True}).json()
     assert len(body["debug"]["opensearch_requests"]) == 1
+
+
+def test_the_route_answers_an_exact_idno_without_running_the_search_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The idno check runs before dispatch, for every mode, so a keyword-search response left in the queue is
+    never touched."""
+    os_client = _client(idno_match=_idno_response([_idno_hit(234, "AGO_2020_HRPM_GEO_v01_M", "geospatial")]))
+    with _running(monkeypatch, os_client) as client:
+        response = _post(client, {"query": "AGO_2020_HRPM_GEO_v01_M", "mode": "lexical"})
+    assert response.status_code == 200
+    body = StudySearchResponse.model_validate(response.json())
+    assert body.invariant_violations() == []
+    assert (body.found, body.search_counts_by_type) == (1, {"geospatial": 1})
+    assert [h.sid for h in body.hits] == [234]
+    assert body.hits[0].matched_by[0].value == "idno" and body.hits[0].score is None
+    os_client.search.assert_called_once()  # only the idno probe: the queue behind it was never touched
