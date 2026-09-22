@@ -250,11 +250,23 @@ def test_no_hits_no_matches() -> None:
 
 
 def _lexical_response(
-    rows: list[tuple[int, str, float | None, str]], total: int | None = None, counts: dict[str, int] | None = None
+    rows: list[tuple[int, str, float | None, str]],
+    total: int | None = None,
+    counts: dict[str, int] | None = None,
+    titles: dict[int, str] | None = None,
 ) -> dict[str, Any]:
-    """A keyword page: the rows shown, the total of all keyword matches, and the per-type counts of all of them."""
+    """A keyword page: the rows shown, the total of all keyword matches, and the per-type counts of all of them.
+    ``titles``, if given, adds a title to the named sids (only the head response needs one)."""
     hits = [
-        {"_score": score, "_source": {"sid": sid, "idno": idno, "filter_facets": {"dataset_type": [dtype]}}}
+        {
+            "_score": score,
+            "_source": {
+                "sid": sid,
+                "idno": idno,
+                "filter_facets": {"dataset_type": [dtype]},
+                **({"title": titles[sid]} if titles and sid in titles else {}),
+            },
+        }
         for sid, idno, score, dtype in rows
     ]
     by_type = counts
@@ -497,6 +509,73 @@ TAIL = _lexical_response(
 
 def _sids(page: Any) -> list[int]:
     return [h["sid"] for h in page.hits]
+
+
+def test_a_title_naming_every_query_word_is_promoted_ahead_of_the_fused_order() -> None:
+    """The real case this exists for: a study whose title says exactly what was searched (here, three words) ranks
+    behind four studies the fusion happens to rank higher, because the semantic leg also found them and rank fusion
+    only counts position. The title match belongs first regardless."""
+    head = _lexical_response(
+        [
+            (5, "NADA_5", 9.0, "geospatial"),  # ranked ahead by score, but not a title match
+            (234, "AGO_2020_HRPM_GEO_v01_M", 8.0, "geospatial"),
+        ],
+        titles={234: "High Resolution Poverty Map (Geospatial Data), Angola, 2020", 5: "Surface water extent, 2020"},
+    )
+    client = _cluster(
+        head=head,
+        lexical=_lexical_response([], counts={}),
+        knn=_knn_response(_knn_hit(5, 0.9, "geospatial"), _knn_hit(6, 0.89), _knn_hit(7, 0.88), _knn_hit(8, 0.87)),
+        lookup=_lookup_response(
+            [(5, "NADA_5", "geospatial"), (6, "NADA_6", "survey"), (7, "NADA_7", "survey"), (8, "NADA_8", "survey")]
+        ),
+    )
+    page = _run(hybrid, _job(client, query="high resolution angola"))
+    assert [h["sid"] for h in page.hits][0] == 234
+    assert page.hits[0]["matched_by"] == ["lexical"]  # promoted, but still correctly attributed
+
+
+def test_a_partial_title_match_is_not_promoted() -> None:
+    """Two of the three words is not enough: fusion order is unchanged."""
+    head = _lexical_response(
+        [(1, "NADA_1", 9.0, "survey"), (2, "NADA_2", 8.0, "survey")],
+        titles={1: "High Resolution Imagery", 2: "Angola Household Survey"},  # neither has all three words
+    )
+    client = _cluster(
+        head=head,
+        lexical=_lexical_response([], counts={}),
+        knn=_knn_response(_knn_hit(2, 0.9)),
+        lookup=_lookup_response([(2, "NADA_2", "survey")]),
+    )
+    page = _run(hybrid, _job(client, query="high resolution angola"))
+    assert [h["sid"] for h in page.hits][0] == 2  # the normal fused order (found by both legs), unchanged
+
+
+def test_more_than_one_title_match_keeps_their_relative_keyword_rank() -> None:
+    head = _lexical_response(
+        [(1, "NADA_1", 9.0, "survey"), (2, "NADA_2", 8.0, "survey"), (3, "NADA_3", 7.0, "survey")],
+        titles={1: "Poverty Survey 2020", 2: "Rwanda Poverty Survey 2020", 3: "unrelated title here"},
+    )
+    client = _cluster(head=head, lexical=_lexical_response([], counts={}))
+    page = _run(hybrid, _job(client, query="poverty survey 2020"))
+    assert [h["sid"] for h in page.hits][:2] == [1, 2]  # both match; 1 keeps its lead over 2
+
+
+def test_the_promotion_only_applies_to_a_relevance_sort() -> None:
+    """A non-relevance sort orders the union of the semantic studies and the keyword matches by that sort; the
+    title-match promotion (a relevance-only idea) plays no part."""
+    head = _lexical_response([(1, "NADA_1", 9.0, "survey")], titles={1: "Poverty Survey 2020"})
+    union = _lexical_response(
+        [(9, "NADA_9", None, "table"), (1, "NADA_1", None, "survey")], total=2, counts={"survey": 1, "table": 1}
+    )
+    client = _cluster(
+        head=head,
+        lexical=union,
+        knn=_knn_response(_knn_hit(9, 0.9, "table")),
+        lookup=_lookup_response([(9, "NADA_9", "table")]),
+    )
+    page = _run(hybrid, _job(client, query="poverty survey 2020", sort_by=SortField.title, sort_order=SortOrder.asc))
+    assert [h["sid"] for h in page.hits] == [9, 1]  # the union query's own order, not the title-match promotion
 
 
 def test_hybrid_fuses_the_head_then_pages_every_other_keyword_match() -> None:

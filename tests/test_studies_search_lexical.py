@@ -30,6 +30,7 @@ from nada_ai.search.backend.opensearch.studies_search import (
     PHRASE_SLOP,
     IndexNotReady,
     SearchJob,
+    _title_is_complete_match,
     exact_idno_match,
     keyword_body,
     lexical,
@@ -336,6 +337,22 @@ def _idno_hit(sid: int, idno: str, dataset_type: str = "survey") -> dict[str, An
 
 def _idno_response(hits: list[dict[str, Any]]) -> dict[str, Any]:
     return {"took": 1, "hits": {"total": {"value": len(hits)}, "hits": hits}}
+
+
+def test_title_completeness_ignores_stopwords_and_word_order() -> None:
+    assert _title_is_complete_match("high resolution angola", "High Resolution Poverty Map, Angola, 2020")
+    assert _title_is_complete_match("angola high resolution", "High Resolution Poverty Map, Angola, 2020")
+    assert _title_is_complete_match("district census handbook", "Census of India 2011 - District Census Handbook")
+
+
+def test_title_completeness_requires_every_real_word() -> None:
+    assert not _title_is_complete_match("high resolution angola", "High Resolution Imagery")  # missing "angola"
+    assert not _title_is_complete_match("", "Anything")  # nothing to require: never a match
+    assert not _title_is_complete_match("the of a", "Anything")  # only stopwords: never a match
+
+
+def test_title_completeness_is_case_and_punctuation_insensitive() -> None:
+    assert _title_is_complete_match("HIGH-RESOLUTION angola!", "high resolution, Angola.")
 
 
 def test_a_matching_idno_is_a_term_query_on_the_idno_field() -> None:
