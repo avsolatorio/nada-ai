@@ -71,6 +71,7 @@ class SortOrder(StrEnum):
 class MatchedBy(StrEnum):
     lexical = "lexical"
     semantic = "semantic"
+    idno = "idno"  # an exact match on the study's own idno; never combined with lexical/semantic
 
 
 class Engine(StrEnum):

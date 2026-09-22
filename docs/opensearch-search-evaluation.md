@@ -154,3 +154,116 @@ returned 5 studies before and 49 now (the 5 series first, then studies that matc
   bound keeps it to 50, but the floor and cutoff cannot tell these from real matches. That review is separate.
 - Not measured: OpenSearch at 20,000 studies (paging depth, memory and latency).
 
+## Update: field weights and a phrase bonus
+
+**The problem.** `Foreign direct investment` in the survey tab ranked `Informal Survey 2008` first. That study has the phrase
+nowhere: its three words appear scattered in unrelated variable labels ("investment support agency", "purchase fixed assets
+investments", "private domestic companies foreign nationality owners"), and 78% of its score (57.0 of 72.7) came from the
+variable-label field, which was boosted 15. Matching needs only 75% of the words (2 of 3), in any positions of one field,
+and nothing rewarded a phrase.
+
+**The change** (`LEXICAL_FIELDS`, `PHRASE_BOOST`, in `studies_search.py`):
+
+| field | before | now |
+|---|---|---|
+| `idno.text` | 60 | 60 |
+| `title` | 40 | 40 |
+| `nation` | 30 | 30 |
+| `authoring_entity` | 10 | 10 |
+| `abstract` | 1 | **10** |
+| `keywords` (NADA's combined metadata text) | 10 | **1** |
+| `methodology` | 1 | 1 |
+| `var_keywords` (variable names, labels, questions) | 15 | **1** |
+
+A query of two or more words also scores the words as a phrase (up to 2 words apart, any field, boost 2). The phrase clause is
+optional, so it never changes which studies match, only their order.
+
+**Measured on the 67 golden queries** (the result sizes do not change because matching does not):
+
+| variant | keyword-only nDCG@10 | hybrid nDCG@10 | study 288 in the survey tab |
+|---|---|---|---|
+| before (abstract 1, keywords 10, variable labels 15) | 0.820 | 0.849 | first |
+| abstract 10, keywords 1, variable labels 1 | 0.825 | 0.849 | first |
+| abstract 20, keywords 1, variable labels 1 | 0.821 | 0.847 | first |
+| abstract 30, keywords 1, variable labels 1 | 0.807 | 0.844 | first |
+| **abstract 10, keywords 1, variable labels 1, phrase x2 (shipped)** | **0.840** | **0.852** | second |
+| same with phrase x5 | 0.837 | 0.852 | second |
+| the old weights with phrase x2 | 0.833 | 0.851 | second |
+
+The weights alone barely move the ranking and do not move study 288: every other survey is an even weaker match, so it stays
+first. The phrase bonus is what helps: the study that actually contains the phrase (a survey question about foreign direct
+investment, in `World Bank Group Country Survey 2015`) now leads, and 288 follows it. The abstract weight matters little
+between 10 and 20 and is worse at 30. A bonus of 2 and 5 rank the same. The golden queries measure the ranking of well-known
+items, so the gain from the weights is within noise; the phrase bonus is the measurable improvement (keyword-only 0.820 to
+0.840).
+
+**Limits.** A study that mentions the words in unrelated places still matches (and is listed after the ones that do not), because
+matching itself is unchanged: 75% of the words, anywhere in a field. Requiring every word, or a stricter rule for short
+queries, is a separate decision that would change what matches.
+
+## Update: queries with no searchable content are rejected before they reach the engine
+
+A wider edge-query review (43 queries: gibberish, absent-domain, very short, stopword-only, operators, fake
+identifiers) found a regression from uncapping the keyword matches: `the and of` returned 429 studies, `12` returned
+172, `a b c` and `' OR 1=1 --` similarly high. `minimum_should_match: 2<75%` only needs a fraction of a query's words,
+and short or common words occur almost everywhere in the long `keywords`/`var_keywords` fields, so with no score
+cutoff nothing bounded that tail.
+
+**An absolute score floor does not work**, for the same reason a relative one did not: real and noise matches occupy
+the same range. The lowest score of a genuinely relevant hit (`povery`, a fuzzy typo match) is 0.149; the noise query
+`x` scores down to 0.19. No threshold separates them.
+
+**Is this an OpenSearch configuration gap?** The `nada_text` analyzer used on every text field has no stopword
+filter (confirmed directly: analyzing `"the and of"` returns all three tokens unchanged), so this is a lexical
+configuration matter, not a semantic one. Adding a `stop` filter was tested on a copy of the index: it does make
+OpenSearch return 0 for `the and of` (an all-stopword query analyzes to nothing, and a query with nothing left
+matches nothing), but it costs real ranking quality (golden nDCG@10 0.840 → 0.824, matching an earlier finding from
+before the keyword cutoff was removed) and does not touch non-stopword noise (`12`, `ab`, `x` are unaffected; `a b c`
+got worse, 16 → 87, because removing "a" changes how many terms `minimum_should_match` requires). Stopwords and short
+tokens are two different problems, and an analyzer only addresses one of them, at a cost.
+
+**The fix that shipped, briefly**: `has_searchable_content()` checked the query text before either leg ran, dropping
+stopwords and tokens under 3 characters, and rejecting a query with nothing left. It fixed `the and of`, `12`, `ab` and
+similar noise, with zero false positives on the golden queries. It was superseded (see below) once it turned out to
+break a related, more important case.
+
+## Update: an exact idno match runs first instead, and the noise-word gate is gone
+
+A single-token query is very often someone pasting an idno. The database's own search has always checked this first
+(`Catalog_study_idno_lookup`): an exact, case-insensitive match on `surveys.idno` (and its aliases) answers the search
+by itself. `/studies/search` never had an equivalent, and relying on the scored `idno.text^60` field alone is not
+precise: it is tokenized on `_` and `-`, so `AGO_2020_HRPM_GEO_v01_M` splits into six fragments and a 75% match pulls
+in unrelated studies that merely share `geo`, `v01` or `2020` — the real study was returned third, in a result of 51.
+
+Testing the noise-word gate against this uncovered a real bug: the same word-splitting the gate does to decide whether
+a query has "content" fragments a compact idno like `PC11_A02-28-v22` into `pc`, `11`, `a`, `02`, `28`, `v`, `22` —
+every piece under 3 characters — and the gate rejected the whole query, so an exact, valid idno search returned
+nothing.
+
+**What shipped instead of both:**
+
+- `exact_idno_match()` (`search/backend/opensearch/studies_search.py`): for any single-token query, in every mode,
+  before any scored search runs, a `term` query checks the study index's `idno` field (within the active filters)
+  for an exact match. A match is the whole result — the same guarantee the database gives on every other engine —
+  `matched_by: ["idno"]`, no score.
+- The `idno` field's mapping now has `normalizer: "nada_sort"` (the same lowercase + accent-fold normalizer already
+  used for `title_sort`/`nation_sort`), so the match is case- and accent-insensitive without fragmenting the value the
+  way the analyzed `idno.text` field does: `ago_2020_hrpm_geo_v01_m` now matches the stored `AGO_2020_HRPM_GEO_v01_M`,
+  exactly, as one token. This needs the study index to be rebuilt for the normalizer to apply to already-indexed idnos
+  (a mapping change is not retroactive); a `_reindex` into the same mapping is enough, no re-embedding needed.
+- The noise-word gate (`has_searchable_content`, `app/studies_query.py`, the `no_searchable_terms` warning) was removed
+  entirely, not patched, because the underlying tokenization problem it had is the same one that made `idno.text`
+  imprecise in the first place, and patching it to exempt idno-shaped tokens would leave two overlapping heuristics
+  for what is really one problem (word-splitting long alphanumeric identifiers).
+
+**Consequence, stated plainly:** removing the gate brings back the stopword/short-token regression it fixed — `the and
+of`, `12`, `ab` and similar noise queries are unbounded again, exactly as documented further up this page. The idno fix
+does not touch that case at all (those tokens are not idnos, so the exact-match check simply finds nothing and falls
+through to the normal search). This is a known, accepted trade-off, not an oversight: if both problems need solving at
+once, the noise-word check would need to run only when the idno check does not match, on a query that also is not a
+single alphanumeric-with-separators token (so it never re-fragments an idno).
+
+**What is not covered:** aliases (`survey_aliases`) are not indexed anywhere in OpenSearch, so a study findable by its
+alias on every other engine remains unfindable here; that still needs a database-side lookup if it is wanted, the way
+`qdrant_db`'s driver already does it.
+

@@ -288,11 +288,27 @@ def _resort_response(rows: list[tuple[int, str]], found: int, counts: dict[str, 
     }
 
 
+def _is_union(clauses: dict[str, Any]) -> bool:
+    """A keyword search that also takes in studies without the keyword (another sort): its match is a bare ``should``,
+    unlike the phrase-scored keyword match of a query of several words, which has a ``must``."""
+    match = clauses["must"][0]
+    return "bool" in match and "must" not in match["bool"]
+
+
+def _is_idno_probe(body: dict[str, Any]) -> bool:
+    """The exact-idno check every relevance search makes first: a filter-only query with a ``term`` on ``idno``,
+    no ``must`` and no ``aggs``. Recognized so it never gets mistaken for the semantic-only enrich lookup, which
+    matches the same shape otherwise."""
+    clauses = body["query"]["bool"] if "query" in body and "bool" in body["query"] else {}
+    return "must" not in clauses and any("term" in f and "idno" in f["term"] for f in clauses.get("filter", []))
+
+
 def _cluster(
     *,
     lexical: dict | None = None,
     head: dict | None = None,
     agree: list[int] | None = None,
+    idno: dict | None = None,
     knn: dict | None = None,
     lookup: dict | None = None,
     resort: dict | None = None,
@@ -305,6 +321,8 @@ def _cluster(
 
     async def search(index: str, body: dict[str, Any]) -> dict[str, Any]:
         client.requests.append((index, body))
+        if _is_idno_probe(body):  # checked first: it must never be answered by an unrelated configured response
+            return idno if idno is not None else _lookup_response([])
         if "collapse" in body:  # the vector search on the chunk index
             if chunks_missing:
                 raise NotFoundError(404, "index_not_found_exception", {})
@@ -314,7 +332,7 @@ def _cluster(
             if "aggs" not in body:  # which of the semantic studies also match the keyword
                 return _agree_response(agree or [])
             page = lexical if lexical is not None else _lexical_response([], counts={})
-            if "must_not" not in clauses and "bool" not in clauses["must"][0]:  # the best keyword matches (the head)
+            if "must_not" not in clauses and not _is_union(clauses):  # the best keyword matches (the head)
                 return head if head is not None else page
             return page  # the keyword matches after the head, or a keyword page of any other kind
         if "aggs" in body:  # a filter-only listing (browse, or the semantic block re-sorted)
@@ -340,7 +358,7 @@ def _bodies(client: MagicMock, kind: str) -> list[dict[str, Any]]:
             found = "agree"
         elif "must_not" in clauses:
             found = "tail"
-        elif "bool" in clauses["must"][0]:
+        elif _is_union(clauses):
             found = "union"
         else:
             found = "head"
@@ -570,6 +588,16 @@ def test_ascending_relevance_lists_the_weakest_keyword_matches_first_and_the_hea
     assert _sids(page) == [11, 9, 7, 5]  # the fused head, reversed, follows the keyword matches
 
 
+def test_a_query_of_several_words_scores_the_phrase_in_the_head_and_in_the_tail() -> None:
+    client = _cluster(head=HEAD, lexical=TAIL, **BLOCK)
+    _run(hybrid, _job(client, query="foreign direct investment"))
+    for kind in ("head", "tail"):
+        (body,) = _bodies(client, kind)
+        keyword = body["query"]["bool"]["must"][0]["bool"]
+        assert keyword["should"][0]["multi_match"]["type"] == "phrase"  # an optional score bonus, not a requirement
+    assert _bodies(client, "agree")  # and which semantic studies match the keyword is still asked
+
+
 def test_the_types_filter_narrows_found_and_the_hits_but_not_the_counts() -> None:
     tail = _lexical_response([(9, "NADA_9", 3.0, "survey")], total=31, counts={"survey": 30, "document": 9, "table": 1})
     client = _cluster(head=HEAD, lexical=tail, **BLOCK)
@@ -695,7 +723,7 @@ def test_a_query_defaults_to_hybrid(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_explicit_semantic(monkeypatch: pytest.MonkeyPatch) -> None:
     with _running(monkeypatch, _full_cluster(), _Model()) as client:
-        body = StudySearchResponse.model_validate(_post(client, {"query": "x", "mode": "semantic"}).json())
+        body = StudySearchResponse.model_validate(_post(client, {"query": "poverty", "mode": "semantic"}).json())
     assert body.applied.mode is EffectiveMode.semantic
     assert body.invariant_violations() == []
     assert all([m.value for m in h.matched_by] == ["semantic"] for h in body.hits)
@@ -717,7 +745,7 @@ def test_degradation_keeps_the_requested_sort(monkeypatch: pytest.MonkeyPatch) -
     cluster = _cluster(lexical=_lexical_response([(2, "NADA_2", None, "document"), (1, "NADA_1", None, "survey")]))
     with _running(monkeypatch, cluster, _Model(fail=True)) as client:
         body = StudySearchResponse.model_validate(
-            _post(client, {"query": "x", "sort": {"by": "title", "order": "asc"}}).json()
+            _post(client, {"query": "poverty", "sort": {"by": "title", "order": "asc"}}).json()
         )
     assert body.applied.mode is EffectiveMode.lexical
     assert (body.applied.sort.by, body.applied.sort.order) == (SortField.title, SortOrder.asc)
@@ -747,7 +775,7 @@ def test_no_query_never_needs_the_model(monkeypatch: pytest.MonkeyPatch) -> None
 def test_a_missing_chunk_index_is_index_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     cluster = _cluster(chunks_missing=True, lexical=_lexical_response([(1, "NADA_1", 5.0, "survey")]))
     with _running(monkeypatch, cluster, _Model()) as client:
-        response = _post(client, {"query": "x"})
+        response = _post(client, {"query": "poverty"})
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "index_not_ready"
 
@@ -756,5 +784,5 @@ def test_the_semantic_window_reaches_the_vector_search_from_settings(monkeypatch
     monkeypatch.setenv("NADA_STUDIES_SEMANTIC_WINDOW", "7")
     cluster = _full_cluster()
     with _running(monkeypatch, cluster, _Model()) as client:
-        _post(client, {"query": "x"})
+        _post(client, {"query": "poverty"})
     assert _bodies(cluster, "vector")[0]["size"] == 7

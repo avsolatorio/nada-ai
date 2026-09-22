@@ -48,6 +48,7 @@ from nada_ai.search.backend.opensearch.studies_search import (
     IndexNotReady,
     SearchJob,
     StudyPage,
+    exact_idno_match,
 )
 from nada_ai.search.backend.opensearch.studies_semantic import StudyPolicy
 
@@ -189,7 +190,12 @@ async def _execute(
     s: AppState,
 ) -> tuple[EffectiveMode, AppliedSort, StudyPage]:
     """Run the resolved mode. If the query cannot be embedded, ``auto`` degrades to keyword search (and says so);
-    an explicit ``semantic`` or ``hybrid`` request fails instead of silently answering something else."""
+    an explicit ``semantic`` or ``hybrid`` request fails instead of silently answering something else.
+
+    A single-token query is checked against every study's own idno first (see ``exact_idno_match``): nothing a
+    scored search does is as precise as an exact idno match, and it is what every other engine already gives NADA
+    for this case.
+    """
     job = SearchJob(
         client=s.client,
         index=s.settings.studies_index,
@@ -203,6 +209,11 @@ async def _execute(
         policy=StudyPolicy.from_settings(s.settings),
         embed=_embedder(s),
     )
+    if mode is not EffectiveMode.browse and job.query is not None:
+        exact = await exact_idno_match(job)
+        if exact is not None:
+            return mode, sort, exact
+
     try:
         return mode, sort, await EXECUTORS[mode](job)
     except EmbeddingUnavailable as e:

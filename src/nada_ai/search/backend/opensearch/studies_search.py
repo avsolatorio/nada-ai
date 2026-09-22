@@ -263,31 +263,43 @@ async def browse(job: SearchJob) -> StudyPage:
 # Keyword query
 # ---------------------------------------------------------------------------------------
 
-# Fields searched by keyword search and their boosts: the ones NADA's own search has always used.
+# Fields searched by keyword search and their boosts. What identifies a study (idno, title, country, producer) and what
+# describes it (abstract) count most; the two long blobs (``keywords`` is NADA's combined metadata text, ``var_keywords``
+# the variable names, labels and questions) count least, because a word found somewhere in thousands of characters says
+# little about what the study is. (NADA's own search boosted the blobs 10 and 15 and the abstract 1; on the golden
+# queries this ranks a little better, and it stops a study whose variable labels happen to contain the query words from
+# beating one that describes them.)
 LEXICAL_FIELDS = (
     "idno.text^60",
     "title^40",
     "nation^30",
     "authoring_entity^10",
-    "keywords^10",
-    "abstract",
+    "abstract^10",
+    "keywords",
     "methodology",
-    "var_keywords^15",
+    "var_keywords",
 )
+
+#: A query of two or more words also scores the words as a phrase (this far apart at most), in any field: a study that
+#: says "foreign direct investment" outranks one that mentions the three words in unrelated places. It only adds to the
+#: score of studies the match rules already accept, so it never changes which studies match.
+PHRASE_SLOP = 2
+PHRASE_BOOST = 2
 
 
 def lexical_query(text: str) -> dict[str, Any]:
-    """Keyword match over the study text fields.
+    """Keyword match over the study text fields, with a phrase bonus for queries of two or more words.
 
     ``minimum_should_match: 2<75%``: one or two terms must all match, otherwise at least 75% of them (per field, as in
-    NADA's own search). ``fuzziness: AUTO:5,9`` forgives one typo in words of 5-8 letters and two in longer ones,
-    and none in shorter words (with ``AUTO``, 3-4 letter words and long variable-label fields matched unrelated
-    words); ``prefix_length: 2`` keeps the first two letters exact.
+    NADA's own search); the terms may be anywhere in the field. ``fuzziness: AUTO:5,9`` forgives one typo in words of
+    5-8 letters and two in longer ones, and none in shorter words (with ``AUTO``, 3-4 letter words and long
+    variable-label fields matched unrelated words); ``prefix_length: 2`` keeps the first two letters exact. Fields are
+    scored separately and the scores add up (``most_fields``).
 
     Every study this matches is a keyword match: there is no score cutoff. The best matches (title, idno) simply
     score highest, and a study that mentions the word only in a low-weight field comes after them.
     """
-    return {
+    match: dict[str, Any] = {
         "multi_match": {
             "query": text,
             "fields": list(LEXICAL_FIELDS),
@@ -297,6 +309,18 @@ def lexical_query(text: str) -> dict[str, Any]:
             "prefix_length": 2,
         }
     }
+    if len(text.split()) < 2:
+        return match
+    phrase = {
+        "multi_match": {
+            "query": text,
+            "type": "phrase",
+            "fields": list(LEXICAL_FIELDS),
+            "slop": PHRASE_SLOP,
+            "boost": PHRASE_BOOST,
+        }
+    }
+    return {"bool": {"must": [match], "should": [phrase]}}
 
 
 def relevance_sort(order: SortOrder) -> list[dict[str, Any]]:
@@ -342,6 +366,48 @@ def keyword_body(
 def _dataset_type(hit: dict[str, Any]) -> str:
     values = (hit["_source"].get(FILTER_FACETS_KEY) or {}).get("dataset_type") or []
     return str(values[0]) if values else "unknown"
+
+
+async def exact_idno_match(job: SearchJob) -> StudyPage | None:
+    """A study whose idno exactly matches the query (case- and accent-insensitively, via the ``idno`` field's
+    normalizer), within the active filters -- or ``None`` when the query is not a single token, or no study
+    matches.
+
+    Checked before every relevance search: nothing a scored search does is as precise as this, and it is what the
+    database's own idno/alias lookup already gives NADA on every other engine. ``idno`` matches are unique in NADA's
+    catalog in practice, but this returns every match rather than assuming exactly one.
+    """
+    assert job.query is not None
+    token = job.query.strip()
+    if not token or len(token.split()) != 1:
+        return None
+
+    filters = list(filter_clauses(job.filters))
+    if job.filters.types:
+        filters.append({"terms": {f"{FILTER_FACETS_KEY}.dataset_type": job.filters.types}})
+    body = {
+        "size": max(1, job.offset + job.limit),
+        "track_total_hits": True,
+        "_source": ["sid", "idno", f"{FILTER_FACETS_KEY}.dataset_type"],
+        "query": {"bool": {"filter": [*filters, {"term": {"idno": token}}]}},
+        "sort": [{"sid": {"order": "asc"}}],
+    }
+    response = await _search(job.client, job.index, body)
+    hits = response["hits"]["hits"]
+    if not hits:
+        return None
+
+    counts: dict[str, int] = {}
+    for h in hits:
+        t = _dataset_type(h)
+        counts[t] = counts.get(t, 0) + 1
+    page_hits = [
+        {"sid": int(h["_source"]["sid"]), "idno": h["_source"]["idno"], "score": None, "matched_by": ["idno"]}
+        for h in hits[job.offset : job.offset + job.limit]
+    ]
+    return StudyPage(
+        found=_total(response), counts_by_type=counts, hits=page_hits, took_ms=_took(response), request_bodies=[body]
+    )
 
 
 def _keyword_hit(hit: dict[str, Any]) -> dict[str, Any]:

@@ -132,7 +132,8 @@ Examples: `response_hybrid.json`, `response_browse.json`, `response_types_filter
 `hits[].score` is the engine's score for the mode that ran (keyword score in `lexical`, vector score in `semantic`,
 comparable only within one response). It is null in browse, in `hybrid` (the fused head and the keyword matches after it
 are ordered by different rules, so their scores could not be compared) and when the results are ordered by another sort.
-`matched_by` is `["lexical"]`, `["semantic"]` or both; empty in browse. `passages` lists matching pages for document
+`matched_by` is `["lexical"]`, `["semantic"]` or both, or `["idno"]` alone for an exact idno match (6.1); empty
+in browse. `passages` lists matching pages for document
 studies (`page` is 1-based, `excerpt` is whitespace-normalised text); it replaces parsing raw engine hits.
 
 ### 6.1 What `found` means
@@ -158,6 +159,9 @@ studies (`page` is 1-based, `excerpt` is whitespace-normalised text); it replace
 - Choosing a tab (`types`) never changes which studies are in the result or their order. With a `types` filter, `found`
   equals the sum of `search_counts_by_type` over those types; without one, the counts add up to `found`.
 - A query matching nothing returns `found: 0`, empty hits and empty counts. It is not an error.
+- A single-token query is checked against every study's own idno (case- and accent-insensitively) before any scored
+  search runs, in every mode; a match is the whole result (`found` = the number of studies with that idno, normally
+  one). Nothing a scored search does is as precise as an exact idno match.
 - The relevance floor and cutoff of the semantic side, and the two windows, are server settings, not request parameters.
 
 ### 6.2 Mode handling
