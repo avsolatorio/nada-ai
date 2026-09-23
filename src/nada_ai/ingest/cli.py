@@ -73,6 +73,10 @@ def index(
     )
     err_part = f"{len(res['errors'])} bulk error(s)" if res["errors"] else "ok"
     print(f"Indexed {res['indexed']} docs; {err_part}")
+    if res.get("variables") is not None:
+        v = res["variables"]
+        v_err_part = f"{len(v['errors'])} error(s)" if v["errors"] else "ok"
+        print(f"Variables: indexed {v['indexed']}; {v_err_part}")
 
 
 def index_from_catalog(

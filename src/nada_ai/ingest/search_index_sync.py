@@ -408,6 +408,18 @@ def apply_and_ack_queue_item(
         if item.is_delete:
             delete_by_idno_op(settings, idno)
             action = "deleted"
+        elif item.change_class == "variables":
+            # Only this study's variables changed (NADA's Dataset_microdata_model::index_variable_data() fired
+            # this after a DDI/data-dictionary re-import) — not its title, abstract, or anything else a full
+            # study reindex would touch. index_ids_op already syncs variables as part of a full index (see
+            # docs/variables-search-contract.md), so this is the narrower half of that: sync only, skip the
+            # study/chunk reindex entirely. Qdrant has no separate variable index to sync, so there's nothing to
+            # do there — the item is still acked as handled rather than left pending forever.
+            if settings.search_backend == "opensearch":
+                from nada_ai.ingest.variables_index import sync_survey_variables_op
+
+                sync_survey_variables_op(settings, idno)
+            action = "indexed"
         else:
             resolved_type = metadata_type or lookup_metadata_type(settings, idno)
             if resolved_type is None:
@@ -537,9 +549,7 @@ def reconcile_diff_once(
     # instead of a missing-only total that jumps when stale work starts.
     # These first pages also seed the loops below — no extra HTTP vs. the
     # previous "fetch inside the loop" shape.
-    missing_page = list_diff_missing(
-        settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type
-    )
+    missing_page = list_diff_missing(settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type)
     stale_page = list_diff_stale(settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type)
     summary["missing_total"] = missing_page.total
     summary["stale_total"] = stale_page.total
@@ -573,9 +583,7 @@ def reconcile_diff_once(
             _emit(phase="missing")
             return summary
         if i > 0:
-            page = list_diff_missing(
-                settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type
-            )
+            page = list_diff_missing(settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type)
         new_items = [it for it in page.items if it.idno not in seen_missing]
         if not new_items:
             break

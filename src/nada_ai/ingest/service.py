@@ -395,6 +395,29 @@ def setup_ingest_pipeline_op(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _sync_variables_best_effort(settings: Settings, idnos: Iterable[str]) -> dict[str, Any]:
+    """Sync each idno's variables (best-effort: one idno's failure doesn't stop the rest, and never raises —
+    a full study index must not fail just because the separate variable index couldn't be reached).
+
+    Only called for ``metadata_type=microdata`` (variables only exist on that dataset type — see
+    ``_metadata_type`` in NADA's ``Semantic.php`` for the same map). By design, a full index of a study is
+    study + chunks + variables together; see ``docs/variables-search-contract.md``.
+    """
+    from nada_ai.ingest.variables_index import sync_survey_variables_op
+
+    indexed = 0
+    errors: list[Any] = []
+    for idno in idnos:
+        try:
+            result = sync_survey_variables_op(settings, idno)
+            indexed += int(result.get("indexed") or 0)
+            errors.extend(result.get("errors") or [])
+        except Exception as e:  # noqa: BLE001 - reported in the result, not raised
+            logger.warning("variable sync failed for idno=%s: %s", idno, e)
+            errors.append({"idno": idno, "error": str(e)})
+    return {"indexed": indexed, "errors": errors}
+
+
 def index_ids_op(
     settings: Settings,
     idnos: list[str],
@@ -411,13 +434,15 @@ def index_ids_op(
     reloading the model for every job.  ``None`` (default) self-loads.
 
     Returns ``{"indexed", "errors", "load_errors", "empty_docs", "requested",
-    "metadata_type", "index", "quality"}``. ``quality`` is a non-blocking report
+    "metadata_type", "index", "quality", "variables"}``. ``quality`` is a non-blocking report
     of thin/malformed source documents (empty content, missing idno/type)
     *that were built* — see ``ingest/quality.py``. ``empty_docs`` is idnos that
     loaded without error but produced zero documents to even check (no
     langdocs, or all-empty content) — distinct from ``quality``, which never
     sees these since no source document ever existed to observe. Neither
-    affects what gets indexed.
+    affects what gets indexed. ``variables`` is ``{"indexed", "errors"}`` for
+    the OpenSearch variable index (see ``_sync_variables_best_effort``); ``None``
+    for any metadata_type other than ``microdata``, which never has variables.
     """
     pairs = [(i, metadata_type) for i in idnos]
     report = QualityReport()
@@ -437,6 +462,11 @@ def index_ids_op(
     )
     _report_state_bulk_best_effort(settings, _state_report_items(idnos, load_errors, empty_docs, err))
 
+    variables_result: dict[str, Any] | None = None
+    if metadata_type == "microdata" and settings.search_backend == "opensearch":
+        failed_idnos = {e["idno"] for e in load_errors if e.get("idno")}
+        variables_result = _sync_variables_best_effort(settings, (i for i in idnos if i not in failed_idnos))
+
     idx = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
     return {
         "indexed": int(n),
@@ -447,6 +477,7 @@ def index_ids_op(
         "metadata_type": metadata_type,
         "index": idx,
         "quality": report.to_dict(),
+        "variables": variables_result,
     }
 
 
