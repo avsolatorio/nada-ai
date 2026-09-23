@@ -53,7 +53,13 @@ nada_ai_env() {
   export NADA_SEARCH_BACKEND=opensearch
   export NADA_OPENSEARCH_URL="http://localhost:$OS_PORT"
   export NADA_INDEX_NAME="$INDEX"
-  export NADA_REPORT_SEARCH_INDEX_STATE_ENABLED=false
+  # Reports real indexing/deletion outcomes into NADA's search_index_state table, same as production would, so
+  # the dashboard's Coverage/Diff views and per-item "indexed" status reflect what this scratch instance
+  # actually does. Deliberately on rather than the original false default (2026-09-23, at the user's request):
+  # rows are keyed by idno in NADA's own DB, so this does affect NADA's live bookkeeping of what's indexed, not
+  # just this scratch nada-os-baseline index. Set back to false if this scratch instance's runs should stop
+  # being recorded as NADA's source of truth for "is this idno indexed."
+  export NADA_REPORT_SEARCH_INDEX_STATE_ENABLED=true
   export NADA_RECONCILE_SEARCH_INDEX_ENABLED=false
   # requests per minute per caller; NADA is the only caller, so the whole site shares this. To be reviewed.
   export NADA_RATE_LIMIT_SEARCH_PER_MINUTE="${NADA_RATE_LIMIT_SEARCH_PER_MINUTE:-1000}"
