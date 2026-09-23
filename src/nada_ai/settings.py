@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
 
-EmbeddingBackend = Literal["local", "opensearch_ml"]
+EmbeddingBackend = Literal["local", "opensearch_ml", "none"]
 SearchBackendKind = Literal["opensearch", "qdrant"]
 
 
@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     #: OpenSearch study index (one document per study, ``_id`` = ``sid``). Defaults to ``<index_name>-studies``;
     #: ``index_name`` itself is the chunk index (text chunks + embeddings).
     studies_index_name: str | None = Field(default=None)
+    #: OpenSearch variable index (one document per variable, ``_id`` = ``uid``). Defaults to
+    #: ``<index_name>-variables``. Lexical only: see ``docs/variables-search-contract.md``.
+    variables_index_name: str | None = Field(default=None)
 
     #: Study search: the most studies the semantic side adds to a relevance search (reported by ``GET /info`` as
     #: ``limits.semantic_window``). The keyword matches are not capped: they are all returned and paged.
@@ -72,7 +75,10 @@ class Settings(BaseSettings):
     #: Defaults to ``index_name`` when unset for a single knob across engines.
     qdrant_collection_name: str | None = Field(default=None)
 
-    #: ``local``: SentenceTransformers embed + k-NN queries. ``opensearch_ml``: ingest pipeline ``text_embedding`` + ``neural`` queries (no local model).
+    #: ``local``: SentenceTransformers embed + k-NN queries. ``opensearch_ml``: ingest pipeline ``text_embedding`` +
+    #: ``neural`` queries (no local model). ``none``: deliberately lexical only — no model is ever loaded, no
+    #: vector is computed or stored, and the study search's ``semantic``/``hybrid`` modes are excluded from
+    #: ``GET /info`` capabilities (``info.modes_for``) rather than being advertised and then failing at query time.
     embedding_backend: EmbeddingBackend = Field(default="local")
 
     embedding_model_id: str = Field(default="microsoft/harrier-oss-v1-270m")
@@ -243,11 +249,21 @@ class Settings(BaseSettings):
     def studies_index(self) -> str:
         return self.studies_index_name or f"{self.index_name}-studies"
 
+    @property
+    def variables_index(self) -> str:
+        return self.variables_index_name or f"{self.index_name}-variables"
+
     @model_validator(mode="after")
     def validate_search_backend(self) -> Settings:
         if self.search_backend == "qdrant" and self.embedding_backend == "opensearch_ml":
             raise ValueError(
                 "embedding_backend opensearch_ml is only valid with search_backend=opensearch (OpenSearch ML Commons)."
+            )
+        if self.search_backend == "qdrant" and self.embedding_backend == "none":
+            raise ValueError(
+                "embedding_backend none is not valid with search_backend=qdrant: a Qdrant collection is a vector "
+                "index, so a deployment with no embeddings has nothing for it to store or search. embedding_backend "
+                "none is only meaningful for a search_backend with its own lexical index (opensearch)."
             )
         return self
 

@@ -119,7 +119,7 @@ def test_capabilities_reflect_the_modes_that_are_implemented(monkeypatch: pytest
         "semantic": True,
         "hybrid": True,
         "facets": False,
-        "variables_search": False,
+        "variables_search": True,
         "citations_search": False,
     }
     assert [spec.key for spec in info.filters][:2] == ["types", "countries"]

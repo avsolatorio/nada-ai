@@ -159,9 +159,7 @@ def _delete_qdrant(settings: Settings, idno: str) -> dict[str, Any]:
         result = client.delete(
             collection_name=coll,
             points_selector=qm.FilterSelector(
-                filter=qm.Filter(must=[
-                    qm.FieldCondition(key=metadata_field("idno"), match=qm.MatchValue(value=idno))
-                ])
+                filter=qm.Filter(must=[qm.FieldCondition(key=metadata_field("idno"), match=qm.MatchValue(value=idno))])
             ),
         )
         return {
@@ -203,9 +201,7 @@ def _delete_qdrant_batch(settings: Settings, idnos: list[str]) -> dict[str, Any]
         result = client.delete(
             collection_name=coll,
             points_selector=qm.FilterSelector(
-                filter=qm.Filter(must=[
-                    qm.FieldCondition(key=metadata_field("idno"), match=qm.MatchAny(any=idnos))
-                ])
+                filter=qm.Filter(must=[qm.FieldCondition(key=metadata_field("idno"), match=qm.MatchAny(any=idnos))])
             ),
         )
         return {
@@ -323,8 +319,11 @@ def put_index_template_op(settings: Settings) -> dict[str, Any]:
             "skipped": True,
             "detail": "Index templates apply to OpenSearch only (search_backend=qdrant).",
         }
+    dim: int | None
     if settings.embedding_backend == "opensearch_ml":
         dim = int(settings.opensearch_ml_embedding_dimension or 0)
+    elif settings.embedding_backend == "none":
+        dim = None  # no model to load: this deployment never computes or stores a vector
     else:
         dim = EmbeddingService(settings).embedding_dimension()
 
@@ -351,8 +350,11 @@ def create_index_op(settings: Settings, recreate: bool = False) -> dict[str, Any
     """
     from nada_ai.ingest.factory import create_ingest_writer
 
+    dim: int | None
     if settings.embedding_backend == "opensearch_ml":
         dim = int(settings.opensearch_ml_embedding_dimension or 0)
+    elif settings.embedding_backend == "none":
+        dim = None  # no model to load: this deployment never computes or stores a vector
     else:
         dim = EmbeddingService(settings).embedding_dimension()
 

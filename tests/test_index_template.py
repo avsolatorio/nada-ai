@@ -57,16 +57,25 @@ def test_studies_index_name_can_be_overridden() -> None:
     assert Settings(index_name="a", studies_index_name="other").studies_index == "other"
 
 
-def test_put_composable_index_template_installs_both_templates() -> None:
+def test_put_composable_index_template_installs_every_index_template() -> None:
     client = MagicMock()
     s = Settings(index_name="idx-one")
     out = put_composable_index_template(client, s, 256)
-    assert set(out["templates"]) == {"nada-ai-idx-one-template", "nada-ai-idx-one-studies-template"}
+    assert set(out["templates"]) == {
+        "nada-ai-idx-one-template",
+        "nada-ai-idx-one-studies-template",
+        "nada-ai-idx-one-variables-template",
+    }
     assert out["templates"]["nada-ai-idx-one-template"]["index_patterns"] == ["idx-one"]
     assert out["templates"]["nada-ai-idx-one-studies-template"]["index_patterns"] == ["idx-one-studies"]
-    assert client.indices.put_index_template.call_count == 2
+    assert out["templates"]["nada-ai-idx-one-variables-template"]["index_patterns"] == ["idx-one-variables"]
+    assert client.indices.put_index_template.call_count == 3
     names = {c.kwargs["name"] for c in client.indices.put_index_template.call_args_list}
-    assert names == {"nada-ai-idx-one-template", "nada-ai-idx-one-studies-template"}
+    assert names == {
+        "nada-ai-idx-one-template",
+        "nada-ai-idx-one-studies-template",
+        "nada-ai-idx-one-variables-template",
+    }
 
 
 def test_put_cluster_auto_create_index() -> None:
@@ -75,9 +84,7 @@ def test_put_cluster_auto_create_index() -> None:
     out = put_cluster_auto_create_index(client, " false ")
     assert out["acknowledged"] is True
     assert out["action.auto_create_index"] is False
-    client.cluster.put_settings.assert_called_once_with(
-        body={"persistent": {"action.auto_create_index": False}}
-    )
+    client.cluster.put_settings.assert_called_once_with(body={"persistent": {"action.auto_create_index": False}})
 
 
 def test_put_index_template_op_skips_when_qdrant() -> None:
@@ -93,7 +100,9 @@ def test_put_index_template_op_skips_when_qdrant() -> None:
         (False, False),
     ],
 )
-def test_put_index_template_op_respects_template_flag(monkeypatch: pytest.MonkeyPatch, flag: bool, expect_put: bool) -> None:
+def test_put_index_template_op_respects_template_flag(
+    monkeypatch: pytest.MonkeyPatch, flag: bool, expect_put: bool
+) -> None:
     s = Settings(
         search_backend="opensearch",
         embedding_backend="opensearch_ml",
@@ -107,8 +116,24 @@ def test_put_index_template_op_respects_template_flag(monkeypatch: pytest.Monkey
     out = put_index_template_op(s)
     assert out["dim"] == 512
     if expect_put:
-        assert client.indices.put_index_template.call_count == 2
+        assert client.indices.put_index_template.call_count == 3
         assert "template" in out and "skipped" not in out.get("template", {})
     else:
         client.indices.put_index_template.assert_not_called()
         assert out["template"]["skipped"] is True
+
+
+def test_put_index_template_op_loads_no_model_when_embeddings_are_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """embedding_backend=none must never instantiate EmbeddingService (which eagerly loads the real model) just
+    to compute a dimension nothing will use."""
+    s = Settings(search_backend="opensearch", embedding_backend="none")
+    client = MagicMock()
+    monkeypatch.setattr("nada_ai.ingest.service.build_client", lambda _settings: client)
+
+    def _boom(_settings):
+        raise AssertionError("EmbeddingService must not be instantiated when embedding_backend=none")
+
+    monkeypatch.setattr("nada_ai.ingest.service.EmbeddingService", _boom)
+
+    out = put_index_template_op(s)
+    assert out["dim"] is None

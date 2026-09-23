@@ -49,9 +49,7 @@ def test_admin_auth_required_when_env_set(monkeypatch):
 
 def test_admin_auth_optional_when_env_unset(monkeypatch):
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
-    monkeypatch.setattr(
-        admin_module, "create_index_op", lambda settings, recreate=False: {"index": "x", "dim": 0}
-    )
+    monkeypatch.setattr(admin_module, "create_index_op", lambda settings, recreate=False: {"index": "x", "dim": 0})
 
     with TestClient(app) as client:
         _fresh_state()
@@ -64,9 +62,7 @@ def test_admin_auth_optional_when_env_unset(monkeypatch):
 
 def test_admin_auth_passes_with_correct_key(monkeypatch):
     monkeypatch.setenv("NADA_ADMIN_API_KEY", "secret")
-    monkeypatch.setattr(
-        admin_module, "create_index_op", lambda settings, recreate=False: {"index": "x", "dim": 0}
-    )
+    monkeypatch.setattr(admin_module, "create_index_op", lambda settings, recreate=False: {"index": "x", "dim": 0})
 
     with TestClient(app) as client:
         _fresh_state()
@@ -201,7 +197,11 @@ def test_ingest_from_catalog_works_under_qdrant(monkeypatch):
         admin_module,
         "index_from_catalog_op",
         lambda settings, catalog_type="timeseries", *a, **kw: {
-            "indexed": 0, "errors": [], "rows": 0, "catalog_type": catalog_type, "index": "x"
+            "indexed": 0,
+            "errors": [],
+            "rows": 0,
+            "catalog_type": catalog_type,
+            "index": "x",
         },
     )
 
@@ -234,7 +234,15 @@ def test_ingest_from_catalog_all_submits_one_job_per_type(monkeypatch):
     body = r.json()
     assert body["recreated"] is False
     every_type = {
-        "document", "timeseries", "survey", "geospatial", "timeseriesdb", "table", "script", "image", "video",
+        "document",
+        "timeseries",
+        "survey",
+        "geospatial",
+        "timeseriesdb",
+        "table",
+        "script",
+        "image",
+        "video",
     }
     assert {j["catalog_type"] for j in body["jobs"]} == every_type
     assert all(not j["already_running"] for j in body["jobs"])
@@ -279,7 +287,11 @@ def test_ingest_from_catalog_all_recreates_once_not_per_type(monkeypatch):
         admin_module,
         "index_from_catalog_op",
         lambda settings, catalog_type="timeseries", *a, **kw: {
-            "indexed": 0, "errors": [], "rows": 0, "catalog_type": catalog_type, "index": "x"
+            "indexed": 0,
+            "errors": [],
+            "rows": 0,
+            "catalog_type": catalog_type,
+            "index": "x",
         },
     )
 
@@ -694,7 +706,7 @@ def test_catalog_type_counts_combines_qdrant_facet_and_catalog_totals(monkeypatc
     assert body["video"] == {"catalog_total": 0, "indexed_documents": 0}
 
 
-def test_catalog_type_counts_400_when_not_qdrant_backend(monkeypatch):
+def test_catalog_type_counts_501_when_not_qdrant_backend(monkeypatch):
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
     with TestClient(app) as client:
         _fresh_state()
@@ -704,7 +716,7 @@ def test_catalog_type_counts_400_when_not_qdrant_backend(monkeypatch):
             r = client.get("/admin/catalog/type-counts")
         finally:
             state.settings = prev_settings
-    assert r.status_code == 400
+    assert r.status_code == 501
 
 
 def test_catalog_type_counts_survives_one_catalog_type_being_unreachable(monkeypatch):
@@ -751,7 +763,7 @@ def test_qdrant_collection_delete_requires_confirm(monkeypatch):
     assert r.status_code == 400
 
 
-def test_qdrant_collection_delete_400_when_not_qdrant_backend(monkeypatch):
+def test_qdrant_collection_delete_501_when_not_qdrant_backend(monkeypatch):
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
     with TestClient(app) as client:
         _fresh_state()
@@ -761,7 +773,7 @@ def test_qdrant_collection_delete_400_when_not_qdrant_backend(monkeypatch):
             r = client.delete("/admin/qdrant/collection?confirm=true")
         finally:
             state.settings = prev_settings
-    assert r.status_code == 400
+    assert r.status_code == 501
 
 
 def test_qdrant_collection_delete_drops_collection(monkeypatch):

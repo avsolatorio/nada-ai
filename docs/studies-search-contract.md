@@ -216,9 +216,14 @@ Encoded in `StudySearchResponse.invariant_violations()` and reused by the implem
 
 ## 10. Out of scope for this contract
 
-Variables and citations search (routes reserved: `/variables/search`, `/citations/search`, answering
-`unsupported_capability` until built), dynamic facets (`include_facets` reserved), a reranker, and the admin route
-clean-up (including moving `{idno}` admin paths to `{sid}`).
+Citations search (route reserved: `/citations/search`, answering `unsupported_capability` until built), dynamic
+facets (`include_facets` reserved), a reranker, and the admin route clean-up (including moving `{idno}` admin paths
+to `{sid}`).
+
+**Variables search is now implemented, as its own, separate contract** — `POST /variables/search`, lexical only, no
+modes and no relationship to the fusion/RRF machinery here — see `docs/variables-search-contract.md`. It is a
+sibling contract, not part of this one: it does not add a study search mode, and `variables_search` in `GET /info`
+(§3) describes it independently of `studies_search`/`lexical`/`semantic`/`hybrid`.
 
 ## 11. Decisions and open questions
 

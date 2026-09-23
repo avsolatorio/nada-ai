@@ -27,14 +27,19 @@ from nada_ai.settings import Settings
 logger = logging.getLogger(__name__)
 
 
-def _assert_dense_dim_matches(client, name: str, embedding_dim: int, model_id: str) -> None:
+def _assert_dense_dim_matches(client, name: str, embedding_dim: int | None, model_id: str) -> None:
     """Guard against silently writing wrong-dimension vectors into an existing index.
 
     Mirrors the check in ingest.qdrant_writer._assert_dense_dim_matches and
     the reporting logic in GET /admin/embeddings/drift — same failure mode,
     same fix: without this, a changed NADA_EMBEDDING_MODEL_ID fails per-doc
     deep inside the bulk write instead of failing fast here.
+
+    ``embedding_dim=None`` (``embedding_backend=none``) skips the check entirely: there is no vector field to
+    drift, by design (see ``mapping.index_body``).
     """
+    if embedding_dim is None:
+        return
     mapping = client.indices.get_mapping(index=name)
     stored_dim: int | None = None
     for body in mapping.values():
@@ -53,18 +58,23 @@ def _assert_dense_dim_matches(client, name: str, embedding_dim: int, model_id: s
         )
 
 
-def ensure_index(client, settings: Settings, embedding_dim: int) -> None:
-    """Create the chunk index if missing (stamped with a generation and the embedding model), else check it."""
+def ensure_index(client, settings: Settings, embedding_dim: int | None) -> None:
+    """Create the chunk index if missing (stamped with a generation and the embedding model), else check it.
+
+    ``embedding_dim=None`` (``embedding_backend=none``) stamps no ``embedding_model``/``embedding_dim`` at all,
+    rather than a model id that was never actually loaded or used — ``GET /info`` would otherwise report a model
+    for a deployment that never ran one.
+    """
     name = settings.index_name
     if client.indices.exists(index=name):
         _assert_dense_dim_matches(client, name, embedding_dim, settings.embedding_model_id)
         return
     body = index_body(embedding_dim)
-    body["mappings"]["_meta"] = {
-        "generation": new_index_generation(),
-        "embedding_model": settings.embedding_model_id,
-        "embedding_dim": embedding_dim,
-    }
+    meta: dict[str, Any] = {"generation": new_index_generation()}
+    if embedding_dim is not None:
+        meta["embedding_model"] = settings.embedding_model_id
+        meta["embedding_dim"] = embedding_dim
+    body["mappings"]["_meta"] = meta
     # `body` carries settings + mappings; if opensearch-py deprecates this shape, see UPGRADING.md and split kwargs.
     client.indices.create(index=name, body=body)
 
@@ -197,6 +207,10 @@ def iter_langdoc_records(
     ``"extract"``) like any other study that cannot be loaded.
     """
     use_ml = settings.embedding_backend == "opensearch_ml"
+    # Deliberately no embeddings at all (see mapping.index_body): same shape as the opensearch_ml path below
+    # (yield vec=None, no client-side encoding) but for a different reason — there is no pipeline to embed it
+    # server-side either, the chunk index simply has no embedding field to fill.
+    no_embedding = settings.embedding_backend == "none"
     buffer: list[tuple[Any, Any | None, list[dict[str, Any]] | None, dict[str, list[str]], StudyExtract]] = []
 
     def flush() -> Iterator[tuple[str, list[float] | None, dict[str, Any]]]:
@@ -205,7 +219,7 @@ def iter_langdoc_records(
             return
         items = buffer
         buffer = []
-        if use_ml:
+        if use_ml or no_embedding:
             ml_iter = enumerate(items)
             if show_progress_bar:
                 ml_iter = tqdm(ml_iter, total=len(items), unit="doc", desc="Pack records", leave=False)

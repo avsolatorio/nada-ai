@@ -103,6 +103,42 @@ def index_from_catalog(
     print(f"Indexed {res['indexed']} docs from catalog ({res['rows']} ids); {err_part}")
 
 
+def index_survey_variables(idno: str) -> None:
+    """Delete then re-index every variable of one study, by its NADA idno (lexical variable search)."""
+    from nada_ai.ingest.variables_index import sync_survey_variables_op
+
+    settings = Settings()
+    res = sync_survey_variables_op(settings, idno)
+    err_part = f"{len(res['errors'])} bulk error(s)" if res["errors"] else "ok"
+    print(f"Indexed {res['indexed']} variable(s) for {idno}; {err_part}")
+
+
+def backfill_variables(
+    batch_size: int = 200,
+    max_records: int | None = None,
+    recreate_index: bool = False,
+    show_progress_bar: bool = True,
+) -> None:
+    """Page through NADA's whole catalog of variables and (re)index all of them (lexical variable search).
+
+    Idempotent (``_id`` is the variable's ``uid``): safe to run again after a catalog-wide change. There is no
+    live delta sync yet (see ``ingest/variables_index.py``), so re-run this on a schedule, or use
+    ``index_survey_variables`` right after reindexing one study.
+    """
+    from nada_ai.ingest.variables_index import backfill_variables_op
+
+    settings = Settings()
+    res = backfill_variables_op(
+        settings,
+        batch_size=batch_size,
+        max_records=max_records,
+        recreate_index=recreate_index,
+        show_progress_bar=show_progress_bar,
+    )
+    err_part = f"{len(res['errors'])} bulk error(s)" if res["errors"] else "ok"
+    print(f"Indexed {res['indexed']}/{res['seen']} variable(s); {err_part}")
+
+
 def reconcile_search_index(limit: int = 50) -> None:
     """Poll NADA's ``search-index`` change queue and apply + ack up to ``limit`` items.
 
@@ -136,6 +172,8 @@ if __name__ == "__main__":
             "setup_ingest_pipeline": setup_ingest_pipeline,
             "index": index,
             "index_from_catalog": index_from_catalog,
+            "index_survey_variables": index_survey_variables,
+            "backfill_variables": backfill_variables,
             "reconcile_search_index": reconcile_search_index,
             "search_index_status": search_index_status,
         }

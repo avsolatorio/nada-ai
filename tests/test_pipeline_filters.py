@@ -21,6 +21,7 @@ def _settings(tmp_path, **overrides) -> Settings:
 # fetch_filters_for_idno
 # ---------------------------------------------------------------------------
 
+
 def test_fetch_filters_prefers_cached_extract_filters(tmp_path):
     settings = _settings(tmp_path)
     raw_metadata = {"_extract_filters": {"countries": ["181"]}}
@@ -71,6 +72,7 @@ def test_fetch_filters_returns_none_when_no_records(tmp_path):
 # sync_filters_for_idno_from_nada
 # ---------------------------------------------------------------------------
 
+
 @patch("nada_ai.filters.sync.qdrant_client")
 def test_sync_from_nada_syncs_when_filters_found(mock_client_fn, tmp_path):
     client = MagicMock()
@@ -99,6 +101,7 @@ def test_sync_from_nada_returns_none_when_no_filters_available(tmp_path):
 # ---------------------------------------------------------------------------
 # iter_langdoc_records bakes filter_fields/filter_facets into the payload
 # ---------------------------------------------------------------------------
+
 
 class _FakeDoc:
     def __init__(self, page_content: str, metadata: dict[str, Any]) -> None:
@@ -148,7 +151,10 @@ def test_iter_langdoc_records_bakes_in_cached_extract_filters(tmp_path):
         "DOC-1": [_FakeDoc("a perfectly fine and long enough description", {"idno": "DOC-1", "type": "document"})],
     }
     _FakeLoader._raw_by_idno = {
-        "DOC-1": {"_extract_filters": {"brand_new_facet_key": ["x"]}, "_extract_core_fields": {"survey_uid": 5, "idno": "DOC-1"}}
+        "DOC-1": {
+            "_extract_filters": {"brand_new_facet_key": ["x"]},
+            "_extract_core_fields": {"survey_uid": 5, "idno": "DOC-1"},
+        }
     }
 
     with (
@@ -198,6 +204,59 @@ def test_iter_langdoc_records_includes_qdrant_facets(tmp_path):
     _, _, source = results[0]
     assert source["metadata"]["filter_fields"] == [{"key": "tags", "value": ["health"]}]
     assert source["metadata"]["filter_facets"] == {"tags": ["health"]}
+
+
+def test_iter_langdoc_records_needs_no_embedding_service_when_disabled(tmp_path):
+    """embedding_backend=none: yields vec=None for every chunk, like the opensearch_ml path, but with no
+    EmbeddingService at all — a None passed as ``embedding`` must never be touched, let alone loaded."""
+    import nada_ai.ingest.pipeline as pipeline_module
+
+    _FakeLoader._by_idno = {
+        "DOC-1": [_FakeDoc("a perfectly fine and long enough description", {"idno": "DOC-1", "type": "document"})],
+    }
+    _FakeLoader._raw_by_idno = {
+        "DOC-1": {"_extract_filters": {}, "_extract_core_fields": {"survey_uid": 5, "idno": "DOC-1"}}
+    }
+
+    with (
+        patch.object(pipeline_module, "MetadataLoader", _FakeLoader),
+        patch.object(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata["idno"]),
+    ):
+        settings = _settings(tmp_path, search_backend="opensearch", embedding_backend="none")
+        results = list(
+            pipeline_module.iter_langdoc_records(settings, None, [("DOC-1", "document")], show_progress_bar=False)
+        )
+
+    assert len(results) == 1
+    doc_id, vec, source = results[0]
+    assert vec is None
+    assert "embedding" not in source
+
+
+def test_iter_bulk_actions_attaches_no_pipeline_when_embeddings_are_disabled(tmp_path):
+    """Only opensearch_ml needs the ingest pipeline attached (server-side embedding); embedding_backend=none has
+    no pipeline to attach — its bulk action is the same plain shape as the local backend's, just with no vector."""
+    import nada_ai.ingest.pipeline as pipeline_module
+
+    _FakeLoader._by_idno = {
+        "DOC-1": [_FakeDoc("a perfectly fine and long enough description", {"idno": "DOC-1", "type": "document"})],
+    }
+    _FakeLoader._raw_by_idno = {
+        "DOC-1": {"_extract_filters": {}, "_extract_core_fields": {"survey_uid": 5, "idno": "DOC-1"}}
+    }
+
+    with (
+        patch.object(pipeline_module, "MetadataLoader", _FakeLoader),
+        patch.object(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata["idno"]),
+    ):
+        settings = _settings(tmp_path, search_backend="opensearch", embedding_backend="none")
+        actions = list(
+            pipeline_module.iter_bulk_actions(settings, None, [("DOC-1", "document")], show_progress_bar=False)
+        )
+
+    assert len(actions) == 1
+    assert "pipeline" not in actions[0]
+    assert "embedding" not in actions[0]["_source"]
 
 
 def test_iter_langdoc_records_skips_a_study_without_extract_data(tmp_path):

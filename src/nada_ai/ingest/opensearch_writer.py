@@ -46,7 +46,7 @@ class OpenSearchIngestWriter(IngestWriterPort):
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    def _prepare(self, client: Any, embedding_dim: int, *, recreate: bool) -> None:
+    def _prepare(self, client: Any, embedding_dim: int | None, *, recreate: bool) -> None:
         """Drop (when recreating) and create both indexes, with their templates, before anything is written."""
         settings = self._settings
         if recreate:
@@ -87,7 +87,7 @@ class OpenSearchIngestWriter(IngestWriterPort):
             logger.info("Pruned %d stale chunk document(s) of re-indexed studies", pruned)
         return pruned
 
-    def ensure_target(self, embedding_dim: int, *, recreate: bool = False) -> None:
+    def ensure_target(self, embedding_dim: int | None, *, recreate: bool = False) -> None:
         client = build_client(self._settings)
         try:
             self._prepare(client, embedding_dim, recreate=recreate)
@@ -109,9 +109,14 @@ class OpenSearchIngestWriter(IngestWriterPort):
         load_errors: list[dict[str, Any]] | None = None,
         empty_docs: list[dict[str, Any]] | None = None,
     ) -> tuple[int, list[Any] | None]:
+        _embedding: EmbeddingService | None
+        dim: int | None
         if self._settings.embedding_backend == "opensearch_ml":
-            _embedding: EmbeddingService | None = None
+            _embedding = None
             dim = int(self._settings.opensearch_ml_embedding_dimension or 0)
+        elif self._settings.embedding_backend == "none":
+            _embedding = None
+            dim = None  # no model to load: iter_bulk_actions yields every chunk with no vector
         else:
             _embedding = embedding or EmbeddingService(self._settings)
             dim = _embedding.embedding_dimension()

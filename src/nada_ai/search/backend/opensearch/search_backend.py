@@ -78,7 +78,12 @@ class OpenSearchSearchBackend:
 
     async def health(self) -> dict[str, Any]:
         ok = await self._client.cluster.health()
-        return {"status": "ok", "backend": "opensearch", "cluster": ok.get("status"), "index": self._settings.index_name}
+        return {
+            "status": "ok",
+            "backend": "opensearch",
+            "cluster": ok.get("status"),
+            "index": self._settings.index_name,
+        }
 
     async def search(self, params: SearchParams) -> SearchOutcome:
         static_facets, dynamic_facets = (
@@ -117,9 +122,7 @@ class OpenSearchSearchBackend:
 
         resp = await self._client.search(index=self._settings.index_name, body=q)
         total_val, hits_out = _hits_from_response(resp)
-        facets = (
-            _normalize_facets(resp.get("aggregations"), static_facets, dynamic_facets) if has_facets else None
-        )
+        facets = _normalize_facets(resp.get("aggregations"), static_facets, dynamic_facets) if has_facets else None
         return SearchOutcome(total=total_val, hits=hits_out, facets=facets or None, debug_request=q)
 
     async def recommend_by_idno(self, params: RecommendParams) -> SearchOutcome:
@@ -128,6 +131,11 @@ class OpenSearchSearchBackend:
                 "recommend_by_idno requires stored vectors in _source. With opensearch_ml, embeddings may be "
                 "inaccessible from the client; use embedding_backend=local for this API or extend ingest to store "
                 "retrievable vectors."
+            )
+        if self._settings.embedding_backend == "none":
+            raise ValueError(
+                "recommend_by_idno requires stored vectors in _source, and this deployment has none "
+                "(embedding_backend=none is lexical only)."
             )
 
         seed = params.idno.strip()
@@ -186,9 +194,7 @@ class OpenSearchSearchBackend:
 
         resp = await self._client.search(index=self._settings.index_name, body=q)
         total_val, hits_out = _hits_from_response(resp)
-        facets = (
-            _normalize_facets(resp.get("aggregations"), static_facets, dynamic_facets) if has_facets else None
-        )
+        facets = _normalize_facets(resp.get("aggregations"), static_facets, dynamic_facets) if has_facets else None
         return SearchOutcome(total=total_val, hits=hits_out, facets=facets or None, debug_request=q)
 
     async def explain_by_idno(self, idno: str, filters: dict[str, Any] | None) -> dict[str, Any]:
@@ -240,4 +246,3 @@ class OpenSearchSearchBackend:
             "sample_source": sample,
             "filter_match": fm,
         }
-

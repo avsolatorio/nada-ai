@@ -62,64 +62,71 @@ def filter_facets_mapping(prefix: str = "") -> tuple[dict[str, Any], list[dict[s
     return {"type": "object", "dynamic": True, "properties": properties}, templates
 
 
-def index_body(embedding_dimension: int) -> dict[str, Any]:
+def index_body(embedding_dimension: int | None) -> dict[str, Any]:
     """OpenSearch index settings + mappings of the **chunk** index (text chunks + embeddings + flat filters).
 
     Tuned for **OpenSearch 3.6+** (LTS): FAISS HNSW + ``cosinesimil`` (semantic embeddings). With FAISS +
     ``cosinesimil``, OpenSearch may L2-normalize vectors at index time so stored values can differ from ingest.
     See vector search settings for optional ``index.knn.*`` / quantization tuning on 3.6.
+
+    ``embedding_dimension=None`` (``embedding_backend=none``, a deliberately lexical-only deployment) omits the
+    ``embedding`` field and ``index.knn`` entirely: there is no vector to store or search, so the field would only
+    be dead mapping. ``semantic``/``hybrid`` are already excluded from that deployment's capabilities
+    (``info.modes_for``); nothing queries this index by vector when it lacks the field.
     """
     facets_mapping, templates = filter_facets_mapping(f"{METADATA_OBJECT_KEY}.")
+    properties: dict[str, Any] = {
+        TEXT_FIELD: {"type": "text"},
+        METADATA_OBJECT_KEY: {
+            "type": "object",
+            "dynamic": True,
+            "properties": {
+                "qfield": {"type": "keyword"},
+                "type": {"type": "keyword"},
+                "idno": {"type": "keyword"},
+                "idno_uuid": {"type": "keyword"},
+                "sid": {"type": "integer"},
+                "created": {"type": "long"},
+                "year_start": {"type": "integer"},
+                "year_end": {"type": "integer"},
+                "years": {"type": "integer"},
+                "geographies": {"type": "keyword"},
+                "periodicity": {"type": "keyword"},
+                "source": {"type": "keyword"},
+                "document_type": {"type": "keyword"},
+                "date_published": {"type": "date", "ignore_malformed": True},
+                "date_created": {"type": "date", "ignore_malformed": True},
+                "authors": {"type": "keyword"},
+                "doc_meta": {"type": "object", "enabled": True},
+                FILTER_FACETS_KEY: facets_mapping,
+            },
+        },
+    }
+    if embedding_dimension is not None:
+        properties[EMBEDDING_FIELD] = {
+            "type": "knn_vector",
+            "dimension": embedding_dimension,
+            "method": {
+                "name": "hnsw",
+                "space_type": "cosinesimil",
+                "engine": "faiss",
+                "parameters": {
+                    "m": 16,
+                    "ef_construction": 100,
+                },
+            },
+        }
     return {
         "settings": {
             "index": {
-                "knn": True,
+                **({"knn": True} if embedding_dimension is not None else {}),
                 "number_of_shards": 1,
                 "number_of_replicas": 0,
             }
         },
         "mappings": {
             "dynamic_templates": templates,
-            "properties": {
-                TEXT_FIELD: {"type": "text"},
-                METADATA_OBJECT_KEY: {
-                    "type": "object",
-                    "dynamic": True,
-                    "properties": {
-                        "qfield": {"type": "keyword"},
-                        "type": {"type": "keyword"},
-                        "idno": {"type": "keyword"},
-                        "idno_uuid": {"type": "keyword"},
-                        "sid": {"type": "integer"},
-                        "created": {"type": "long"},
-                        "year_start": {"type": "integer"},
-                        "year_end": {"type": "integer"},
-                        "years": {"type": "integer"},
-                        "geographies": {"type": "keyword"},
-                        "periodicity": {"type": "keyword"},
-                        "source": {"type": "keyword"},
-                        "document_type": {"type": "keyword"},
-                        "date_published": {"type": "date", "ignore_malformed": True},
-                        "date_created": {"type": "date", "ignore_malformed": True},
-                        "authors": {"type": "keyword"},
-                        "doc_meta": {"type": "object", "enabled": True},
-                        FILTER_FACETS_KEY: facets_mapping,
-                    },
-                },
-                EMBEDDING_FIELD: {
-                    "type": "knn_vector",
-                    "dimension": embedding_dimension,
-                    "method": {
-                        "name": "hnsw",
-                        "space_type": "cosinesimil",
-                        "engine": "faiss",
-                        "parameters": {
-                            "m": 16,
-                            "ef_construction": 100,
-                        },
-                    },
-                },
-            },
+            "properties": properties,
         },
     }
 
@@ -180,4 +187,54 @@ def studies_index_body() -> dict[str, Any]:
             }
         },
         "mappings": {"dynamic": "strict", "dynamic_templates": templates, "properties": properties},
+    }
+
+
+# Variable fields searched lexically (see docs/variables-search-contract.md). Unlike study search, there is no
+# semantic/hybrid mode and no golden-query eval yet: weights are a starting point, not a tuned result.
+VARIABLE_TEXT_FIELDS = ("name", "label", "question", "categories")
+
+
+def variables_index_body() -> dict[str, Any]:
+    """OpenSearch settings + mappings of the **variable** index: one document per variable, ``_id`` = ``uid``.
+
+    Denormalized with the owning study's fields (no join at query time), following NADA's own, separate variable
+    indexer (``OpenSearch_variable_indexer.php``) for the field set. Lexical only: ``name``/``label``/``question``/
+    ``categories`` are searched; ``idno``/``title``/``nation`` are stored for display, not matched (NADA's own
+    variable search does not match on them either).
+    """
+    return {
+        "settings": {
+            "index": {
+                "number_of_shards": 1,
+                "number_of_replicas": 0,
+                "analysis": {
+                    "analyzer": {
+                        "nada_text": {
+                            "type": "custom",
+                            "tokenizer": "standard",
+                            "filter": ["lowercase", "asciifolding"],
+                        }
+                    }
+                },
+            }
+        },
+        "mappings": {
+            "dynamic": "strict",
+            "properties": {
+                "uid": {"type": "integer"},
+                "sid": {"type": "integer"},
+                "fid": {"type": "keyword"},
+                "vid": {"type": "keyword"},
+                **{field: {"type": "text", "analyzer": "nada_text"} for field in VARIABLE_TEXT_FIELDS},
+                "idno": {"type": "keyword"},
+                "title": {"type": "keyword"},
+                "nation": {"type": "keyword"},
+                "dataset_type": {"type": "keyword"},
+                "published": {"type": "integer"},
+                "year_start": {"type": "integer"},
+                "year_end": {"type": "integer"},
+                "countries": {"type": "integer"},
+            },
+        },
     }

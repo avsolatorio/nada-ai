@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from nada_ai.search.backend.opensearch.mapping import index_body, studies_index_body
+from nada_ai.search.backend.opensearch.mapping import index_body, studies_index_body, variables_index_body
 from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,12 @@ def studies_index_template_name(settings: Settings) -> str:
     return _template_name(settings.studies_index)
 
 
-def composable_index_template_body(settings: Settings, embedding_dimension: int) -> dict[str, Any]:
+def variables_index_template_name(settings: Settings) -> str:
+    """Template name of the variable index."""
+    return _template_name(settings.variables_index)
+
+
+def composable_index_template_body(settings: Settings, embedding_dimension: int | None) -> dict[str, Any]:
     """Body for ``indices.put_index_template`` of the chunk index."""
     return {
         "index_patterns": [settings.index_name],
@@ -52,12 +57,22 @@ def studies_index_template_body(settings: Settings) -> dict[str, Any]:
     }
 
 
-def put_composable_index_template(client: Any, settings: Settings, embedding_dimension: int) -> dict[str, Any]:
-    """Install or replace the composable index templates of both indices (chunks and studies)."""
+def variables_index_template_body(settings: Settings) -> dict[str, Any]:
+    """Body for ``indices.put_index_template`` of the variable index."""
+    return {
+        "index_patterns": [settings.variables_index],
+        "template": variables_index_body(),
+        "priority": settings.opensearch_index_template_priority,
+    }
+
+
+def put_composable_index_template(client: Any, settings: Settings, embedding_dimension: int | None) -> dict[str, Any]:
+    """Install or replace the composable index templates of every index (chunks, studies, variables)."""
     installed: dict[str, Any] = {}
     for name, body in (
         (composable_index_template_name(settings), composable_index_template_body(settings, embedding_dimension)),
         (studies_index_template_name(settings), studies_index_template_body(settings)),
+        (variables_index_template_name(settings), variables_index_template_body(settings)),
     ):
         client.indices.put_index_template(name=name, body=body)
         logger.info("Installed composable index template %s patterns=%s", name, body["index_patterns"])
