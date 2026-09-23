@@ -98,8 +98,10 @@ def test_index_ids_op_reports_success_and_failure_separately():
     import nada_ai.ingest.service as service_module
 
     fake = _fake_run_bulk_index_with_one_failure("BAD")
-    with patch.object(service_module, "run_bulk_index", fake), \
-         patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report:
+    with (
+        patch.object(service_module, "run_bulk_index", fake),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report,
+    ):
         service_module.index_ids_op(_settings(), ["GOOD", "BAD"], "indicator")
 
     mock_report.assert_called_once()
@@ -115,12 +117,98 @@ def test_index_ids_op_does_not_report_when_disabled():
     import nada_ai.ingest.service as service_module
 
     fake = _fake_run_bulk_index_with_one_failure("BAD")
-    with patch.object(service_module, "run_bulk_index", fake), \
-         patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report:
-        service_module.index_ids_op(
-            _settings(report_search_index_state_enabled=False), ["GOOD", "BAD"], "indicator"
-        )
+    with (
+        patch.object(service_module, "run_bulk_index", fake),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report,
+    ):
+        service_module.index_ids_op(_settings(report_search_index_state_enabled=False), ["GOOD", "BAD"], "indicator")
     mock_report.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# index_ids_op also syncs variables for metadata_type=microdata (a full study
+# index is study + chunks + variables together — see
+# docs/variables-search-contract.md)
+# ---------------------------------------------------------------------------
+
+
+def test_index_ids_op_syncs_variables_for_microdata():
+    import nada_ai.ingest.service as service_module
+
+    fake = _fake_run_bulk_index_with_one_failure("__none__")  # nothing fails
+    with (
+        patch.object(service_module, "run_bulk_index", fake),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk"),
+        patch("nada_ai.ingest.variables_index.sync_survey_variables_op") as mock_sync,
+    ):
+        mock_sync.return_value = {"indexed": 3, "errors": []}
+        result = service_module.index_ids_op(_settings(search_backend="opensearch"), ["A", "B"], "microdata")
+
+    assert mock_sync.call_count == 2
+    synced = {c.args[1] for c in mock_sync.call_args_list}
+    assert synced == {"A", "B"}
+    assert result["variables"] == {"indexed": 6, "errors": []}
+
+
+def test_index_ids_op_skips_variables_for_a_failed_idno():
+    import nada_ai.ingest.service as service_module
+
+    fake = _fake_run_bulk_index_with_one_failure("BAD")
+    with (
+        patch.object(service_module, "run_bulk_index", fake),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk"),
+        patch("nada_ai.ingest.variables_index.sync_survey_variables_op") as mock_sync,
+    ):
+        mock_sync.return_value = {"indexed": 1, "errors": []}
+        service_module.index_ids_op(_settings(search_backend="opensearch"), ["GOOD", "BAD"], "microdata")
+
+    mock_sync.assert_called_once_with(_settings(search_backend="opensearch"), "GOOD")
+
+
+def test_index_ids_op_does_not_sync_variables_for_other_metadata_types():
+    import nada_ai.ingest.service as service_module
+
+    fake = _fake_run_bulk_index_with_one_failure("__none__")
+    with (
+        patch.object(service_module, "run_bulk_index", fake),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk"),
+        patch("nada_ai.ingest.variables_index.sync_survey_variables_op") as mock_sync,
+    ):
+        result = service_module.index_ids_op(_settings(search_backend="opensearch"), ["A"], "indicator")
+
+    mock_sync.assert_not_called()
+    assert result["variables"] is None
+
+
+def test_index_ids_op_does_not_sync_variables_for_qdrant():
+    """Variable search is OpenSearch-only; a qdrant deployment has no separate variable index to sync."""
+    import nada_ai.ingest.service as service_module
+
+    fake = _fake_run_bulk_index_with_one_failure("__none__")
+    with (
+        patch.object(service_module, "run_bulk_index", fake),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk"),
+        patch("nada_ai.ingest.variables_index.sync_survey_variables_op") as mock_sync,
+    ):
+        result = service_module.index_ids_op(_settings(search_backend="qdrant"), ["A"], "microdata")
+
+    mock_sync.assert_not_called()
+    assert result["variables"] is None
+
+
+def test_index_ids_op_variable_sync_failure_does_not_fail_the_call():
+    import nada_ai.ingest.service as service_module
+
+    fake = _fake_run_bulk_index_with_one_failure("__none__")
+    with (
+        patch.object(service_module, "run_bulk_index", fake),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk"),
+        patch("nada_ai.ingest.variables_index.sync_survey_variables_op", side_effect=RuntimeError("boom")),
+    ):
+        result = service_module.index_ids_op(_settings(search_backend="opensearch"), ["A"], "microdata")
+
+    assert result["indexed"] == 1  # the study/chunk indexing itself still succeeded
+    assert result["variables"]["errors"] == [{"idno": "A", "error": "boom"}]
 
 
 # ---------------------------------------------------------------------------
@@ -131,8 +219,10 @@ def test_index_ids_op_does_not_report_when_disabled():
 def test_delete_by_idno_op_reports_deleted_status():
     import nada_ai.ingest.service as service_module
 
-    with patch.object(service_module, "_delete_qdrant", return_value={"backend": "qdrant"}), \
-         patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report:
+    with (
+        patch.object(service_module, "_delete_qdrant", return_value={"backend": "qdrant"}),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report,
+    ):
         service_module.delete_by_idno_op(_settings(search_backend="qdrant"), "IDNO-1")
 
     mock_report.assert_called_once()
@@ -143,8 +233,10 @@ def test_delete_by_idno_op_reports_deleted_status():
 def test_delete_by_idnos_op_reports_all_deleted():
     import nada_ai.ingest.service as service_module
 
-    with patch.object(service_module, "_delete_qdrant_batch", return_value={"backend": "qdrant"}), \
-         patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report:
+    with (
+        patch.object(service_module, "_delete_qdrant_batch", return_value={"backend": "qdrant"}),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report,
+    ):
         service_module.delete_by_idnos_op(_settings(search_backend="qdrant"), ["A", "B"])
 
     mock_report.assert_called_once()
@@ -181,10 +273,12 @@ def test_index_from_catalog_op_excludes_empty_docs_from_indexed_report(tmp_path,
                     progress.mark(idno, ok=True)
         return 1, None
 
-    with patch("ai4data.discovery.catalog.get_metadata_ids", fake_get_metadata_ids), \
-         patch("ai4data.discovery.catalog.is_extract_mode", return_value=False), \
-         patch.object(service_module, "run_bulk_index", fake_run_bulk_index), \
-         patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report:
+    with (
+        patch("ai4data.discovery.catalog.get_metadata_ids", fake_get_metadata_ids),
+        patch("ai4data.discovery.catalog.is_extract_mode", return_value=False),
+        patch.object(service_module, "run_bulk_index", fake_run_bulk_index),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report,
+    ):
         service_module.index_from_catalog_op(settings, catalog_type="geospatial", show_progress_bar=False)
 
     mock_report.assert_called_once()
@@ -236,8 +330,10 @@ def test_index_ids_op_reports_write_failure_as_failed_not_indexed():
     import nada_ai.ingest.service as service_module
 
     fake = _fake_run_bulk_index_with_write_errors([{"id": "u1", "idno": "BAD", "error": "payload rejected"}])
-    with patch.object(service_module, "run_bulk_index", fake), \
-         patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report:
+    with (
+        patch.object(service_module, "run_bulk_index", fake),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report,
+    ):
         service_module.index_ids_op(_settings(), ["GOOD", "BAD"], "indicator")
 
     items = mock_report.call_args.args[1]
@@ -251,8 +347,10 @@ def test_index_ids_op_reports_opensearch_bulk_write_failure_as_failed():
 
     err = {"index": {"_id": "u1", "status": 400, "error": "boom", "data": {"metadata": {"idno": "BAD"}}}}
     fake = _fake_run_bulk_index_with_write_errors([err])
-    with patch.object(service_module, "run_bulk_index", fake), \
-         patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report:
+    with (
+        patch.object(service_module, "run_bulk_index", fake),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report,
+    ):
         service_module.index_ids_op(_settings(), ["GOOD", "BAD"], "indicator")
 
     items = mock_report.call_args.args[1]
@@ -264,8 +362,10 @@ def test_index_ids_op_reports_nothing_indexed_when_write_error_unattributable():
 
     # e.g. Qdrant went away mid-run: the writer reports one un-attributable error for the whole run.
     fake = _fake_run_bulk_index_with_write_errors([{"error": "connection refused"}])
-    with patch.object(service_module, "run_bulk_index", fake), \
-         patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report:
+    with (
+        patch.object(service_module, "run_bulk_index", fake),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report,
+    ):
         service_module.index_ids_op(_settings(), ["A", "B"], "indicator")
 
     # Nothing to report at all: A/B must stay 'missing' in NADA so a reconcile retries them.
@@ -311,10 +411,12 @@ def test_index_from_catalog_op_reports_write_failure_as_failed_not_indexed(tmp_p
                 progress.mark(idno, ok=True)
         return 1, [{"id": "u1", "idno": "BAD", "error": "payload rejected"}]
 
-    with patch("ai4data.discovery.catalog.get_metadata_ids", fake_get_metadata_ids), \
-         patch("ai4data.discovery.catalog.is_extract_mode", return_value=False), \
-         patch.object(service_module, "run_bulk_index", fake_run_bulk_index), \
-         patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report:
+    with (
+        patch("ai4data.discovery.catalog.get_metadata_ids", fake_get_metadata_ids),
+        patch("ai4data.discovery.catalog.is_extract_mode", return_value=False),
+        patch.object(service_module, "run_bulk_index", fake_run_bulk_index),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report,
+    ):
         service_module.index_from_catalog_op(_settings(), catalog_type="geospatial", show_progress_bar=False)
 
     items = mock_report.call_args.args[1]
@@ -342,9 +444,11 @@ def test_qdrant_writer_attaches_idno_to_write_errors():
     embedding = MagicMock()
     embedding.embedding_dimension.return_value = 2
 
-    with patch.object(qw, "_client", return_value=client), \
-         patch.object(qw.QdrantIngestWriter, "ensure_target"), \
-         patch.object(qw, "iter_langdoc_records", return_value=iter([record("GOOD"), record("BAD")])):
+    with (
+        patch.object(qw, "_client", return_value=client),
+        patch.object(qw.QdrantIngestWriter, "ensure_target"),
+        patch.object(qw, "iter_langdoc_records", return_value=iter([record("GOOD"), record("BAD")])),
+    ):
         success, errors = qw.QdrantIngestWriter(settings).run_bulk(
             [("GOOD", "geospatial"), ("BAD", "geospatial")], embedding=embedding, show_progress_bar=False
         )

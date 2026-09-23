@@ -19,9 +19,16 @@ tuning, an eval harness), the deliberate scope decision here was:
 - **A new, standalone index and pipeline**, not folded into the chunk/embedding machinery
   (`ingest/pipeline.py`, `ingest/opensearch_writer.py`): a variable document is a flat denormalization of one DB
   row, with no chunking and no embedding, so none of that applies. See `src/nada_ai/ingest/variables_index.py`.
-- **No live delta sync yet.** `ingest/search_index_sync.py`'s catalog-change queue only carries `object_type=survey`
-  (a `citation` value is reserved and also unhandled). Keeping a study's variables fresh today means running
-  `index_survey_variables` yourself after that study reindexes, or scheduling `backfill_variables` — see §5.
+- **Live delta sync now covers both ways a study's variables actually change** (added after this contract first
+  shipped): a full study index (`index_ids_op`, whatever triggers it — the dashboard, a webhook, the CLI) also
+  syncs that idno's variables, since a full index is study + chunks + variables together; and NADA's own
+  `change_class="variables"` signal (fired by `Dataset_microdata_model::index_variable_data()` after a DDI/
+  data-dictionary re-import — variables changed, nothing else about the study did) syncs *only* the variables via
+  the same queue `search_index_sync.py` already polls for studies, without a full reindex. Both paths are
+  best-effort: a variable-sync failure never fails the study index it rode in on. **Not covered:**
+  `index_from_catalog_op` (bulk, catalog-type-at-a-time reindex) does not sync variables per idno — doing so in
+  that tight loop would add a NADA round-trip per idno to a run that can cover thousands of them. Bulk operations
+  still rely on running `backfill_variables` separately (see §5).
 
 ## 2. `POST /variables/search`
 
@@ -122,6 +129,8 @@ serve).
 
 - No semantic/hybrid mode, no eval-measured field weights (see §1).
 - No countries/years/collections/repository/data-access-type filters, and no `nation` sort (§2).
-- No live delta sync (§1, §5) — a study's variables can go stale between backfills unless something calls
-  `index_survey_variables` after that study reindexes.
+- Bulk catalog-type reindexes (`index_from_catalog_op`) don't sync variables per idno — a full catalog reindex
+  still needs a separate `backfill_variables` run to pick up variable changes; only single/few-idno indexing
+  (`index_ids_op`, whatever triggers it) and NADA's dedicated `change_class="variables"` signal are live-synced
+  (see §1).
 - `authoring_entity` (present in NADA's DB response shape) is not indexed or returned here.
