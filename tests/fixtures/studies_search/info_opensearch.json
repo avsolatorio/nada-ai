@@ -8,7 +8,7 @@
     "hybrid": true,
     "browse": true,
     "facets": false,
-    "variables_search": false,
+    "variables_search": true,
     "citations_search": false
   },
   "id_key": "sid",

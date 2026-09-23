@@ -23,8 +23,10 @@ from nada_ai.app.admin import admin_router, jobs_router
 from nada_ai.app.audit_admin import audit_router
 from nada_ai.app.auth import require_role, resolve_principal
 from nada_ai.app.catalog_admin import catalog_router
+from nada_ai.app.demo_preview import render_pdf_page_png, resolve_document_pdf_path
 from nada_ai.app.facets_admin import facets_router
 from nada_ai.app.info import info_router
+from nada_ai.app.jobs import JobRegistry
 from nada_ai.app.keys_admin import keys_router
 from nada_ai.app.keys_store import Role
 from nada_ai.app.logging_setup import configure_logging
@@ -32,9 +34,6 @@ from nada_ai.app.metrics import MetricsRegistry
 from nada_ai.app.metrics_admin import metrics_router
 from nada_ai.app.rate_limit import RateLimiter, rate_limited
 from nada_ai.app.request_context import reset_request_id, set_request_id
-from nada_ai.app.webhooks import webhooks_router
-from nada_ai.app.demo_preview import render_pdf_page_png, resolve_document_pdf_path
-from nada_ai.app.jobs import JobRegistry
 from nada_ai.app.schemas import (
     ExplainSearchRequest,
     RecommendRequest,
@@ -45,6 +44,8 @@ from nada_ai.app.schemas import (
 from nada_ai.app.state import AppState, ensure_embedding_initialized, get_state, state
 from nada_ai.app.studies_errors import StudiesApiError, studies_error_handler
 from nada_ai.app.studies_search import studies_router, studies_validation_handler
+from nada_ai.app.variables_search import variables_router
+from nada_ai.app.webhooks import webhooks_router
 from nada_ai.mcp_server import mcp
 from nada_ai.search.backend.opensearch.client import build_async_client
 from nada_ai.search.dynamic_filters import load_dynamic_facet_keys
@@ -123,6 +124,7 @@ app.add_exception_handler(StudiesApiError, studies_error_handler)
 app.add_exception_handler(RequestValidationError, studies_validation_handler)
 app.include_router(info_router)
 app.include_router(studies_router)
+app.include_router(variables_router)
 app.include_router(admin_router)
 app.include_router(jobs_router)
 app.include_router(catalog_router)
@@ -210,12 +212,28 @@ async def demo_document_page_preview(
 
 @app.get("/health")
 async def health(s: AppState = Depends(get_state)) -> dict[str, Any]:
+    """One health shape for every engine: ``status``, ``backend``, ``collection``, ``collection_exists`` are always
+    present. Qdrant's own ``search.health()`` already returns exactly that; OpenSearch is made to match it here
+    rather than returning its own, differently-shaped payload (``cluster``/``index``, no ``backend`` or
+    ``collection_exists`` at all) — a caller reading fixed field names got ``undefined`` under OpenSearch before,
+    which rendered as a false "unhealthy" collection rather than a missing one. ``cluster`` is kept as an
+    OpenSearch-specific extra for anyone who still wants the raw cluster status.
+    """
     try:
         if s.settings.search_backend == "qdrant":
             return await s.search.health()
         assert s.client is not None
-        ok = await s.client.cluster.health()
-        return {"status": "ok", "cluster": ok.get("status"), "index": s.settings.index_name}
+        name = s.settings.index_name
+        cluster = await s.client.cluster.health()
+        exists = await s.client.indices.exists(index=name)
+        cluster_status = cluster.get("status")
+        return {
+            "status": "ok" if exists and cluster_status in ("green", "yellow") else "degraded",
+            "backend": s.settings.search_backend,
+            "collection": name,
+            "collection_exists": bool(exists),
+            "cluster": cluster_status,
+        }
     except Exception as e:
         logger.error("health check failed: %s", e)
         raise HTTPException(status_code=503, detail="backend unavailable") from e
@@ -378,7 +396,6 @@ async def search(
 
 
 def _search_backend_http_exception(e: Exception, s: AppState) -> HTTPException:
-    import logging as _log
     if isinstance(e, ValueError):
         return HTTPException(status_code=400, detail=str(e))
     if isinstance(e, NotFoundError):

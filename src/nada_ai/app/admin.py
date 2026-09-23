@@ -66,11 +66,18 @@ from nada_ai.search.backend.opensearch.ml.setup import ingest_pipeline_definitio
 logger = logging.getLogger(__name__)
 
 
-def _require_opensearch(s: AppState) -> None:
-    if s.client is None:
+def _require_engine(s: AppState, expected: str) -> None:
+    """501 when this admin route only exists for the ``expected`` search backend.
+
+    One status code for every "wrong engine for this route" case, whichever engine the route is namespaced to
+    (``opensearch``-only admin routes and the ``qdrant``-only collection routes both use this) — a caller should
+    never have to remember that one case used to answer 400 and another 501.
+    """
+    if s.settings.search_backend != expected:
         raise HTTPException(
             status_code=501,
-            detail="This admin route requires OpenSearch. It is unavailable when NADA_SEARCH_BACKEND=qdrant.",
+            detail=f"This admin route requires search_backend={expected}. "
+            f"It is unavailable when NADA_SEARCH_BACKEND={s.settings.search_backend}.",
         )
 
 
@@ -102,7 +109,9 @@ async def _submit_or_409(
     job_id: str | None = None,
     cancel_token: CancelToken | None = None,
 ) -> JSONResponse:
-    job = await s.jobs.submit(kind=kind, key=key, factory=factory, params=params, job_id=job_id, cancel_token=cancel_token)
+    job = await s.jobs.submit(
+        kind=kind, key=key, factory=factory, params=params, job_id=job_id, cancel_token=cancel_token
+    )
     payload = _job_envelope(job)
     if principal is not None:
         await audit_log(
@@ -126,7 +135,7 @@ async def admin_create_index(
     s: AppState = Depends(get_state),
     principal: Principal = Depends(require_role(Role.admin)),
 ) -> JSONResponse:
-    _require_opensearch(s)
+    _require_engine(s, "opensearch")
     settings = s.settings
     recreate = body.recreate
 
@@ -146,7 +155,7 @@ async def admin_create_index(
 @admin_router.post("/admin/index/template", dependencies=[Depends(require_role(Role.admin))])
 async def admin_put_index_template(s: AppState = Depends(get_state)) -> dict[str, Any]:
     """Install composable index template (knn_vector mapping) for ``index_name``; optional cluster auto-create."""
-    _require_opensearch(s)
+    _require_engine(s, "opensearch")
     return await asyncio.to_thread(put_index_template_op, s.settings)
 
 
@@ -389,11 +398,7 @@ async def admin_catalog_type_counts(s: AppState = Depends(get_state)) -> dict[st
     ``catalog_total``; it is the closest cheap proxy without a distinct-idno
     count, which Qdrant has no efficient primitive for on top of ~1700+ points.
     """
-    if s.settings.search_backend != "qdrant":
-        raise HTTPException(
-            status_code=400,
-            detail="This route is only available when NADA_SEARCH_BACKEND=qdrant.",
-        )
+    _require_engine(s, "qdrant")
     client = getattr(s.search, "client", None)
     if client is None:
         raise HTTPException(status_code=503, detail="Qdrant search backend has no client")
@@ -427,7 +432,7 @@ async def admin_catalog_type_counts(s: AppState = Depends(get_state)) -> dict[st
     "/admin/index/stats", dependencies=[Depends(require_role(Role.read))], response_model=IndexStatsResponse
 )
 async def admin_index_stats(s: AppState = Depends(get_state)) -> IndexStatsResponse:
-    _require_opensearch(s)
+    _require_engine(s, "opensearch")
     name = s.settings.index_name
     try:
         stats = await s.client.indices.stats(index=name)
@@ -453,7 +458,7 @@ async def admin_index_stats(s: AppState = Depends(get_state)) -> IndexStatsRespo
 
 @admin_router.get("/admin/index/mapping", dependencies=[Depends(require_role(Role.read))])
 async def admin_index_mapping(s: AppState = Depends(get_state)) -> dict[str, Any]:
-    _require_opensearch(s)
+    _require_engine(s, "opensearch")
     name = s.settings.index_name
     try:
         return await s.client.indices.get_mapping(index=name)
@@ -466,7 +471,7 @@ async def admin_index_mapping(s: AppState = Depends(get_state)) -> dict[str, Any
 
 @admin_router.post("/admin/index/refresh", dependencies=[Depends(require_role(Role.write))])
 async def admin_index_refresh(s: AppState = Depends(get_state)) -> dict[str, Any]:
-    _require_opensearch(s)
+    _require_engine(s, "opensearch")
     name = s.settings.index_name
     try:
         resp = await s.client.indices.refresh(index=name)
@@ -484,7 +489,7 @@ async def admin_index_delete(
     s: AppState = Depends(get_state),
     principal: Principal = Depends(require_role(Role.admin)),
 ) -> dict[str, Any]:
-    _require_opensearch(s)
+    _require_engine(s, "opensearch")
     if not confirm:
         raise HTTPException(status_code=400, detail="add ?confirm=true to drop the index")
     name = s.settings.index_name
@@ -502,7 +507,7 @@ async def admin_index_delete(
 
 @admin_router.get("/admin/docs/{idno}", dependencies=[Depends(require_role(Role.read))])
 async def admin_doc_get(idno: str, s: AppState = Depends(get_state)) -> dict[str, Any]:
-    _require_opensearch(s)
+    _require_engine(s, "opensearch")
     name = s.settings.index_name
     body = {
         "size": 50,
@@ -520,9 +525,7 @@ async def admin_doc_get(idno: str, s: AppState = Depends(get_state)) -> dict[str
         "index": name,
         "idno": idno,
         "count": len(hits),
-        "hits": [
-            {"_id": h.get("_id"), "_score": h.get("_score"), "_source": h.get("_source", {})} for h in hits
-        ],
+        "hits": [{"_id": h.get("_id"), "_score": h.get("_score"), "_source": h.get("_source", {})} for h in hits],
     }
 
 
@@ -535,7 +538,7 @@ async def admin_doc_delete(
     s: AppState = Depends(get_state),
     principal: Principal = Depends(require_role(Role.write)),
 ) -> DeleteDocsResponse:
-    _require_opensearch(s)
+    _require_engine(s, "opensearch")
     name = s.settings.index_name
     body = {"query": {"term": {metadata_field("idno"): idno}}}
     try:
@@ -592,7 +595,7 @@ async def admin_embeddings_encode(body: EncodeRequest, s: AppState = Depends(get
 
 @admin_router.get("/admin/ml/pipeline", dependencies=[Depends(require_role(Role.read))])
 async def admin_ml_pipeline(s: AppState = Depends(get_state)) -> dict[str, Any]:
-    _require_opensearch(s)
+    _require_engine(s, "opensearch")
     name = s.settings.opensearch_ml_ingest_pipeline_name
     out: dict[str, Any] = {
         "embedding_backend": s.settings.embedding_backend,
@@ -617,11 +620,7 @@ async def admin_ml_pipeline(s: AppState = Depends(get_state)) -> dict[str, Any]:
 @admin_router.get("/admin/qdrant/collection", dependencies=[Depends(require_role(Role.read))])
 async def admin_qdrant_collection(s: AppState = Depends(get_state)) -> dict[str, Any]:
     """Collection metadata when ``NADA_SEARCH_BACKEND=qdrant`` (no OpenSearch client required)."""
-    if s.settings.search_backend != "qdrant":
-        raise HTTPException(
-            status_code=400,
-            detail="This route is only available when NADA_SEARCH_BACKEND=qdrant.",
-        )
+    _require_engine(s, "qdrant")
     client = getattr(s.search, "client", None)
     if client is None:
         raise HTTPException(status_code=503, detail="Qdrant search backend has no client")
@@ -647,11 +646,7 @@ async def admin_qdrant_collection_delete(
     ``NADA_SEARCH_BACKEND=qdrant``, so "delete the index" was only reachable
     bundled inside ``recreate_index=True`` on a full reindex call).
     """
-    if s.settings.search_backend != "qdrant":
-        raise HTTPException(
-            status_code=400,
-            detail="This route is only available when NADA_SEARCH_BACKEND=qdrant.",
-        )
+    _require_engine(s, "qdrant")
     if not confirm:
         raise HTTPException(status_code=400, detail="add ?confirm=true to drop the collection")
     client = getattr(s.search, "client", None)
@@ -700,7 +695,7 @@ async def admin_embedding_drift(s: AppState = Depends(get_state)) -> dict[str, A
             first = next(iter(vectors.values()))
             stored_dimension = getattr(first, "size", None)
     else:
-        _require_opensearch(s)
+        _require_engine(s, "opensearch")
         target = s.settings.index_name
         try:
             mapping = await s.client.indices.get_mapping(index=target)
@@ -844,7 +839,9 @@ async def admin_search_index_diff_missing_list(
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     data_type: str | None = Query(default=None, description="Narrow to one surveys.type value, e.g. 'geospatial'."),
-    has_error: bool = Query(default=False, description="Only rows with a recorded last_error (genuinely failed, not just never attempted)."),
+    has_error: bool = Query(
+        default=False, description="Only rows with a recorded last_error (genuinely failed, not just never attempted)."
+    ),
     s: AppState = Depends(get_state),
 ) -> dict[str, Any]:
     """Paginated list of catalog entries with no current 'indexed' state row —
@@ -965,7 +962,8 @@ async def admin_search_index_type_breakdown(
 async def admin_search_index_reconcile_diff(
     object_type: str = Query(default="survey", description="NADA object_type — 'survey' or 'citation'."),
     data_type: str | None = Query(
-        default=None, description="Narrow to one surveys.type value, e.g. 'geospatial' — omit to reconcile all of object_type."
+        default=None,
+        description="Narrow to one surveys.type value, e.g. 'geospatial' — omit to reconcile all of object_type.",
     ),
     s: AppState = Depends(get_state),
     principal: Principal = Depends(require_role(Role.write)),
@@ -1016,7 +1014,9 @@ async def admin_search_index_reconcile_diff(
 
 @jobs_router.get("/jobs", response_model=JobListResponse, dependencies=[Depends(require_role(Role.read))])
 async def jobs_list(
-    status: str | None = Query(default=None, description="Filter by status: pending|running|succeeded|failed|cancelled"),
+    status: str | None = Query(
+        default=None, description="Filter by status: pending|running|succeeded|failed|cancelled"
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     s: AppState = Depends(get_state),
 ) -> JobListResponse:

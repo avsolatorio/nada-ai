@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -151,11 +152,25 @@ def classify_validation_error(exc: RequestValidationError) -> StudiesApiError:
     )
 
 
+#: Every route sharing this contract's validation envelope, and how each maps its own errors to a contract code.
+#: ``app.variables_search`` registers itself into this at import time (before the app can serve a request), rather
+#: than this module knowing about a sibling route.
+VALIDATION_CLASSIFIERS: dict[str, Callable[[RequestValidationError], StudiesApiError]] = {
+    STUDIES_SEARCH_PATH: classify_validation_error,
+}
+
+
+def register_validation_classifier(path: str, classifier: Callable[[RequestValidationError], StudiesApiError]) -> None:
+    VALIDATION_CLASSIFIERS[path] = classifier
+
+
 async def studies_validation_handler(request: Request, exc: RequestValidationError) -> Response:
-    """Contract envelope for this route's validation errors; every other route keeps the framework default."""
-    if request.url.path != STUDIES_SEARCH_PATH:
+    """Contract envelope for validation errors of every route in ``VALIDATION_CLASSIFIERS``; every other route
+    keeps the framework default."""
+    classifier = VALIDATION_CLASSIFIERS.get(request.url.path)
+    if classifier is None:
         return await request_validation_exception_handler(request, exc)
-    return await studies_error_handler(request, classify_validation_error(exc))
+    return await studies_error_handler(request, classifier(exc))
 
 
 # ---------------------------------------------------------------------------------------

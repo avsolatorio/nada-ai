@@ -17,6 +17,7 @@ def test_health_returns_ok(monkeypatch):
     with TestClient(app) as client:
         mock = MagicMock()
         mock.cluster.health = AsyncMock(return_value={"status": "green", "cluster_name": "test"})
+        mock.indices.exists = AsyncMock(return_value=True)
         prev_client, prev_search = state.client, state.search
         state.client = mock
         state.search = create_search_backend(state.settings, mock)
@@ -26,7 +27,11 @@ def test_health_returns_ok(monkeypatch):
             state.client = prev_client
             state.search = prev_search
     assert r.status_code == 200
-    assert r.json()["status"] == "ok"
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["backend"] == "opensearch"
+    assert body["collection_exists"] is True
+    assert body["cluster"] == "green"
 
 
 def test_search_falls_back_to_real_search_when_idno_fast_path_misses():
@@ -46,7 +51,9 @@ def test_search_falls_back_to_real_search_when_idno_fast_path_misses():
         mock_search.search = AsyncMock(
             side_effect=[
                 SearchOutcome(total=0, hits=[]),
-                SearchOutcome(total=1, hits=[{"_id": "x", "_score": 1.0, "_source": {"metadata": {"idno": "WB_LSMS_001"}}}]),
+                SearchOutcome(
+                    total=1, hits=[{"_id": "x", "_score": 1.0, "_source": {"metadata": {"idno": "WB_LSMS_001"}}}]
+                ),
             ]
         )
         state.search = mock_search

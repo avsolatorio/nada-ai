@@ -142,6 +142,16 @@ def test_index_generations_are_unique() -> None:
     assert new_index_generation() != new_index_generation()
 
 
+def test_chunk_index_has_no_embedding_field_when_embeddings_are_disabled() -> None:
+    """embedding_dimension=None (embedding_backend=none): no vector to store or search, so no dead mapping."""
+    body = index_body(None)
+    assert "embedding" not in body["mappings"]["properties"]
+    assert "knn" not in body["settings"]["index"]
+    # everything else (text, metadata, filters) is unaffected
+    assert "page_content" in body["mappings"]["properties"]
+    assert "filter_facets" in body["mappings"]["properties"]["metadata"]["properties"]
+
+
 # ---------------------------------------------------------------------------------------
 # Index creation
 # ---------------------------------------------------------------------------------------
@@ -167,6 +177,29 @@ def test_ensure_index_stamps_generation_and_embedding_info() -> None:
     assert meta["embedding_model"] == "model-x"
     assert meta["embedding_dim"] == 384
     assert meta["generation"]
+
+
+def test_ensure_index_stamps_no_embedding_info_when_disabled() -> None:
+    """embedding_dim=None must not stamp embedding_model_id as if a model had actually run — GET /info would
+    otherwise report a model this deployment never loaded."""
+    client = _client()
+    settings = Settings(
+        search_backend="opensearch", index_name="chunks", embedding_backend="none", embedding_model_id="model-x"
+    )
+    pipeline.ensure_index(client, settings, None)
+    body = client.indices.create.call_args.kwargs["body"]
+    meta = body["mappings"]["_meta"]
+    assert "embedding_model" not in meta
+    assert "embedding_dim" not in meta
+    assert meta["generation"]
+    assert "embedding" not in body["mappings"]["properties"]
+
+
+def test_assert_dense_dim_matches_skips_the_check_when_disabled() -> None:
+    """No vector field to drift, and no mapping fetch needed to know that."""
+    client = MagicMock()
+    pipeline._assert_dense_dim_matches(client, "chunks", None, "model-x")
+    client.indices.get_mapping.assert_not_called()
 
 
 def test_ensure_studies_index_creates_once() -> None:
@@ -268,11 +301,39 @@ def test_writer_reports_errors_from_both_indexes() -> None:
     assert errors == [{"index": {"_id": "c"}}, {"index": {"_id": "4"}}]
 
 
-def test_writer_installs_both_templates_when_enabled() -> None:
+def test_writer_installs_every_index_template_when_enabled() -> None:
     settings = Settings(index_name="chunks", opensearch_put_composable_index_template=True)
     client = _client()
     _run_writer(settings, client, recreate=False, bulk_results=[(0, []), (0, [])])
-    assert client.indices.put_index_template.call_count == 2
+    assert client.indices.put_index_template.call_count == 3
+
+
+def test_writer_run_bulk_loads_no_model_when_embeddings_are_disabled() -> None:
+    """embedding_backend=none, and no ``embedding=`` override given: run_bulk must not fall back to building a
+    real EmbeddingService (which would load the actual model) just to encode chunks nothing will store a vector
+    for."""
+    settings = Settings(
+        search_backend="opensearch",
+        index_name="chunks",
+        embedding_backend="none",
+        opensearch_put_composable_index_template=False,
+    )
+    client = _client()
+
+    def fake_iter_bulk_actions(_settings, _embedding, _pairs, *, studies, **_):
+        studies.extend(_studies())
+        return iter(())
+
+    def _boom(_settings):
+        raise AssertionError("EmbeddingService must not be instantiated when embedding_backend=none")
+
+    with (
+        patch("nada_ai.ingest.opensearch_writer.build_client", return_value=client),
+        patch("nada_ai.ingest.opensearch_writer.bulk", return_value=(0, [])),
+        patch("nada_ai.ingest.opensearch_writer.iter_bulk_actions", side_effect=fake_iter_bulk_actions),
+        patch("nada_ai.ingest.opensearch_writer.EmbeddingService", _boom),
+    ):
+        OpenSearchIngestWriter(settings).run_bulk([("PC11_A02-28-v22", "microdata")])
 
 
 def test_writer_prunes_chunks_that_are_not_in_this_run() -> None:
