@@ -115,6 +115,26 @@ def fetch_study_records(
     return records
 
 
+def fetch_study_extract(settings: Settings, idno: str) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    """``(sid, core_fields, filters)`` of one study, from its extract record (no metadata body is requested)."""
+    try:
+        data = catalog_extract.fetch_extract_study(
+            idno, include_admin_metadata=True, include_metadata=False, **_request_kwargs(settings)
+        )
+    except Exception as e:
+        raise _wrap_extract_error(e) from e
+    study = data.get("study") if isinstance(data.get("study"), dict) else data
+    core = study.get("core_fields")
+    filters = study.get("filters")
+    try:
+        sid = int(core["survey_uid"])
+    except (KeyError, TypeError, ValueError):
+        sid = 0
+    if sid <= 0 or not isinstance(filters, dict):
+        raise MetadataExtractError(f"Extract record for {idno!r} lacks core_fields.survey_uid or filters")
+    return sid, core, filters
+
+
 def iter_study_records(
     settings: Settings,
     *,

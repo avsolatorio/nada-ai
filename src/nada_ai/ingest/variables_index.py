@@ -2,52 +2,33 @@
 
 Deliberately a standalone module, not part of the chunk/embedding ingestion pipeline (``pipeline.py``,
 ``opensearch_writer.py``): a variable document is a flat denormalization of one DB row, with no chunking and no
-embedding, so none of that machinery applies. It is also not wired into the live catalog-change queue
-(``search_index_sync.py``) yet — that queue only carries ``object_type=survey`` today, so keeping a study's
-variables fresh currently means running ``sync_survey_variables_op`` yourself (e.g. from the same place that
-already reindexes the study) or scheduling ``backfill_variables_op``.
+embedding, so none of that machinery applies.
+
+Two operations: ``sync_survey_variables_op`` replaces one study's variables (called by a full study index, by NADA's
+``change_class=variables`` queue signal, and by the variables-only job) and ``backfill_variables_op`` walks the whole
+catalog. Both fetch from NADA a page at a time, so neither needs a study's or the catalog's variables in memory at
+once. ``POST /admin/variables/sync`` runs either as a background job; the CLI runs them directly.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from itertools import batched, chain
 from typing import Any
 
 import ai4data.discovery.catalog.extract as catalog_extract
 from opensearchpy.helpers import bulk
 
-from nada_ai.nada.admin_auth import resolve_admin_cookies, resolve_admin_headers, scrub_admin_credentials
+from nada_ai.ingest.extract_access import ExtractError, request_kwargs
+from nada_ai.ingest.progress import CancelToken
+from nada_ai.nada.admin_auth import scrub_admin_credentials
 from nada_ai.search.backend.opensearch.client import build_client
 from nada_ai.search.backend.opensearch.mapping import new_index_generation, variables_index_body
 from nada_ai.search.backend.opensearch.variables import variable_bulk_action
 from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
-
-_USER_AGENT = "nada-ai-variables-index-cli/1.0"
-
-
-class VariablesExtractError(RuntimeError):
-    """Raised when NADA's search-metadata-extract variables endpoint returns an error payload."""
-
-
-def _base_url(settings: Settings) -> str:
-    if settings.metadata_extract_base_url:
-        return settings.metadata_extract_base_url.rstrip("/")
-    if url := catalog_extract.extract_base_url():
-        return url
-    raise VariablesExtractError(
-        "No metadata-extract base URL configured. Set NADA_METADATA_EXTRACT_BASE_URL "
-        "(or AI4DATA_METADATA_CATALOG_EXTRACT_PATH) to the metadata-extract API for your NADA instance."
-    )
-
-
-def _request_kwargs(settings: Settings) -> dict[str, Any]:
-    return {
-        "base_url": _base_url(settings),
-        "headers": resolve_admin_headers(user_agent=_USER_AGENT),
-        "cookies": resolve_admin_cookies(),
-    }
 
 
 def ensure_variables_index(client: Any, settings: Settings) -> None:
@@ -74,31 +55,65 @@ def _bulk_actions(index: str, variables: list[dict[str, Any]]) -> list[dict[str,
     return actions
 
 
-def sync_survey_variables_op(settings: Settings, idno: str) -> dict[str, Any]:
-    """Delete then re-index every variable of one study (by its NADA idno). Best fit after that study's own
-    document is (re)indexed, so a search never shows a variable of an unpublished or deleted study."""
+def _write_batch(client: Any, index: str, batch: list[dict[str, Any]]) -> tuple[int, list[Any]]:
+    """Bulk-write one page of variable documents; ``(indexed, errors)``. Refreshes once at the end of a run, not here."""
+    actions = _bulk_actions(index, batch)
+    if not actions:
+        return 0, []
+    success, errors = bulk(client, actions, raise_on_error=False, refresh=False)
+    return int(success), list(errors) if isinstance(errors, list) else []
+
+
+def sync_survey_variables_op(
+    settings: Settings,
+    idno: str,
+    *,
+    page_size: int = 1000,
+    cancel_token: CancelToken | None = None,
+) -> dict[str, Any]:
+    """Replace one study's variables in the index (by its NADA idno): delete them, then write every page of them.
+
+    Best fit after that study's own document is (re)indexed, so a search never shows a variable of an unpublished or
+    deleted study. The study's variables are fetched a page at a time (a study can have far more than fit in one
+    response), and the first page is fetched **before** anything is deleted: a study that cannot be read (unknown
+    idno, NADA unreachable) leaves its existing variables alone instead of emptying them. A failure after that first
+    page leaves the study partially indexed and raises; running the sync again repairs it, since each variable's
+    ``_id`` is its ``uid``.
+
+    Returns ``{"idno", "indexed", "errors", "cancelled"}``; ``cancelled`` is true when ``cancel_token`` stopped the
+    pages early.
+    """
     client = build_client(settings)
     try:
         ensure_variables_index(client, settings)
 
-        client.delete_by_query(
-            index=settings.variables_index,
-            body={"query": {"term": {"idno": idno}}},
-            refresh=True,
-        )
-
         try:
-            data = catalog_extract.fetch_extract_survey_variables(idno, **_request_kwargs(settings))
+            pages = batched(
+                catalog_extract.iter_extract_survey_variables(idno, page_size=page_size, **request_kwargs(settings)),
+                page_size,
+            )
+            first = next(pages, ())
         except Exception as e:
-            raise VariablesExtractError(scrub_admin_credentials(str(e))) from e
+            raise ExtractError(scrub_admin_credentials(str(e))) from e
 
-        variables = data.get("variables")
-        actions = _bulk_actions(settings.variables_index, variables if isinstance(variables, list) else [])
-        if not actions:
-            return {"idno": idno, "indexed": 0, "errors": []}
+        client.delete_by_query(index=settings.variables_index, body={"query": {"term": {"idno": idno}}}, refresh=True)
 
-        success, errors = bulk(client, actions, raise_on_error=False, refresh="wait_for")
-        return {"idno": idno, "indexed": success, "errors": list(errors) if isinstance(errors, list) else []}
+        indexed = 0
+        errors: list[Any] = []
+        cancelled = False
+        try:
+            for batch in chain([first] if first else [], pages):
+                if cancel_token is not None and cancel_token.is_set():
+                    cancelled = True
+                    break
+                written, batch_errors = _write_batch(client, settings.variables_index, list(batch))
+                indexed += written
+                errors.extend(batch_errors)
+        except Exception as e:
+            raise ExtractError(scrub_admin_credentials(str(e))) from e
+
+        client.indices.refresh(index=settings.variables_index)
+        return {"idno": idno, "indexed": indexed, "errors": errors, "cancelled": cancelled}
     finally:
         client.close()
 
@@ -106,13 +121,24 @@ def sync_survey_variables_op(settings: Settings, idno: str) -> dict[str, Any]:
 def backfill_variables_op(
     settings: Settings,
     *,
-    batch_size: int = 200,
+    batch_size: int = 1000,
     max_records: int | None = None,
     recreate_index: bool = False,
     show_progress_bar: bool = True,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_token: CancelToken | None = None,
 ) -> dict[str, Any]:
     """Page through every variable in the catalog and (re)index it. Run once to populate the index, or again after
-    a catalog-wide change: each document's ``_id`` is its ``uid``, so re-running is idempotent."""
+    a catalog-wide change: each document's ``_id`` is its ``uid``, so re-running is idempotent.
+
+    The catalog is walked with a keyset cursor (``after_uid``), so a page costs the same however deep it is, and
+    NADA counts the catalog once, on the first page. ``progress_cb`` receives the job-registry progress shape
+    (``processed``/``total``/``failed``/``percent``) after every page. This adds and replaces variables; it does not
+    remove variables that no longer exist in NADA — deleting a study does that (see ``delete_by_idno_op``), and
+    ``sync_survey_variables_op`` replaces one study's variables outright.
+
+    Returns ``{"seen", "indexed", "errors", "total", "cancelled"}``.
+    """
     client = build_client(settings)
     try:
         if recreate_index and client.indices.exists(index=settings.variables_index):
@@ -122,45 +148,49 @@ def backfill_variables_op(
         indexed = 0
         errors: list[Any] = []
         seen = 0
+        cancelled = False
+        total: int | None = None
+
+        def on_page(data: dict[str, Any]) -> None:
+            nonlocal total
+            if total is None and isinstance(data.get("total"), int):
+                total = data["total"]
+
         pbar: Any = None
         if show_progress_bar:
             from tqdm.auto import tqdm
 
             pbar = tqdm(unit="variable", desc="Index variables")
         try:
-            request_kwargs = _request_kwargs(settings)
-            batch: list[dict[str, Any]] = []
-            for variable in catalog_extract.iter_extract_variables(
-                page_size=batch_size, max_items=max_records, **request_kwargs
-            ):
-                batch.append(variable)
-                seen += 1
-                if len(batch) >= batch_size:
-                    actions = _bulk_actions(settings.variables_index, batch)
-                    if actions:
-                        success, batch_errors = bulk(client, actions, raise_on_error=False, refresh=False)
-                        indexed += success
-                        if isinstance(batch_errors, list):
-                            errors.extend(batch_errors)
-                    if pbar is not None:
-                        pbar.update(len(batch))
-                    batch = []
-            if batch:
-                actions = _bulk_actions(settings.variables_index, batch)
-                if actions:
-                    success, batch_errors = bulk(client, actions, raise_on_error=False, refresh=False)
-                    indexed += success
-                    if isinstance(batch_errors, list):
-                        errors.extend(batch_errors)
+            variables = catalog_extract.iter_extract_variables(
+                page_size=batch_size, max_items=max_records, on_page=on_page, **request_kwargs(settings)
+            )
+            for batch in batched(variables, batch_size):
+                if cancel_token is not None and cancel_token.is_set():
+                    cancelled = True
+                    break
+                written, batch_errors = _write_batch(client, settings.variables_index, list(batch))
+                indexed += written
+                errors.extend(batch_errors)
+                seen += len(batch)
                 if pbar is not None:
                     pbar.update(len(batch))
+                if progress_cb is not None:
+                    progress_cb(
+                        {
+                            "processed": seen,
+                            "total": total,
+                            "failed": len(errors),
+                            "percent": round(100 * seen / total, 1) if total else None,
+                        }
+                    )
         except Exception as e:
-            raise VariablesExtractError(scrub_admin_credentials(str(e))) from e
+            raise ExtractError(scrub_admin_credentials(str(e))) from e
         finally:
             if pbar is not None:
                 pbar.close()
 
         client.indices.refresh(index=settings.variables_index)
-        return {"seen": seen, "indexed": indexed, "errors": errors}
+        return {"seen": seen, "indexed": indexed, "errors": errors, "total": total, "cancelled": cancelled}
     finally:
         client.close()

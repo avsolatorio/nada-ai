@@ -159,3 +159,43 @@ async def test_reconcile_loop_cancels_cleanly():
         with pytest.raises(asyncio.CancelledError):
             await task
     assert task.cancelled()
+
+
+def _citation_item(citation_id: int = 7) -> SearchIndexQueueItem:
+    return SearchIndexQueueItem(
+        id=citation_id, object_type="citation", object_id=citation_id, object_key="uuid-7",
+        change_class="upsert_full", status="pending", changed=1700000000, fetch_document=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_submit_one_citation_uses_its_own_key_and_needs_no_metadata_type_or_embedding():
+    s = _state()
+    with patch("nada_ai.app.reconcile_scheduler.lookup_metadata_type") as mock_lookup, \
+         patch("nada_ai.app.reconcile_scheduler.guarded_ingest") as mock_guard, \
+         patch("nada_ai.app.reconcile_scheduler.apply_and_ack_queue_item", return_value={"action": "indexed"}) as mock_apply:
+        await reconcile_scheduler._submit_one(s, _citation_item(7))
+        await asyncio.sleep(0.05)  # let the job's thread finish
+
+    jobs = s.jobs.list()
+    assert len(jobs) == 1
+    assert jobs[0].key == "citation:7" and jobs[0].kind == "search_index_reconcile_citation"
+    assert jobs[0].params == {"citation_id": 7, "queue_item_id": 7}
+    mock_lookup.assert_not_called()  # a citation has no idno or metadata_type
+    mock_guard.assert_not_called()  # and no embedding model or ingest slot
+    mock_apply.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_poll_once_submits_studies_and_citations_alike():
+    s = _state()
+    items = [_queue_item("DOC-1"), _citation_item(7)]
+    with patch("nada_ai.app.reconcile_scheduler.get_status", return_value=SearchIndexStatus(status="ok", tracking_enabled=True)), \
+         patch("nada_ai.app.reconcile_scheduler.list_queue", return_value=items) as mock_list, \
+         patch("nada_ai.app.reconcile_scheduler.lookup_metadata_type", return_value="indicator"), \
+         patch("nada_ai.app.reconcile_scheduler.apply_and_ack_queue_item", return_value={"action": "indexed"}):
+        result = await reconcile_scheduler.poll_once(s)
+
+    assert result == {"polled": 2}
+    assert "object_type" not in mock_list.call_args.kwargs
+    assert sorted(j.key for j in s.jobs.list()) == ["citation:7", "content:indicator:DOC-1"]

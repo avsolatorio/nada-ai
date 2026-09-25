@@ -289,6 +289,17 @@ def test_writer_recreate_drops_both_indexes_first() -> None:
     assert client.indices.create.call_count == 2
 
 
+def test_writer_recreate_also_drops_the_variable_index() -> None:
+    """Left alone, it would keep serving variables of studies the rebuild might never write again."""
+    settings = Settings(index_name="chunks", opensearch_put_composable_index_template=False)
+    client = _client({"chunks", "chunks-studies", "chunks-variables"})
+    _run_writer(settings, client, recreate=True, bulk_results=[(0, []), (0, [])])
+    deleted = [c.kwargs["index"] for c in client.indices.delete.call_args_list]
+    assert deleted == ["chunks", "chunks-studies", "chunks-variables"]
+    # nothing here recreates it: a full index of a study syncs its variables afterward
+    assert {c.kwargs["index"] for c in client.indices.create.call_args_list} == {"chunks", "chunks-studies"}
+
+
 def test_writer_reports_errors_from_both_indexes() -> None:
     settings = Settings(index_name="chunks", opensearch_put_composable_index_template=False)
     (success, errors), _ = _run_writer(
@@ -305,7 +316,7 @@ def test_writer_installs_every_index_template_when_enabled() -> None:
     settings = Settings(index_name="chunks", opensearch_put_composable_index_template=True)
     client = _client()
     _run_writer(settings, client, recreate=False, bulk_results=[(0, []), (0, [])])
-    assert client.indices.put_index_template.call_count == 3
+    assert client.indices.put_index_template.call_count == 4
 
 
 def test_writer_run_bulk_loads_no_model_when_embeddings_are_disabled() -> None:
@@ -360,3 +371,48 @@ def test_pruning_is_batched() -> None:
     writer = OpenSearchIngestWriter(settings)
     assert writer._prune_stale_chunks(client, {sid: {f"c{sid}"} for sid in range(1, 121)}) == 0
     assert client.delete_by_query.call_count == 3  # 120 studies in batches of 50
+
+
+# ---------------------------------------------------------------------------
+# when stored vectors may be reused
+# ---------------------------------------------------------------------------
+
+
+def _writer_and_client(model_in_index, **overrides):
+    from unittest.mock import MagicMock
+
+    from nada_ai.ingest.opensearch_writer import OpenSearchIngestWriter
+
+    settings = Settings(search_backend="opensearch", embedding_backend="local", embedding_model_id="m1", **overrides)
+    client = MagicMock()
+    client.indices.get_mapping.return_value = {
+        settings.index_name: {"mappings": {"_meta": {"embedding_model": model_in_index}}}
+    }
+    return OpenSearchIngestWriter(settings), client
+
+
+def test_stored_vectors_are_looked_up_when_the_index_holds_the_configured_models_vectors():
+    writer, client = _writer_and_client("m1")
+    client.mget.return_value = {
+        "docs": [
+            {"_id": "a", "found": True, "_source": {"embedding": [1.0, 2.0]}},
+            {"_id": "b", "found": False},
+            {"_id": "c", "found": True, "_source": {}},
+        ]
+    }
+    lookup = writer._stored_vector_lookup(client, force=False, recreated=False)
+    assert lookup(["a", "b", "c"]) == {"a": [1.0, 2.0]}
+
+
+def test_stored_vectors_are_not_reused_for_a_forced_run_a_new_index_or_another_model():
+    writer, client = _writer_and_client("m1")
+    assert writer._stored_vector_lookup(client, force=True, recreated=False) is None
+    assert writer._stored_vector_lookup(client, force=False, recreated=True) is None
+    other, other_client = _writer_and_client("some-other-model")
+    assert other._stored_vector_lookup(other_client, force=False, recreated=False) is None
+
+
+def test_stored_vectors_are_not_looked_up_for_a_server_side_embedding_backend():
+    writer, client = _writer_and_client("m1")
+    writer._settings = writer._settings.model_copy(update={"embedding_backend": "opensearch_ml"})
+    assert writer._stored_vector_lookup(client, force=False, recreated=False) is None

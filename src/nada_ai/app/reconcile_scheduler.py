@@ -41,6 +41,20 @@ async def _submit_one(s: AppState, item: SearchIndexQueueItem) -> None:
     settings = s.settings
     idno = item.object_key
 
+    if item.object_type == "citation":
+        # Own key: a citation's id is not an idno, and it never collides with a study's content:/delete: keys.
+        key = f"citation:{item.object_id}"
+        kind = "search_index_reconcile_citation"
+
+        async def factory() -> dict[str, Any]:
+            # No embedding model and no ingest slot: a citation is a lexical document, cheap to write.
+            return await asyncio.to_thread(apply_and_ack_queue_item, settings, item)
+
+        await s.jobs.submit(
+            kind=kind, key=key, factory=factory, params={"citation_id": item.object_id, "queue_item_id": item.id}
+        )
+        return
+
     if item.is_delete:
         key = f"delete:{idno}"
         kind = "search_index_reconcile_delete"
@@ -102,7 +116,7 @@ async def poll_once(s: AppState) -> dict[str, Any]:
         logger.warning("search-index scheduler: status check failed: %s", e)
 
     items = await asyncio.to_thread(
-        list_queue, settings, status="pending", object_type="survey", limit=settings.reconcile_search_index_batch_limit
+        list_queue, settings, status="pending", limit=settings.reconcile_search_index_batch_limit
     )
     for item in items:
         await _submit_one(s, item)

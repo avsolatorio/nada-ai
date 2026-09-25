@@ -655,6 +655,178 @@ def test_qdrant_collection_endpoint_returns_info(monkeypatch):
     assert body["info"] == {"points_count": 5}
 
 
+def test_index_delete_drops_chunk_study_and_variable_indexes(monkeypatch):
+    """The whole search store: dropping only the chunk index left /studies/search and /variables/search serving."""
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    with TestClient(app) as client:
+        _fresh_state()
+        prev_settings, prev_client = state.settings, state.client
+        state.settings = Settings(search_backend="opensearch", index_name="idx")
+        mock = MagicMock()
+        mock.indices.delete = AsyncMock(return_value={"acknowledged": True})
+        state.client = mock
+        try:
+            r = client.delete("/admin/index?confirm=true")
+        finally:
+            state.settings, state.client = prev_settings, prev_client
+    assert r.status_code == 200
+    body = r.json()
+    assert body["deleted"] is True
+    assert body["indexes"] == ["idx", "idx-studies", "idx-variables"]
+    assert [c.kwargs["index"] for c in mock.indices.delete.call_args_list] == body["indexes"]
+
+
+def test_index_delete_tolerates_an_index_that_never_existed(monkeypatch):
+    """A deployment that never indexed variables has no variable index; that is not a failure."""
+    from opensearchpy.exceptions import NotFoundError
+
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    with TestClient(app) as client:
+        _fresh_state()
+        prev_settings, prev_client = state.settings, state.client
+        state.settings = Settings(search_backend="opensearch", index_name="idx")
+        mock = MagicMock()
+
+        async def delete(index):
+            if index == "idx-variables":
+                raise NotFoundError(404, "index_not_found_exception", {})
+            return {"acknowledged": True}
+
+        mock.indices.delete = delete
+        state.client = mock
+        try:
+            r = client.delete("/admin/index?confirm=true")
+        finally:
+            state.settings, state.client = prev_settings, prev_client
+    assert r.status_code == 200
+    assert r.json()["deleted"] is True
+
+
+def _variables_stats(monkeypatch, client_mock, backend="opensearch", path="/admin/variables/stats"):
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    with TestClient(app) as client:
+        _fresh_state()
+        prev_settings, prev_client = state.settings, state.client
+        state.settings = Settings(search_backend=backend, index_name="idx")
+        state.client = client_mock
+        try:
+            return client.get(path)
+        finally:
+            state.settings, state.client = prev_settings, prev_client
+
+
+def test_variables_stats_reports_published_variables_and_studies(monkeypatch):
+    mock = MagicMock()
+    mock.search = AsyncMock(
+        return_value={"hits": {"total": {"value": 2080}}, "aggregations": {"studies": {"value": 2}}}
+    )
+    r = _variables_stats(monkeypatch, mock)
+    assert r.status_code == 200
+    assert r.json() == {"index": "idx-variables", "exists": True, "variables": 2080, "studies": 2}
+    body = mock.search.call_args.kwargs["body"]
+    assert body["query"] == {"term": {"published": 1}}  # what NADA's own total counts, and all search can return
+    assert body["size"] == 0
+
+
+def test_variables_stats_is_zero_not_an_error_before_the_first_sync(monkeypatch):
+    from opensearchpy.exceptions import NotFoundError
+
+    mock = MagicMock()
+    mock.search = AsyncMock(side_effect=NotFoundError(404, "index_not_found_exception", {}))
+    r = _variables_stats(monkeypatch, mock)
+    assert r.status_code == 200
+    assert r.json() == {"index": "idx-variables", "exists": False, "variables": 0, "studies": 0}
+
+
+def test_variables_stats_501_on_qdrant(monkeypatch):
+    assert _variables_stats(monkeypatch, MagicMock(), backend="qdrant").status_code == 501
+
+
+def _by_study(monkeypatch, client_mock, backend="opensearch"):
+    return _variables_stats(monkeypatch, client_mock, backend, path="/admin/variables/by-study")
+
+
+def test_variables_by_study_reads_every_page_of_the_composite_aggregation(monkeypatch):
+    def page(buckets, after=None):
+        agg = {"buckets": [{"key": {"sid": sid}, "doc_count": n} for sid, n in buckets]}
+        if after is not None:
+            agg["after_key"] = {"sid": after}
+        return {"aggregations": {"by_study": agg}}
+
+    mock = MagicMock()
+    mock.search = AsyncMock(side_effect=[page([(7, 120), (9, 3)], after=9), page([(12, 40)], after=12), page([])])
+    r = _by_study(monkeypatch, mock)
+
+    assert r.status_code == 200
+    assert r.json() == {"index": "idx-variables", "exists": True, "studies": {"7": 120, "9": 3, "12": 40}}
+    first, second, _ = (c.kwargs["body"] for c in mock.search.call_args_list)
+    assert first["query"] == {"term": {"published": 1}} and "after" not in first["aggs"]["by_study"]["composite"]
+    assert second["aggs"]["by_study"]["composite"]["after"] == {"sid": 9}
+
+
+def test_variables_by_study_is_empty_not_an_error_before_the_first_sync(monkeypatch):
+    from opensearchpy.exceptions import NotFoundError
+
+    mock = MagicMock()
+    mock.search = AsyncMock(side_effect=NotFoundError(404, "index_not_found_exception", {}))
+    r = _by_study(monkeypatch, mock)
+    assert r.status_code == 200
+    assert r.json() == {"index": "idx-variables", "exists": False, "studies": {}}
+
+
+def test_variables_by_study_501_on_qdrant(monkeypatch):
+    assert _by_study(monkeypatch, MagicMock(), backend="qdrant").status_code == 501
+
+
+def _post_variables_sync(monkeypatch, body, *, backend="opensearch", seen=None):
+    """POST /admin/variables/sync with the operation replaced, so the job records what it was asked to do."""
+    import nada_ai.app.admin as admin_module
+
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+
+    def fake(settings, idnos, *, progress_cb=None, cancel_token=None):
+        if seen is not None:
+            seen.append(idnos)
+        return {"scope": "all" if idnos is None else "idnos", "indexed": 0, "errors": [], "error_count": 0}
+
+    monkeypatch.setattr(admin_module, "sync_variables_op", fake)
+    with TestClient(app) as client:
+        _fresh_state()
+        prev = state.settings
+        state.settings = Settings(search_backend=backend)
+        try:
+            return client.post("/admin/variables/sync", json=body)
+        finally:
+            state.settings = prev
+
+
+def test_variables_sync_submits_a_background_job_for_the_whole_catalog(monkeypatch):
+    seen: list = []
+    r = _post_variables_sync(monkeypatch, {}, seen=seen)
+    assert r.status_code == 202
+    job = r.json()
+    assert job["kind"] == "index_variables" and job["key"] == "index_variables:all"
+    assert job["params"] == {"idnos": None}
+
+
+def test_variables_sync_submits_one_job_per_distinct_set_of_idnos(monkeypatch):
+    r = _post_variables_sync(monkeypatch, {"idnos": [" B ", "A", "A"]})
+    assert r.status_code == 202
+    job = r.json()
+    assert job["params"] == {"idnos": ["B", "A"]}  # trimmed and deduplicated, order kept
+    assert job["key"].startswith("index_variables:") and job["key"] != "index_variables:all"
+
+
+def test_variables_sync_rejects_an_empty_idno_list_rather_than_meaning_everything(monkeypatch):
+    r = _post_variables_sync(monkeypatch, {"idnos": ["", "  "]})
+    assert r.status_code == 400
+    assert "omit it" in r.json()["detail"]
+
+
+def test_variables_sync_is_501_on_qdrant(monkeypatch):
+    assert _post_variables_sync(monkeypatch, {}, backend="qdrant").status_code == 501
+
+
 def test_index_delete_requires_confirm():
     with TestClient(app) as client:
         _fresh_state()
@@ -978,3 +1150,79 @@ def teardown_function(_) -> None:
         loop.close()
     except Exception:
         pass
+
+
+def _citations_call(monkeypatch, method, path, *, body=None, backend="opensearch", client_mock=None):
+    """Call an /admin/citations route with the operation replaced, so a sync job records what it was asked to do."""
+    import nada_ai.app.admin as admin_module
+
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    seen = []
+
+    def fake(settings, ids, *, progress_cb=None, cancel_token=None):
+        seen.append(ids)
+        return {"scope": "all" if ids is None else "ids", "indexed": 0, "errors": [], "error_count": 0}
+
+    monkeypatch.setattr(admin_module, "sync_citations_op", fake)
+    with TestClient(app) as client:
+        _fresh_state()
+        prev_settings, prev_client = state.settings, state.client
+        state.settings = Settings(search_backend=backend, index_name="idx")
+        if client_mock is not None:
+            state.client = client_mock
+        try:
+            return client.request(method, path, json=body), seen
+        finally:
+            state.settings, state.client = prev_settings, prev_client
+
+
+def test_citations_sync_submits_a_background_job_for_the_whole_catalog(monkeypatch):
+    r, _ = _citations_call(monkeypatch, "POST", "/admin/citations/sync", body={})
+    assert r.status_code == 202
+    job = r.json()
+    assert job["kind"] == "index_citations" and job["key"] == "index_citations:all"
+    assert job["params"] == {"ids": None}
+
+
+def test_citations_sync_takes_a_deduplicated_set_of_ids(monkeypatch):
+    r, _ = _citations_call(monkeypatch, "POST", "/admin/citations/sync", body={"ids": [3, 1, 3]})
+    assert r.status_code == 202
+    job = r.json()
+    assert job["params"] == {"ids": [3, 1]}
+    assert job["key"].startswith("index_citations:") and job["key"] != "index_citations:all"
+
+
+def test_citations_sync_rejects_an_empty_id_list_rather_than_meaning_everything(monkeypatch):
+    r, _ = _citations_call(monkeypatch, "POST", "/admin/citations/sync", body={"ids": []})
+    assert r.status_code == 400
+    assert "omit it" in r.json()["detail"]
+
+
+def test_citations_sync_is_501_on_qdrant(monkeypatch):
+    r, _ = _citations_call(monkeypatch, "POST", "/admin/citations/sync", body={}, backend="qdrant")
+    assert r.status_code == 501
+
+
+def test_citations_stats_reports_all_and_published_citations(monkeypatch):
+    mock = MagicMock()
+    mock.search = AsyncMock(
+        return_value={"hits": {"total": {"value": 66}}, "aggregations": {"published": {"doc_count": 60}}}
+    )
+    r, _ = _citations_call(monkeypatch, "GET", "/admin/citations/stats", client_mock=mock)
+    assert r.status_code == 200
+    assert r.json() == {"index": "idx-citations", "exists": True, "citations": 66, "published": 60}
+
+
+def test_citations_stats_is_zero_not_an_error_before_the_first_sync(monkeypatch):
+    from opensearchpy.exceptions import NotFoundError
+
+    mock = MagicMock()
+    mock.search = AsyncMock(side_effect=NotFoundError(404, "index_not_found_exception", {}))
+    r, _ = _citations_call(monkeypatch, "GET", "/admin/citations/stats", client_mock=mock)
+    assert r.status_code == 200
+    assert r.json() == {"index": "idx-citations", "exists": False, "citations": 0, "published": 0}
+
+
+def test_citations_stats_501_on_qdrant(monkeypatch):
+    r, _ = _citations_call(monkeypatch, "GET", "/admin/citations/stats", backend="qdrant", client_mock=MagicMock())
+    assert r.status_code == 501

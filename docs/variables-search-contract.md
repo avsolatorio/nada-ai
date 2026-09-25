@@ -19,16 +19,18 @@ tuning, an eval harness), the deliberate scope decision here was:
 - **A new, standalone index and pipeline**, not folded into the chunk/embedding machinery
   (`ingest/pipeline.py`, `ingest/opensearch_writer.py`): a variable document is a flat denormalization of one DB
   row, with no chunking and no embedding, so none of that applies. See `src/nada_ai/ingest/variables_index.py`.
-- **Live delta sync now covers both ways a study's variables actually change** (added after this contract first
-  shipped): a full study index (`index_ids_op`, whatever triggers it — the dashboard, a webhook, the CLI) also
-  syncs that idno's variables, since a full index is study + chunks + variables together; and NADA's own
+- **Variables stay in step with their study** (added after this contract first shipped). A full study index
+  (`index_ids_op`: the dashboard, a webhook, the CLI) syncs that idno's variables, since a full index is study +
+  chunks + variables together. So does a catalog-type run (`index_from_catalog_op`) — for its microdata rows only,
+  one NADA call per microdata study (a run over thousands of documents makes none). NADA's own
   `change_class="variables"` signal (fired by `Dataset_microdata_model::index_variable_data()` after a DDI/
-  data-dictionary re-import — variables changed, nothing else about the study did) syncs *only* the variables via
-  the same queue `search_index_sync.py` already polls for studies, without a full reindex. Both paths are
-  best-effort: a variable-sync failure never fails the study index it rode in on. **Not covered:**
-  `index_from_catalog_op` (bulk, catalog-type-at-a-time reindex) does not sync variables per idno — doing so in
-  that tight loop would add a NADA round-trip per idno to a run that can cover thousands of them. Bulk operations
-  still rely on running `backfill_variables` separately (see §5).
+  data-dictionary re-import — variables changed, nothing else did) syncs *only* the variables, through the same
+  queue `search_index_sync.py` polls for studies, without a full reindex. Sync is best-effort: a failure never fails
+  the study index it rode in on, and is reported in the result's `variables` block.
+- **Removal follows the study.** Deleting a study (by idno or `sid`, including reconcile's stale deletions) deletes
+  its variables with it, and recreating or dropping the index drops the variable index along with the chunk and
+  study indexes (`DELETE /admin/index` used to drop only the chunk index, leaving both other indexes serving). An
+  unpublished study's variables are resynced with `published=0`, so they leave search results the same way.
 
 ## 2. `POST /variables/search`
 
@@ -102,6 +104,23 @@ Same envelope, same codes, same auth guard and rate limiter as the study search 
   re-run replaces rather than duplicates).
 - **One study:** `uv run python -m nada_ai.ingest.cli index_survey_variables --idno=<idno>`. Deletes then
   re-indexes every variable of that study, from `/api/admin/search-metadata-extract/variables/<idno>`.
+- **Variables only, as a background job:** `POST /admin/variables/sync` (role `write`, OpenSearch only; 501 on Qdrant).
+  Body `{"idnos": [...]}` syncs those studies' variables; omit `idnos` to walk the whole catalog. An explicitly empty
+  list is a 400 rather than "everything". Nothing else is touched: no study document, no chunks, no embedding. The job
+  kind is `index_variables` and appears in `/jobs` with the usual progress and cancel; only one job per distinct
+  set of idnos runs at a time. NADA's dashboard starts it from the Variables card
+  (`POST /api/admin/semantic/variables_sync`).
+- **Paging:** both NADA extract routes return variables a page at a time, keyset-paged on `uid`
+  (`after_uid` in, `next_after_uid` and `has_more` out; `total` only on the first page). The page size is capped by
+  `search_metadata_extract_variables_max_limit` (1000), separate from the studies cap (100). A study's sync reads its
+  first page **before** deleting its existing variables, so an unreadable study keeps what it had.
+- **Recreating the index** drops the variable index with the others; a microdata run (or the job above) refills it.
+- **Per study:** `GET /admin/variables/by-study` (role `read`, OpenSearch only) returns `{index, exists, studies: {sid: count}}` of published variables, read with a composite aggregation so any catalog size comes back whole. NADA compares it with its own per-study counts (`GET /api/admin/semantic/variables_coverage`) to list the studies to sync on the Index page.
+- **Totals:** `GET /admin/variables/stats` (role `read`, OpenSearch only) returns `{index, exists, variables, studies}`
+  for the published documents in the variable index — the same population NADA's own published-variable total counts.
+  `exists: false` (zeros) before the first sync is a normal state, not an error. NADA's dashboard shows it beside the
+  database total on the Overview page (`GET /api/admin/semantic/variables_stats`); totals only, so it cannot see a
+  study whose variables changed but kept the same count.
 - **Templates:** `put_index_template` (the same command the study/chunk indices use) now also installs the
   variable index's composable template.
 - The NADA-side extract endpoint (`variables_get()` in `Search_metadata_extract.php`) and the extract document
@@ -129,8 +148,8 @@ serve).
 
 - No semantic/hybrid mode, no eval-measured field weights (see §1).
 - No countries/years/collections/repository/data-access-type filters, and no `nation` sort (§2).
-- Bulk catalog-type reindexes (`index_from_catalog_op`) don't sync variables per idno — a full catalog reindex
-  still needs a separate `backfill_variables` run to pick up variable changes; only single/few-idno indexing
-  (`index_ids_op`, whatever triggers it) and NADA's dedicated `change_class="variables"` signal are live-synced
-  (see §1).
+- A **recreate empties the variable index** and only a microdata run (or per-study index) refills it — same as
+  the chunk and study indexes, whose other dataset types are also lost until their own run.
+- **No variable state in NADA's `search_index_state`** (it is per study): the dashboard's coverage and diff views
+  cannot show or detect a stale variable index.
 - `authoring_entity` (present in NADA's DB response shape) is not indexed or returned here.

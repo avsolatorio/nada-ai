@@ -17,6 +17,7 @@ from nada_ai.search.backend.opensearch.index_template import (
     put_cluster_auto_create_index,
     put_composable_index_template,
 )
+from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD
 from nada_ai.search.backend.opensearch.ml.setup import ensure_text_embedding_ingest_pipeline
 from nada_ai.search.backend.opensearch.studies import study_bulk_action
 from nada_ai.settings import Settings
@@ -47,10 +48,16 @@ class OpenSearchIngestWriter(IngestWriterPort):
         self._settings = settings
 
     def _prepare(self, client: Any, embedding_dim: int | None, *, recreate: bool) -> None:
-        """Drop (when recreating) and create both indexes, with their templates, before anything is written."""
+        """Drop (when recreating) and create both indexes, with their templates, before anything is written.
+
+        Recreating also drops the variable index: it is part of the same search store, and left alone it would keep
+        serving variables of studies the rebuild might never write again. Nothing recreates it here — a full index
+        of a study (or of the microdata catalog type) syncs its variables afterward. The citation index is left alone:
+        citations do not depend on studies, and a rebuild of the study indexes does not re-ingest them.
+        """
         settings = self._settings
         if recreate:
-            for name in (settings.index_name, settings.studies_index):
+            for name in (settings.index_name, settings.studies_index, settings.variables_index):
                 if client.indices.exists(index=name):
                     client.indices.delete(index=name)
         if settings.embedding_backend == "opensearch_ml":
@@ -86,6 +93,32 @@ class OpenSearchIngestWriter(IngestWriterPort):
         if pruned:
             logger.info("Pruned %d stale chunk document(s) of re-indexed studies", pruned)
         return pruned
+
+    def _stored_vector_lookup(self, client: Any, *, force: bool, recreated: bool) -> Any:
+        """A ``chunk ids -> stored vectors`` lookup for the local backend, or ``None`` when reuse is not valid.
+
+        Reuse needs the index's vectors to come from the configured model (``_meta.embedding_model``), so it is off
+        for a forced re-embed, a just-recreated (empty) index, and an index stamped with another model.
+        """
+        settings = self._settings
+        if force or recreated or settings.embedding_backend != "local":
+            return None
+        meta = (client.indices.get_mapping(index=settings.index_name).get(settings.index_name) or {}).get(
+            "mappings", {}
+        ).get("_meta") or {}
+        if meta.get("embedding_model") != settings.embedding_model_id:
+            return None
+
+        def lookup(ids: list[str]) -> dict[str, list[float]]:
+            resp = client.mget(index=settings.index_name, body={"ids": ids}, _source_includes=[EMBEDDING_FIELD])
+            found: dict[str, list[float]] = {}
+            for doc in resp.get("docs", []):
+                vector = (doc.get("_source") or {}).get(EMBEDDING_FIELD) if doc.get("found") else None
+                if vector:
+                    found[doc["_id"]] = vector
+            return found
+
+        return lookup
 
     def ensure_target(self, embedding_dim: int | None, *, recreate: bool = False) -> None:
         client = build_client(self._settings)
@@ -140,6 +173,7 @@ class OpenSearchIngestWriter(IngestWriterPort):
                 load_errors=load_errors,
                 empty_docs=empty_docs,
                 studies=studies,
+                stored_vectors=self._stored_vector_lookup(client, force=force, recreated=recreate_target),
             )
             success, errors = bulk(client, _recording(actions, ids_by_sid), raise_on_error=False, refresh="wait_for")
             err_list: list[Any] = list(errors) if isinstance(errors, list) else []

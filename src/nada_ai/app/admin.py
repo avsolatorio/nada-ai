@@ -39,8 +39,10 @@ from nada_ai.app.admin_schemas import (
     JobListResponse,
     JobResponse,
     ReconcileSearchIndexResponse,
+    SyncCitationsRequest,
     SyncFiltersRequest,
     SyncFiltersResponse,
+    SyncVariablesRequest,
 )
 from nada_ai.app.audit import audit_log
 from nada_ai.app.auth import ADMIN_API_KEY_ENV, Principal, require_role
@@ -59,6 +61,8 @@ from nada_ai.ingest.service import (
     index_from_catalog_op,
     put_index_template_op,
     setup_ingest_pipeline_op,
+    sync_citations_op,
+    sync_variables_op,
 )
 from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, metadata_field
 from nada_ai.search.backend.opensearch.ml.setup import ingest_pipeline_definition
@@ -456,6 +460,184 @@ async def admin_index_stats(s: AppState = Depends(get_state)) -> IndexStatsRespo
     )
 
 
+@admin_router.post("/admin/variables/sync")
+async def admin_variables_sync(
+    body: SyncVariablesRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
+    """Index variables only, as a background job (Jobs page, progress, cancel).
+
+    Unlike a full study index this does not touch the study document or its chunks, so it never embeds anything: it
+    is the way to bring the variable index up to date, or refill it after a recreate, without re-indexing studies.
+    ``idnos`` replaces those studies' variables; omitted, it walks the whole catalog's variables.
+    """
+    _require_engine(s, "opensearch")
+    settings = s.settings
+    idnos: list[str] | None = None
+    if body.idnos is not None:
+        idnos = list(dict.fromkeys(i.strip() for i in body.idnos if i.strip()))
+        if not idnos:
+            raise HTTPException(status_code=400, detail="idnos must not be empty; omit it to index every study")
+
+    job_id = uuid.uuid4().hex
+    cancel_token = CancelToken()
+
+    async def factory() -> dict[str, Any]:
+        return await asyncio.to_thread(
+            sync_variables_op,
+            settings,
+            idnos,
+            progress_cb=functools.partial(s.jobs.set_progress, job_id),
+            cancel_token=cancel_token,
+        )
+
+    return await _submit_or_409(
+        s,
+        kind="index_variables",
+        key="index_variables:all" if idnos is None else f"index_variables:{_idnos_key(idnos)}",
+        factory=factory,
+        params={"idnos": idnos},
+        principal=principal,
+        job_id=job_id,
+        cancel_token=cancel_token,
+    )
+
+
+@admin_router.post("/admin/citations/sync")
+async def admin_citations_sync(
+    body: SyncCitationsRequest,
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
+    """Index citations only, as a background job (Jobs page, progress, cancel).
+
+    Citations are lexical documents, so nothing is embedded and no study is touched. ``ids`` syncs those citations
+    (rewriting each, or removing it when NADA no longer has it); omitted, it walks the whole catalog's citations.
+    """
+    _require_engine(s, "opensearch")
+    settings = s.settings
+    ids: list[int] | None = None
+    if body.ids is not None:
+        ids = list(dict.fromkeys(body.ids))
+        if not ids:
+            raise HTTPException(status_code=400, detail="ids must not be empty; omit it to index every citation")
+
+    job_id = uuid.uuid4().hex
+    cancel_token = CancelToken()
+
+    async def factory() -> dict[str, Any]:
+        return await asyncio.to_thread(
+            sync_citations_op,
+            settings,
+            ids,
+            progress_cb=functools.partial(s.jobs.set_progress, job_id),
+            cancel_token=cancel_token,
+        )
+
+    return await _submit_or_409(
+        s,
+        kind="index_citations",
+        key="index_citations:all" if ids is None else f"index_citations:{_idnos_key([str(i) for i in ids])}",
+        factory=factory,
+        params={"ids": ids},
+        principal=principal,
+        job_id=job_id,
+        cancel_token=cancel_token,
+    )
+
+
+@admin_router.get("/admin/citations/stats", dependencies=[Depends(require_role(Role.read))])
+async def admin_citations_stats(s: AppState = Depends(get_state)) -> dict[str, Any]:
+    """What the citation index holds: published citations, and all of them. ``exists`` is false until the first sync
+    creates the index, which is a normal state and not an error."""
+    _require_engine(s, "opensearch")
+    name = s.settings.citations_index
+    body = {
+        "size": 0,
+        "track_total_hits": True,
+        "aggs": {"published": {"filter": {"term": {"published": 1}}}},
+    }
+    try:
+        resp = await s.client.search(index=name, body=body)
+    except NotFoundError:
+        return {"index": name, "exists": False, "citations": 0, "published": 0}
+    except Exception as e:
+        logger.error("citations stats failed: %s", e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
+    total = resp["hits"]["total"]
+    return {
+        "index": name,
+        "exists": True,
+        "citations": int(total["value"] if isinstance(total, dict) else total),
+        "published": int(resp["aggregations"]["published"]["doc_count"]),
+    }
+
+
+@admin_router.get("/admin/variables/stats", dependencies=[Depends(require_role(Role.read))])
+async def admin_variables_stats(s: AppState = Depends(get_state)) -> dict[str, Any]:
+    """What the variable index holds: published variables and the studies they belong to.
+
+    Counts published documents only, since that is what NADA's own total counts and what search can return. Totals
+    only — a per-study breakdown is a different (paged) question. ``exists`` is false until the first variable sync
+    creates the index, which is a normal state and not an error.
+    """
+    _require_engine(s, "opensearch")
+    name = s.settings.variables_index
+    body = {
+        "size": 0,
+        "track_total_hits": True,
+        "query": {"term": {"published": 1}},
+        "aggs": {"studies": {"cardinality": {"field": "sid", "precision_threshold": 40000}}},
+    }
+    try:
+        resp = await s.client.search(index=name, body=body)
+    except NotFoundError:
+        return {"index": name, "exists": False, "variables": 0, "studies": 0}
+    except Exception as e:
+        logger.error("variables stats failed: %s", e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
+    total = resp["hits"]["total"]
+    return {
+        "index": name,
+        "exists": True,
+        "variables": int(total["value"] if isinstance(total, dict) else total),
+        "studies": int(resp["aggregations"]["studies"]["value"]),
+    }
+
+
+@admin_router.get("/admin/variables/by-study", dependencies=[Depends(require_role(Role.read))])
+async def admin_variables_by_study(s: AppState = Depends(get_state)) -> dict[str, Any]:
+    """Published variables in the variable index per study: ``{sid: count}``, for finding studies that need a sync.
+
+    One entry per study that has any, read with a composite aggregation so a catalog of any size is returned whole
+    (thousands of small entries, never a variable-sized response). Same population as ``/admin/variables/stats``.
+    """
+    _require_engine(s, "opensearch")
+    name = s.settings.variables_index
+    studies: dict[str, int] = {}
+    after: dict[str, Any] | None = None
+    while True:
+        composite: dict[str, Any] = {"size": 5000, "sources": [{"sid": {"terms": {"field": "sid"}}}]}
+        if after is not None:
+            composite["after"] = after
+        body = {"size": 0, "query": {"term": {"published": 1}}, "aggs": {"by_study": {"composite": composite}}}
+        try:
+            resp = await s.client.search(index=name, body=body)
+        except NotFoundError:
+            return {"index": name, "exists": False, "studies": {}}
+        except Exception as e:
+            logger.error("variables by-study failed: %s", e)
+            raise HTTPException(status_code=503, detail="backend unavailable") from e
+        agg = resp["aggregations"]["by_study"]
+        for bucket in agg["buckets"]:
+            studies[str(bucket["key"]["sid"])] = int(bucket["doc_count"])
+        after = agg.get("after_key")
+        if not agg["buckets"] or after is None:
+            break
+    return {"index": name, "exists": True, "studies": studies}
+
+
 @admin_router.get("/admin/index/mapping", dependencies=[Depends(require_role(Role.read))])
 async def admin_index_mapping(s: AppState = Depends(get_state)) -> dict[str, Any]:
     _require_engine(s, "opensearch")
@@ -492,13 +674,22 @@ async def admin_index_delete(
     _require_engine(s, "opensearch")
     if not confirm:
         raise HTTPException(status_code=400, detail="add ?confirm=true to drop the index")
+    # The whole search store, not just the chunk index: the study index (what /studies/search reads) and the variable
+    # index are part of it, and dropping only the chunks left both serving results after "Drop collection".
     name = s.settings.index_name
+    names = [name, s.settings.studies_index, s.settings.variables_index]
     try:
-        resp = await s.client.indices.delete(index=name)
-        await audit_log(s, principal, action="index.delete", target=name, status="ok")
-        return {"index": name, "deleted": True, "raw": resp}
-    except NotFoundError:
-        return {"index": name, "deleted": False, "detail": "index did not exist"}
+        raw: dict[str, Any] = {}
+        for index in names:
+            try:
+                raw[index] = await s.client.indices.delete(index=index)
+            except NotFoundError:
+                raw[index] = None
+        deleted = any(v is not None for v in raw.values())
+        await audit_log(s, principal, action="index.delete", target=",".join(names), status="ok")
+        if not deleted:
+            return {"index": name, "indexes": names, "deleted": False, "detail": "index did not exist"}
+        return {"index": name, "indexes": names, "deleted": True, "raw": raw}
     except Exception as e:
         logger.error("index delete failed: %s", e)
         await audit_log(s, principal, action="index.delete", target=name, status="error", detail=str(e))

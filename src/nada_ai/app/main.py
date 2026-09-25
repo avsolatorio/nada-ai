@@ -23,6 +23,7 @@ from nada_ai.app.admin import admin_router, jobs_router
 from nada_ai.app.audit_admin import audit_router
 from nada_ai.app.auth import require_role, resolve_principal
 from nada_ai.app.catalog_admin import catalog_router
+from nada_ai.app.citations_search import citations_router
 from nada_ai.app.demo_preview import render_pdf_page_png, resolve_document_pdf_path
 from nada_ai.app.facets_admin import facets_router
 from nada_ai.app.info import info_router
@@ -125,6 +126,7 @@ app.add_exception_handler(RequestValidationError, studies_validation_handler)
 app.include_router(info_router)
 app.include_router(studies_router)
 app.include_router(variables_router)
+app.include_router(citations_router)
 app.include_router(admin_router)
 app.include_router(jobs_router)
 app.include_router(catalog_router)

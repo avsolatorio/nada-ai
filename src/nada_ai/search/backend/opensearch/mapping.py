@@ -190,6 +190,51 @@ def studies_index_body() -> dict[str, Any]:
     }
 
 
+# Citation fields searched lexically (see docs/citations-search-contract.md). Lexical only, like variables: a citation is
+# a short bibliographic record, so keyword matching does the job and nothing needs embedding.
+CITATION_TEXT_FIELDS = ("title", "subtitle", "authors", "abstract", "keywords", "notes")
+
+
+def citations_index_body() -> dict[str, Any]:
+    """OpenSearch settings + mappings of the **citation** index: one document per citation, ``_id`` = its NADA id.
+
+    Follows NADA's own citation full-text index (title, subtitle, authors, DOI, keywords, abstract, notes) for the
+    searched fields. ``doi`` is a keyword (exact, case-folded) rather than text: a DOI is looked up, not tokenized.
+    ``ctype``, ``pub_year`` and ``published`` are filters; ``title_sort`` sorts.
+    """
+    return {
+        "settings": {
+            "index": {
+                "number_of_shards": 1,
+                "number_of_replicas": 0,
+                "analysis": {
+                    "analyzer": {
+                        "nada_text": {
+                            "type": "custom",
+                            "tokenizer": "standard",
+                            "filter": ["lowercase", "asciifolding"],
+                        }
+                    },
+                    "normalizer": {"nada_sort": {"type": "custom", "filter": ["lowercase", "asciifolding"]}},
+                },
+            }
+        },
+        "mappings": {
+            "dynamic": "strict",
+            "properties": {
+                "citation_id": {"type": "integer"},
+                "uuid": {"type": "keyword"},
+                **{field: {"type": "text", "analyzer": "nada_text"} for field in CITATION_TEXT_FIELDS},
+                "title_sort": {"type": "keyword", "normalizer": "nada_sort"},
+                "doi": {"type": "keyword", "normalizer": "nada_sort"},
+                "ctype": {"type": "keyword"},
+                "pub_year": {"type": "integer"},
+                "published": {"type": "integer"},
+            },
+        },
+    }
+
+
 # Variable fields searched lexically (see docs/variables-search-contract.md). Unlike study search, there is no
 # semantic/hybrid mode and no golden-query eval yet: weights are a starting point, not a tuned result.
 VARIABLE_TEXT_FIELDS = ("name", "label", "question", "categories")

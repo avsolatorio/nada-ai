@@ -65,16 +65,19 @@ def test_put_composable_index_template_installs_every_index_template() -> None:
         "nada-ai-idx-one-template",
         "nada-ai-idx-one-studies-template",
         "nada-ai-idx-one-variables-template",
+        "nada-ai-idx-one-citations-template",
     }
     assert out["templates"]["nada-ai-idx-one-template"]["index_patterns"] == ["idx-one"]
     assert out["templates"]["nada-ai-idx-one-studies-template"]["index_patterns"] == ["idx-one-studies"]
     assert out["templates"]["nada-ai-idx-one-variables-template"]["index_patterns"] == ["idx-one-variables"]
-    assert client.indices.put_index_template.call_count == 3
+    assert out["templates"]["nada-ai-idx-one-citations-template"]["index_patterns"] == ["idx-one-citations"]
+    assert client.indices.put_index_template.call_count == 4
     names = {c.kwargs["name"] for c in client.indices.put_index_template.call_args_list}
     assert names == {
         "nada-ai-idx-one-template",
         "nada-ai-idx-one-studies-template",
         "nada-ai-idx-one-variables-template",
+        "nada-ai-idx-one-citations-template",
     }
 
 
@@ -116,7 +119,7 @@ def test_put_index_template_op_respects_template_flag(
     out = put_index_template_op(s)
     assert out["dim"] == 512
     if expect_put:
-        assert client.indices.put_index_template.call_count == 3
+        assert client.indices.put_index_template.call_count == 4
         assert "template" in out and "skipped" not in out.get("template", {})
     else:
         client.indices.put_index_template.assert_not_called()

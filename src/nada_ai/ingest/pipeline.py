@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -166,6 +166,7 @@ def iter_langdoc_records(
     load_errors: list[dict[str, Any]] | None = None,
     empty_docs: list[dict[str, Any]] | None = None,
     studies: list[StudyExtract] | None = None,
+    stored_vectors: Callable[[list[str]], dict[str, list[float]]] | None = None,
 ) -> Iterator[tuple[str, list[float] | None, dict[str, Any]]]:
     """Yield ``(document_id, embedding_or_none_if_ml_backend, source_payload)`` for each langdoc row.
 
@@ -201,6 +202,11 @@ def iter_langdoc_records(
 
     ``studies``, if given, collects one :class:`StudyExtract` per study that loaded, whether or not it
     produced any chunk documents (the OpenSearch writer turns them into study-index documents).
+
+    ``stored_vectors``, if given (local embedding backend only), maps chunk ids to the vectors already stored for
+    them. A chunk id is a hash of the chunk's type, idno, field and text, so a stored vector belongs to exactly
+    this text: those chunks are not embedded again, only the new or changed ones. The caller decides when reuse is
+    valid (same embedding model, not a forced re-embed).
 
     Every document carries ``metadata.sid``, the NADA internal study id. A study whose
     extract data lacks it is not indexed: it is reported in ``load_errors`` (``stage``
@@ -240,14 +246,23 @@ def iter_langdoc_records(
             return
         if embedding is None:
             raise RuntimeError("embedding service required for local embedding backend")
-        texts = [item[0].page_content for item in items]
-        vectors = embedding.encode_corpus(texts, show_progress_bar=show_progress_bar)
+        doc_ids = [get_langdoc_uuid(item[0]) for item in items]
+        reused = stored_vectors(doc_ids) if stored_vectors is not None else {}
+        to_embed = [i for i, doc_id in enumerate(doc_ids) if doc_id not in reused]
+        fresh: dict[int, list[float]] = {}
+        if to_embed:
+            encoded = embedding.encode_corpus(
+                [items[i][0].page_content for i in to_embed], show_progress_bar=show_progress_bar
+            )
+            fresh = {i: encoded[n].tolist() for n, i in enumerate(to_embed)}
+        if reused:
+            logger.info("Reused %d stored vector(s); embedded %d chunk(s)", len(items) - len(to_embed), len(to_embed))
         pack_iter = enumerate(items)
         if show_progress_bar:
             pack_iter = tqdm(pack_iter, total=len(items), unit="doc", desc="Pack records", leave=False)
         for i, (doc, raw_meta, filter_fields, filter_facets, study) in pack_iter:
-            vec = vectors[i].tolist()
-            doc_id = get_langdoc_uuid(doc)
+            doc_id = doc_ids[i]
+            vec = reused[doc_id] if doc_id in reused else fresh[i]
             source = langdoc_to_source(
                 doc,
                 vec,
@@ -330,6 +345,7 @@ def iter_bulk_actions(
     load_errors: list[dict[str, Any]] | None = None,
     empty_docs: list[dict[str, Any]] | None = None,
     studies: list[StudyExtract] | None = None,
+    stored_vectors: Callable[[list[str]], dict[str, list[float]]] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """pairs: (idno, metadata_type).
 
@@ -350,6 +366,7 @@ def iter_bulk_actions(
         load_errors=load_errors,
         empty_docs=empty_docs,
         studies=studies,
+        stored_vectors=stored_vectors,
     ):
         if use_ml:
             yield {

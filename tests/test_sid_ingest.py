@@ -276,16 +276,17 @@ def test_delete_by_sids_rejects_empty_or_non_positive(sids: list[int]) -> None:
         delete_by_sids_op(Settings(search_backend="qdrant"), sids)
 
 
-def test_opensearch_delete_by_sid_removes_chunks_and_study_documents() -> None:
+def test_opensearch_delete_by_sid_removes_chunks_study_and_variable_documents() -> None:
     client = MagicMock()
-    client.delete_by_query.side_effect = [{"deleted": 3, "total": 3}, {"deleted": 2, "total": 2}]
+    client.delete_by_query.side_effect = [{"deleted": 3, "total": 3}, {"deleted": 2, "total": 2}, {"deleted": 9}]
     settings = Settings(search_backend="opensearch", index_name="nada-test")
     with patch("nada_ai.ingest.service.build_client", return_value=client):
         result = delete_by_sids_op(settings, [5, 7])
     calls = client.delete_by_query.call_args_list
-    assert [c.kwargs["index"] for c in calls] == ["nada-test", "nada-test-studies"]
+    assert [c.kwargs["index"] for c in calls] == ["nada-test", "nada-test-studies", "nada-test-variables"]
     assert calls[0].kwargs["body"]["query"]["bool"]["should"] == [{"terms": {"metadata.sid": [5, 7]}}]
     assert calls[1].kwargs["body"]["query"]["bool"]["should"] == [{"terms": {"sid": [5, 7]}}]
+    assert calls[2].kwargs["body"]["query"]["bool"]["should"] == [{"terms": {"sid": [5, 7]}}]
     client.search.assert_not_called()  # no idno given, nothing to look up
     assert result == {
         "backend": "opensearch",
@@ -295,6 +296,8 @@ def test_opensearch_delete_by_sid_removes_chunks_and_study_documents() -> None:
         "total": 3,
         "studies_index": "nada-test-studies",
         "studies_deleted": 2,
+        "variables_index": "nada-test-variables",
+        "variables_deleted": 9,
     }
 
 
@@ -302,7 +305,7 @@ def test_opensearch_delete_by_idno_also_removes_chunks_stored_under_another_idno
     """The chunk idno comes from the record's schema and can differ from NADA's; the study index knows the sid."""
     client = MagicMock()
     client.search.return_value = {"hits": {"hits": [{"_source": {"idno": "PC11_A02-28-v22", "sid": 4}}]}}
-    client.delete_by_query.side_effect = [{"deleted": 1, "total": 1}, {"deleted": 1, "total": 1}]
+    client.delete_by_query.side_effect = [{"deleted": 1, "total": 1}, {"deleted": 1, "total": 1}, {"deleted": 4}]
     settings = Settings(search_backend="opensearch", index_name="nada-test")
     with patch("nada_ai.ingest.service.build_client", return_value=client):
         result = delete_by_idno_op(settings, "PC11_A02-28-v22")
@@ -311,3 +314,19 @@ def test_opensearch_delete_by_idno_also_removes_chunks_stored_under_another_idno
     assert {"terms": {"metadata.idno": ["PC11_A02-28-v22"]}} in chunk_should
     assert {"terms": {"metadata.sid": [4]}} in chunk_should
     assert result["studies_deleted"] == 1 and result["idno"] == "PC11_A02-28-v22"
+
+
+def test_opensearch_delete_by_idno_also_removes_the_studys_variables() -> None:
+    """A deleted study's variables must not stay searchable: they carry the same NADA idno and sid."""
+    client = MagicMock()
+    client.search.return_value = {"hits": {"hits": [{"_source": {"idno": "PC11_A02-28-v22", "sid": 4}}]}}
+    client.delete_by_query.side_effect = [{"deleted": 1}, {"deleted": 1}, {"deleted": 4}]
+    settings = Settings(search_backend="opensearch", index_name="nada-test")
+    with patch("nada_ai.ingest.service.build_client", return_value=client):
+        result = delete_by_idno_op(settings, "PC11_A02-28-v22")
+    call = client.delete_by_query.call_args_list[2]
+    assert call.kwargs["index"] == "nada-test-variables"
+    assert call.kwargs["ignore_unavailable"] is True  # a deployment that never indexed variables has no such index
+    should = call.kwargs["body"]["query"]["bool"]["should"]
+    assert {"terms": {"idno": ["PC11_A02-28-v22"]}} in should and {"terms": {"sid": [4]}} in should
+    assert result["variables_deleted"] == 4

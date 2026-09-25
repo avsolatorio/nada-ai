@@ -162,7 +162,7 @@ def test_index_ids_op_skips_variables_for_a_failed_idno():
         mock_sync.return_value = {"indexed": 1, "errors": []}
         service_module.index_ids_op(_settings(search_backend="opensearch"), ["GOOD", "BAD"], "microdata")
 
-    mock_sync.assert_called_once_with(_settings(search_backend="opensearch"), "GOOD")
+    assert [c.args[1] for c in mock_sync.call_args_list] == ["GOOD"]
 
 
 def test_index_ids_op_does_not_sync_variables_for_other_metadata_types():
@@ -287,6 +287,85 @@ def test_index_from_catalog_op_excludes_empty_docs_from_indexed_report(tmp_path,
     assert by_key == {"GOOD": "indexed", "EMPTY": "failed"}
     by_key_error = {i["object_key"]: i.get("error") for i in items}
     assert by_key_error == {"GOOD": None, "EMPTY": "no documents produced (no_langdocs)"}
+
+
+# ---------------------------------------------------------------------------
+# index_from_catalog_op syncs variables too, for the microdata studies of the run only
+# ---------------------------------------------------------------------------
+
+
+def _run_catalog(tmp_path, monkeypatch, rows, *, settings, load_error_idnos=(), cancel_token=None):
+    import nada_ai.ingest.service as service_module
+
+    monkeypatch.setenv("NADA_INGEST_CHECKPOINT_DIR", str(tmp_path))
+
+    def fake_run_bulk_index(settings, pairs, **kwargs):
+        for idno, _ in pairs:
+            if idno in load_error_idnos:
+                kwargs["load_errors"].append({"idno": idno, "stage": "load", "error": "boom"})
+            if kwargs.get("progress") is not None:
+                kwargs["progress"].mark(idno, ok=True)
+        return len(pairs), None
+
+    with (
+        patch("ai4data.discovery.catalog.get_metadata_ids", lambda params, **kw: rows),
+        patch("ai4data.discovery.catalog.is_extract_mode", return_value=False),
+        patch.object(service_module, "run_bulk_index", fake_run_bulk_index),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk"),
+        patch("nada_ai.ingest.variables_index.sync_survey_variables_op") as mock_sync,
+    ):
+        mock_sync.return_value = {"indexed": 2, "errors": []}
+        result = service_module.index_from_catalog_op(
+            settings, catalog_type="microdata", show_progress_bar=False, cancel_token=cancel_token
+        )
+    return result, mock_sync
+
+
+def test_index_from_catalog_op_syncs_variables_of_microdata_rows_only(tmp_path, monkeypatch):
+    rows = [
+        {"idno": "M1", "type": "microdata"},
+        {"idno": "D1", "type": "document"},
+        {"idno": "M2", "type": "microdata"},
+    ]
+    result, mock_sync = _run_catalog(tmp_path, monkeypatch, rows, settings=_settings(search_backend="opensearch"))
+
+    assert {c.args[1] for c in mock_sync.call_args_list} == {"M1", "M2"}  # never the document row
+    assert result["variables"] == {"indexed": 4, "errors": []}
+
+
+def test_index_from_catalog_op_skips_variables_of_a_study_that_failed_to_load(tmp_path, monkeypatch):
+    rows = [{"idno": "M1", "type": "microdata"}, {"idno": "BAD", "type": "microdata"}]
+    _, mock_sync = _run_catalog(
+        tmp_path, monkeypatch, rows, settings=_settings(search_backend="opensearch"), load_error_idnos={"BAD"}
+    )
+    assert [c.args[1] for c in mock_sync.call_args_list] == ["M1"]
+
+
+def test_index_from_catalog_op_makes_no_variable_call_for_a_catalog_without_microdata(tmp_path, monkeypatch):
+    rows = [{"idno": "D1", "type": "document"}, {"idno": "D2", "type": "document"}]
+    result, mock_sync = _run_catalog(tmp_path, monkeypatch, rows, settings=_settings(search_backend="opensearch"))
+    mock_sync.assert_not_called()
+    assert result["variables"] is None
+
+
+def test_index_from_catalog_op_does_not_sync_variables_on_qdrant(tmp_path, monkeypatch):
+    rows = [{"idno": "M1", "type": "microdata"}]
+    result, mock_sync = _run_catalog(tmp_path, monkeypatch, rows, settings=_settings(search_backend="qdrant"))
+    mock_sync.assert_not_called()
+    assert result["variables"] is None
+
+
+def test_index_from_catalog_op_skips_variables_when_cancelled(tmp_path, monkeypatch):
+    from nada_ai.ingest.progress import CancelToken
+
+    token = CancelToken()
+    token.set()
+    rows = [{"idno": "M1", "type": "microdata"}]
+    result, mock_sync = _run_catalog(
+        tmp_path, monkeypatch, rows, settings=_settings(search_backend="opensearch"), cancel_token=token
+    )
+    mock_sync.assert_not_called()
+    assert result["cancelled"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -455,3 +534,101 @@ def test_qdrant_writer_attaches_idno_to_write_errors():
 
     assert success == 1  # GOOD written via the one-at-a-time retry
     assert errors == [{"id": "uuid-BAD", "idno": "BAD", "error": "payload rejected"}]
+
+
+# ---------------------------------------------------------------------------
+# sync_variables_op: variables only, no study document, no chunks, no embedding
+# ---------------------------------------------------------------------------
+
+
+def test_sync_variables_op_for_idnos_reports_progress_and_never_indexes_studies():
+    import nada_ai.ingest.service as service_module
+
+    progress: list[dict] = []
+    with (
+        patch.object(service_module, "run_bulk_index") as mock_studies,
+        patch("nada_ai.ingest.variables_index.sync_survey_variables_op") as mock_sync,
+    ):
+        mock_sync.side_effect = [
+            {"idno": "A", "indexed": 3, "errors": []},
+            RuntimeError("boom"),
+        ]
+        result = service_module.sync_variables_op(_settings(), ["A", "B"], progress_cb=progress.append)
+
+    mock_studies.assert_not_called()  # no study document, no chunks, so nothing is embedded
+    assert result["scope"] == "idnos" and result["requested"] == 2 and result["indexed"] == 3
+    assert result["error_count"] == 1 and result["errors"][0]["idno"] == "B"
+    assert [p["processed"] for p in progress] == [1, 2] and progress[-1]["failed"] == 1
+    assert progress[-1]["current_idno"] == "B" and progress[-1]["percent"] == 100.0
+
+
+def test_sync_variables_op_for_the_whole_catalog_uses_the_backfill_and_caps_the_errors():
+    import nada_ai.ingest.service as service_module
+
+    many = [{"index": {"_id": str(i)}} for i in range(200)]
+    with patch("nada_ai.ingest.variables_index.backfill_variables_op") as mock_backfill:
+        mock_backfill.return_value = {"seen": 9, "indexed": 9, "errors": many, "total": 9, "cancelled": False}
+        result = service_module.sync_variables_op(_settings(), None)
+
+    assert result["scope"] == "all" and result["seen"] == 9
+    assert result["error_count"] == 200 and len(result["errors"]) == 50  # a bulk failure echoes whole documents
+
+
+def test_sync_variables_op_stops_when_cancelled():
+    import nada_ai.ingest.service as service_module
+    from nada_ai.ingest.progress import CancelToken
+
+    token = CancelToken()
+    token.set()
+    with patch("nada_ai.ingest.variables_index.sync_survey_variables_op") as mock_sync:
+        result = service_module.sync_variables_op(_settings(), ["A", "B"], cancel_token=token)
+    mock_sync.assert_not_called()
+    assert result["cancelled"] is True
+
+
+# ---------------------------------------------------------------------------
+# apply_study_options_op: flags only, no metadata read and no embedding
+# ---------------------------------------------------------------------------
+
+
+def _publish_state(*, indexed: bool, published: str = "0"):
+    from unittest.mock import MagicMock
+
+    import nada_ai.ingest.service as service_module
+
+    client = MagicMock()
+    client.update_by_query.side_effect = [{"updated": 4}, {"updated": 9}]
+    extract = (7, {"idno": "A", "title": "T"}, {"published": [published], "countries": ["1"]})
+    with (
+        patch("nada_ai.filters.metadata_extract.fetch_study_extract", return_value=extract),
+        patch.object(service_module, "build_client", return_value=client),
+        patch.object(service_module, "sids_for_idnos", return_value={"A": 7} if indexed else {}),
+    ):
+        result = service_module.apply_study_options_op(_settings(search_backend="opensearch"), "A")
+    return result, client
+
+
+def test_apply_study_options_rewrites_the_flags_of_the_study_its_chunks_and_its_variables():
+    result, client = _publish_state(indexed=True, published="0")
+
+    assert result == {"idno": "A", "updated": True, "sid": 7, "chunks_updated": 4, "variables_updated": 9}
+    written = client.index.call_args.kwargs
+    assert written["id"] == "7" and written["body"]["filter_facets"]["published"] == ["0"]
+    chunks, variables = (c.kwargs for c in client.update_by_query.call_args_list)
+    assert chunks["body"]["script"]["params"]["facets"]["published"] == ["0"]
+    assert chunks["body"]["query"] == {"term": {"metadata.sid": 7}}
+    assert variables["body"]["script"]["params"] == {"published": 0}
+    assert variables["body"]["query"] == {"term": {"sid": 7}}
+
+
+def test_apply_study_options_publishes_variables_as_1():
+    _, client = _publish_state(indexed=True, published="1")
+    variables = client.update_by_query.call_args_list[1].kwargs
+    assert variables["body"]["script"]["params"] == {"published": 1}
+
+
+def test_apply_study_options_leaves_a_study_that_is_not_indexed_alone():
+    result, client = _publish_state(indexed=False)
+    assert result == {"idno": "A", "updated": False, "reason": "not_indexed"}
+    client.index.assert_not_called()
+    client.update_by_query.assert_not_called()

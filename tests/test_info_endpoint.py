@@ -120,7 +120,7 @@ def test_capabilities_reflect_the_modes_that_are_implemented(monkeypatch: pytest
         "hybrid": True,
         "facets": False,
         "variables_search": True,
-        "citations_search": False,
+        "citations_search": True,
     }
     assert [spec.key for spec in info.filters][:2] == ["types", "countries"]
     assert info.limits is not None and info.limits.semantic_window == Settings().studies_semantic_window
