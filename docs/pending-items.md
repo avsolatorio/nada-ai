@@ -8,7 +8,7 @@ blocks each item. Where it lives: **nada-ai** (this repo), **nada-semantic** (NA
 
 | # | Item | Notes |
 |---|---|---|
-| 1 | Commit the staged changes in nada-ai and nada-semantic | Both are staged, neither is committed. ai4data is committed and pushed (`6d2e13f`) and nada-ai is pinned to it. Commit messages are not written into the repo. |
+| 1 | ~~Commit the staged changes~~ | Done 2026-09-25: nada-ai `9883ae4` (branch `feat/opensearch`), nada-semantic `191fac4b` (branch `develop-semantic-ui`), ai4data `6d2e13f`. None pushed except ai4data (fork). nada-ai and nada-semantic have not been pushed to their remotes. |
 | 2 | Push nada-semantic to `ihsn/nada` | Only when asked. |
 | 3 | Stray `nada-os-baseline-variables` index on the Homebrew OpenSearch (`localhost:9200`) | Written by a variables sync while nada-ai pointed at the wrong OpenSearch. Unrelated to the scratch instance (Docker, port 9201). Drop it or leave it. |
 | 4 | Retest a status flip end to end | `rwa-nisr-russ-2012-v1` and `CES-EC-2014-06` are still pending as full in the change queue. Process them from the Change queue page, flip a status, and check the row queues as `upsert_partial`. Not run since NADA's `atomic`/`publish` mapping was restored. |
