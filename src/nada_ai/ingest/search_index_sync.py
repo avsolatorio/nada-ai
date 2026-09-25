@@ -259,7 +259,7 @@ _STATE_BULK_CHUNK_SIZE = 500
 #: nada_ai indexes (document/timeseries/microdata/geospatial all live in
 #: NADA's own `surveys` table, discriminated by its own `type` column — see
 #: the design discussion this constant closes out). 'citation' is a distinct,
-#: separate NADA content type nada_ai doesn't index at all yet.
+#: separate NADA content type, indexed on its own (``ingest/citations_index.py``).
 STATE_OBJECT_TYPE_SURVEY = "survey"
 
 
@@ -370,6 +370,28 @@ def lookup_metadata_type(settings: Settings, idno: str) -> str | None:
     return _DATASET_TYPE_TO_METADATA_TYPE.get(dataset_type) if dataset_type else None
 
 
+def _apply_citation(settings: Settings, item: SearchIndexQueueItem) -> Literal["indexed", "deleted"]:
+    """Apply one citation queue item. Citations are indexed on OpenSearch only (lexical, ``docs/citations-search-contract.md``);
+    Qdrant has no citation index, so there is nothing to do — the item is still acked as handled rather than left
+    pending forever."""
+    from nada_ai.ingest.citations_index import delete_citation_op, sync_citation_op
+
+    if settings.search_backend != "opensearch":
+        return "indexed"
+    if item.is_delete:
+        delete_citation_op(settings, item.object_id)
+        return "deleted"
+    sync_citation_op(settings, item.object_id)
+    return "indexed"
+
+
+def _apply_options_in_place(settings: Settings, idno: str) -> bool:
+    """Apply an options change in place; False when the study is not in the index yet (index it in full)."""
+    from nada_ai.ingest.service import apply_study_options_op
+
+    return bool(apply_study_options_op(settings, idno)["updated"])
+
+
 def apply_and_ack_queue_item(
     settings: Settings,
     item: SearchIndexQueueItem,
@@ -405,7 +427,9 @@ def apply_and_ack_queue_item(
     result: Literal["indexed", "failed"]
     error: str | None
     try:
-        if item.is_delete:
+        if item.object_type == "citation":
+            action = _apply_citation(settings, item)
+        elif item.is_delete:
             delete_by_idno_op(settings, idno)
             action = "deleted"
         elif item.change_class == "variables":
@@ -419,6 +443,15 @@ def apply_and_ack_queue_item(
                 from nada_ai.ingest.variables_index import sync_survey_variables_op
 
                 sync_survey_variables_op(settings, idno)
+            action = "indexed"
+        elif (
+            item.change_class == "upsert_partial"
+            and settings.search_backend == "opensearch"
+            and _apply_options_in_place(settings, idno)
+        ):
+            # NADA sends upsert_partial for a change of the study's options (publish state, license, data class,
+            # links, DOI, featured, collections), not of its metadata (that is upsert_full): they are applied in
+            # place, with no metadata read and no embedding.
             action = "indexed"
         else:
             resolved_type = metadata_type or lookup_metadata_type(settings, idno)
@@ -458,8 +491,7 @@ def reconcile_once(
 ) -> dict[str, Any]:
     """Poll one page of the pending queue and apply + ack each item.
 
-    Only ``object_type=survey`` is handled — citations aren't part of the
-    catalog metadata this index covers. Returns a summary dict; call again
+    Studies and citations are both handled. Returns a summary dict; call again
     (e.g. on a schedule) to keep draining the queue, since one call only
     processes up to ``limit`` items.
 
@@ -473,7 +505,7 @@ def reconcile_once(
     ``content:{metadata_type}:{idno}`` key — as webhooks and admin routes use,
     so they properly single-flight against each other.
     """
-    items = list_queue(settings, status="pending", object_type="survey", limit=limit)
+    items = list_queue(settings, status="pending", limit=limit)
     summary = {"polled": len(items), "indexed": 0, "deleted": 0, "failed": 0, "ack_conflicts": 0}
 
     for item in items:

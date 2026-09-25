@@ -273,11 +273,11 @@ def _delete_opensearch_by_sids(settings: Settings, sids: list[int]) -> dict[str,
 def _delete_opensearch_by(
     settings: Settings, *, idnos: list[str] | None = None, sids: list[int] | None = None
 ) -> dict[str, Any]:
-    """Delete studies from both OpenSearch indexes, by NADA idno and/or internal id ``sid``.
+    """Delete studies from all three OpenSearch indexes (chunks, studies, variables), by NADA idno and/or ``sid``.
 
     The study index stores NADA's own ``idno``, so a delete by idno first looks up the study's ``sid`` there;
     chunks are then removed by ``sid`` as well as by their stored idno (which comes from the record's schema and
-    can differ from NADA's), so none are left behind.
+    can differ from NADA's), so none are left behind. Variables carry NADA's own idno and sid, like studies.
     """
     from nada_ai.search.backend.opensearch.mapping import metadata_field
 
@@ -302,11 +302,79 @@ def _delete_opensearch_by(
 
         chunks = delete(settings.index_name, chunk_match)
         studies = delete(settings.studies_index, study_match)
+        # A deleted (or unpublished-and-removed) study's variables must not stay searchable: variable documents
+        # carry the same NADA ``idno`` and ``sid`` as the study, at the document root.
+        variables = delete(settings.variables_index, study_match)
         return {
             "deleted": int(chunks.get("deleted") or 0),
             "total": chunks.get("total"),
             "studies_index": settings.studies_index,
             "studies_deleted": int(studies.get("deleted") or 0),
+            "variables_index": settings.variables_index,
+            "variables_deleted": int(variables.get("deleted") or 0),
+        }
+    finally:
+        _close_quiet(client)
+
+
+def apply_study_options_op(settings: Settings, idno: str) -> dict[str, Any]:
+    """Apply a change of a study's options to the index without reading its metadata or embedding anything.
+
+    NADA sends ``upsert_partial`` for changes to a study's options (publish state, license, data class, links, DOI,
+    featured, collections): fields around the metadata, never its text, so the study's chunks keep their vectors.
+    This rewrites the study document, replaces the flat ``filter_facets`` on the study's chunks, and sets
+    ``published`` on its variables, all from NADA's extract record. OpenSearch only.
+
+    A study with no document in the index has nothing to update: ``{"updated": False, "reason": "not_indexed"}``, and
+    the caller indexes it in full.
+    """
+    from nada_ai.filters.metadata_extract import fetch_study_extract
+    from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, metadata_field
+    from nada_ai.search.backend.opensearch.studies import study_to_source
+
+    sid, core_fields, filters = fetch_study_extract(settings, idno)
+    client = build_client(settings)
+    try:
+        if not sids_for_idnos(client, settings.studies_index, [idno]):
+            return {"idno": idno, "updated": False, "reason": "not_indexed"}
+
+        source = study_to_source(sid, core_fields, filters)
+        client.index(index=settings.studies_index, id=str(sid), body=source, refresh=True)
+
+        chunks = client.update_by_query(
+            index=settings.index_name,
+            body={
+                "query": {"term": {metadata_field("sid"): sid}},
+                "script": {
+                    "lang": "painless",
+                    "source": f"ctx._source.metadata.{FILTER_FACETS_KEY} = params.facets",
+                    "params": {"facets": source[FILTER_FACETS_KEY]},
+                },
+            },
+            refresh=True,
+            conflicts="proceed",
+        )
+        published = source[FILTER_FACETS_KEY].get("published") or []
+        variables = client.update_by_query(
+            index=settings.variables_index,
+            body={
+                "query": {"term": {"sid": sid}},
+                "script": {
+                    "lang": "painless",
+                    "source": "ctx._source.published = params.published",
+                    "params": {"published": int(published[0]) if published else 0},
+                },
+            },
+            refresh=True,
+            conflicts="proceed",
+            ignore_unavailable=True,
+        )
+        return {
+            "idno": idno,
+            "updated": True,
+            "sid": sid,
+            "chunks_updated": int(chunks.get("updated") or 0),
+            "variables_updated": int(variables.get("updated") or 0),
         }
     finally:
         _close_quiet(client)
@@ -395,27 +463,147 @@ def setup_ingest_pipeline_op(settings: Settings) -> dict[str, Any]:
     }
 
 
-def _sync_variables_best_effort(settings: Settings, idnos: Iterable[str]) -> dict[str, Any]:
+def _sync_variables_best_effort(
+    settings: Settings,
+    idnos: Iterable[str],
+    *,
+    cancel_token: CancelToken | None = None,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     """Sync each idno's variables (best-effort: one idno's failure doesn't stop the rest, and never raises —
     a full study index must not fail just because the separate variable index couldn't be reached).
 
     Only called for ``metadata_type=microdata`` (variables only exist on that dataset type — see
     ``_metadata_type`` in NADA's ``Semantic.php`` for the same map). By design, a full index of a study is
-    study + chunks + variables together; see ``docs/variables-search-contract.md``.
+    study + chunks + variables together; see ``docs/variables-search-contract.md``. ``progress_cb`` receives the
+    job-registry progress shape after every study.
     """
     from nada_ai.ingest.variables_index import sync_survey_variables_op
 
+    todo = list(idnos)
     indexed = 0
     errors: list[Any] = []
-    for idno in idnos:
+    failed = 0
+    for done, idno in enumerate(todo, start=1):
+        if cancel_token is not None and cancel_token.is_set():
+            break
         try:
-            result = sync_survey_variables_op(settings, idno)
+            result = sync_survey_variables_op(settings, idno, cancel_token=cancel_token)
             indexed += int(result.get("indexed") or 0)
             errors.extend(result.get("errors") or [])
+            failed += 1 if result.get("errors") else 0
         except Exception as e:  # noqa: BLE001 - reported in the result, not raised
             logger.warning("variable sync failed for idno=%s: %s", idno, e)
             errors.append({"idno": idno, "error": str(e)})
+            failed += 1
+        if progress_cb is not None:
+            progress_cb(
+                {
+                    "processed": done,
+                    "total": len(todo),
+                    "failed": failed,
+                    "percent": round(100 * done / len(todo), 1),
+                    "current_idno": idno,
+                }
+            )
     return {"indexed": indexed, "errors": errors}
+
+
+#: Errors kept in a variables-only job's result: a bulk failure echoes whole documents, and a job's result is stored
+#: in memory and sent to the dashboard.
+_JOB_ERROR_LIMIT = 50
+
+
+def sync_variables_op(
+    settings: Settings,
+    idnos: list[str] | None = None,
+    *,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_token: CancelToken | None = None,
+) -> dict[str, Any]:
+    """Index variables only — no study document, no chunks, so no embedding.
+
+    ``idnos`` replaces those studies' variables (one NADA page-walk each). ``None`` walks the whole catalog's
+    variables instead, which adds and replaces but does not remove variables that no longer exist (see
+    ``backfill_variables_op``). Returns ``{"scope", "indexed", "errors", "error_count", "cancelled", ...}``.
+    """
+    if idnos is None:
+        from nada_ai.ingest.variables_index import backfill_variables_op
+
+        result = backfill_variables_op(
+            settings, show_progress_bar=False, progress_cb=progress_cb, cancel_token=cancel_token
+        )
+        errors = result.pop("errors")
+        return {"scope": "all", **result, "errors": errors[:_JOB_ERROR_LIMIT], "error_count": len(errors)}
+
+    result = _sync_variables_best_effort(settings, idnos, cancel_token=cancel_token, progress_cb=progress_cb)
+    errors = result["errors"]
+    return {
+        "scope": "idnos",
+        "requested": len(idnos),
+        "indexed": result["indexed"],
+        "errors": errors[:_JOB_ERROR_LIMIT],
+        "error_count": len(errors),
+        "cancelled": cancel_token is not None and cancel_token.is_set(),
+    }
+
+
+def sync_citations_op(
+    settings: Settings,
+    citation_ids: list[int] | None = None,
+    *,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_token: CancelToken | None = None,
+) -> dict[str, Any]:
+    """Index citations only (lexical: no chunks, no embedding).
+
+    ``citation_ids`` (NADA citation ids) syncs those citations one by one: each is rewritten, or removed when NADA no
+    longer has it. ``None`` walks the whole catalog's citations, which adds and replaces but does not remove (see
+    ``backfill_citations_op``). Returns ``{"scope", "indexed", "deleted", "errors", "error_count", "cancelled", ...}``.
+    """
+    from nada_ai.ingest.citations_index import backfill_citations_op, sync_citation_op
+
+    if citation_ids is None:
+        result = backfill_citations_op(
+            settings, show_progress_bar=False, progress_cb=progress_cb, cancel_token=cancel_token
+        )
+        errors = result.pop("errors")
+        return {"scope": "all", **result, "errors": errors[:_JOB_ERROR_LIMIT], "error_count": len(errors)}
+
+    indexed = deleted = failed = 0
+    errors: list[Any] = []
+    for done, citation_id in enumerate(citation_ids, start=1):
+        if cancel_token is not None and cancel_token.is_set():
+            break
+        try:
+            result = sync_citation_op(settings, citation_id)
+            indexed += int(result.get("indexed") or 0)
+            deleted += int(result.get("deleted") or 0)
+            errors.extend(result.get("errors") or [])
+            failed += 1 if result.get("errors") else 0
+        except Exception as e:  # noqa: BLE001 - reported in the result, not raised
+            logger.warning("citation sync failed for id=%s: %s", citation_id, e)
+            errors.append({"citation_id": citation_id, "error": str(e)})
+            failed += 1
+        if progress_cb is not None:
+            progress_cb(
+                {
+                    "processed": done,
+                    "total": len(citation_ids),
+                    "failed": failed,
+                    "percent": round(100 * done / len(citation_ids), 1),
+                    "current_idno": str(citation_id),
+                }
+            )
+    return {
+        "scope": "ids",
+        "requested": len(citation_ids),
+        "indexed": indexed,
+        "deleted": deleted,
+        "errors": errors[:_JOB_ERROR_LIMIT],
+        "error_count": len(errors),
+        "cancelled": cancel_token is not None and cancel_token.is_set(),
+    }
 
 
 def index_ids_op(
@@ -498,7 +686,8 @@ def index_from_catalog_op(
     """Fetch ids from Data Compass search API and bulk-index them.
 
     Returns ``{"indexed", "errors", "load_errors", "empty_docs", "rows",
-    "resumed_skipped", "cancelled", "catalog_type", "index", "quality"}``.
+    "resumed_skipped", "cancelled", "catalog_type", "index", "quality", "variables"}``. ``variables`` is
+    ``{"indexed", "errors"}`` for the microdata studies of this run (see ``_sync_variables_best_effort``), else ``None``.
     ``errors`` is write-time failures against the search backend; ``load_errors``
     is per-idno failures fetching/parsing metadata *before* a document was even
     built (previously silently logged and dropped — see ``ingest/pipeline.py``).
@@ -589,6 +778,16 @@ def index_from_catalog_op(
         settings, _state_report_items(tracker.checkpoint.completed_idnos, load_errors, empty_docs, err)
     )
 
+    # A full index of a study is study + chunks + variables (see index_ids_op). Variables only exist on microdata,
+    # so this is one NADA call per microdata study of this run, not per catalog row — a run over thousands of
+    # documents makes none. A cancelled run stops here rather than starting a long sync nobody is waiting for.
+    variables_result: dict[str, Any] | None = None
+    if settings.search_backend == "opensearch" and not cancelled:
+        failed_idnos = {e["idno"] for e in load_errors if e.get("idno")}
+        microdata_idnos = [idno for idno, t in pairs if t == "microdata" and idno not in failed_idnos]
+        if microdata_idnos:
+            variables_result = _sync_variables_best_effort(settings, microdata_idnos, cancel_token=cancel_token)
+
     idx = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
     return {
         "indexed": int(n),
@@ -601,4 +800,5 @@ def index_from_catalog_op(
         "catalog_type": catalog_type,
         "index": idx,
         "quality": report.to_dict(),
+        "variables": variables_result,
     }

@@ -286,3 +286,78 @@ def test_iter_langdoc_records_skips_a_study_without_extract_data(tmp_path):
 
     assert results == []
     assert [e["stage"] for e in load_errors] == ["extract"]
+
+
+# ---------------------------------------------------------------------------
+# stored vectors are reused, so only new or changed chunks are embedded
+# ---------------------------------------------------------------------------
+
+
+class _CountingEmbedding(_FakeEmbedding):
+    def __init__(self) -> None:
+        self.encoded: list[str] = []
+
+    def encode_corpus(self, texts: list[str], show_progress_bar: bool = True) -> list[_FakeVec]:
+        self.encoded.extend(texts)
+        return super().encode_corpus(texts, show_progress_bar)
+
+
+def _two_chunk_study() -> None:
+    _FakeLoader._by_idno = {
+        "DOC-1": [
+            _FakeDoc("unchanged chunk text", {"idno": "DOC-1", "type": "document", "qfield": "a"}),
+            _FakeDoc("brand new chunk text", {"idno": "DOC-1", "type": "document", "qfield": "b"}),
+        ]
+    }
+    _FakeLoader._raw_by_idno = {
+        "DOC-1": {"_extract_filters": {}, "_extract_core_fields": {"survey_uid": 5, "idno": "DOC-1"}}
+    }
+
+
+def _run(tmp_path, stored_vectors):
+    import nada_ai.ingest.pipeline as pipeline_module
+
+    embedding = _CountingEmbedding()
+    with (
+        patch.object(pipeline_module, "MetadataLoader", _FakeLoader),
+        patch.object(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata["qfield"]),
+    ):
+        results = list(
+            pipeline_module.iter_langdoc_records(
+                _settings(tmp_path, search_backend="opensearch"),
+                embedding,
+                [("DOC-1", "document")],
+                show_progress_bar=False,
+                stored_vectors=stored_vectors,
+            )
+        )
+    return embedding, {doc_id: vec for doc_id, vec, _ in results}
+
+
+def test_stored_vectors_are_reused_and_only_new_chunks_are_embedded(tmp_path):
+    _two_chunk_study()
+    asked: list[list[str]] = []
+
+    def stored(ids: list[str]) -> dict[str, list[float]]:
+        asked.append(ids)
+        return {"a": [9.0, 9.0]}
+
+    embedding, vectors = _run(tmp_path, stored)
+
+    assert asked == [["a", "b"]]
+    assert embedding.encoded == ["brand new chunk text"]
+    assert vectors == {"a": [9.0, 9.0], "b": [0.1, 0.2]}
+
+
+def test_every_chunk_is_embedded_when_nothing_is_stored(tmp_path):
+    _two_chunk_study()
+    embedding, vectors = _run(tmp_path, None)
+    assert embedding.encoded == ["unchanged chunk text", "brand new chunk text"]
+    assert vectors == {"a": [0.1, 0.2], "b": [0.1, 0.2]}
+
+
+def test_no_embedding_call_when_every_chunk_is_stored(tmp_path):
+    _two_chunk_study()
+    embedding, vectors = _run(tmp_path, lambda ids: {i: [1.0, 1.0] for i in ids})
+    assert embedding.encoded == []
+    assert vectors == {"a": [1.0, 1.0], "b": [1.0, 1.0]}

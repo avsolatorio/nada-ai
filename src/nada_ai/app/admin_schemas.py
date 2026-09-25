@@ -11,6 +11,28 @@ class CreateIndexRequest(BaseModel):
     recreate: bool = Field(default=False, description="Drop and recreate the index if it already exists.")
 
 
+class SyncVariablesRequest(BaseModel):
+    idnos: list[str] | None = Field(
+        default=None,
+        max_length=1000,
+        description=(
+            "Studies whose variables to replace (NADA idnos). Omit to walk the whole catalog's variables instead. "
+            "Neither touches the study document or its chunks, so nothing is embedded."
+        ),
+    )
+
+
+class SyncCitationsRequest(BaseModel):
+    ids: list[int] | None = Field(
+        default=None,
+        max_length=1000,
+        description=(
+            "NADA citation ids to sync (each is rewritten, or removed when NADA no longer has it). Omit to walk the "
+            "whole catalog's citations instead. Citations are lexical: nothing is embedded."
+        ),
+    )
+
+
 class IndexFromCatalogRequest(BaseModel):
     catalog_type: str = Field(default="timeseries", description="timeseries | indicator | survey | microdata | document | geospatial | timeseriesdb | indicator-db | table | script | image | video")
     ps: int = Field(default=100, ge=1, le=1000, description="Catalog page size.")

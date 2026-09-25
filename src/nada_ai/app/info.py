@@ -70,7 +70,7 @@ def capabilities_for(engine: Engine, settings: Settings) -> Capabilities:
         # Lexical only, no modes of its own — advertised whenever the engine is OpenSearch, not gated by
         # ``modes_for`` (which is study-search specific). See docs/variables-search-contract.md.
         variables_search=engine is Engine.opensearch,
-        citations_search=False,
+        citations_search=engine is Engine.opensearch,
     )
 
 

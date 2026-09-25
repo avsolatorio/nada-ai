@@ -118,16 +118,16 @@ def index_survey_variables(idno: str) -> None:
 
 
 def backfill_variables(
-    batch_size: int = 200,
+    batch_size: int = 1000,
     max_records: int | None = None,
     recreate_index: bool = False,
     show_progress_bar: bool = True,
 ) -> None:
     """Page through NADA's whole catalog of variables and (re)index all of them (lexical variable search).
 
-    Idempotent (``_id`` is the variable's ``uid``): safe to run again after a catalog-wide change. There is no
-    live delta sync yet (see ``ingest/variables_index.py``), so re-run this on a schedule, or use
-    ``index_survey_variables`` right after reindexing one study.
+    Idempotent (``_id`` is the variable's ``uid``): safe to run again after a catalog-wide change. It adds and
+    replaces but does not remove variables that no longer exist; ``index_survey_variables`` replaces one study's
+    variables outright. The same operations run as a background job via ``POST /admin/variables/sync``.
     """
     from nada_ai.ingest.variables_index import backfill_variables_op
 

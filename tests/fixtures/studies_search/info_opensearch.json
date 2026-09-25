@@ -9,7 +9,7 @@
     "browse": true,
     "facets": false,
     "variables_search": true,
-    "citations_search": false
+    "citations_search": true
   },
   "id_key": "sid",
   "filters": [

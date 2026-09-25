@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     #: OpenSearch variable index (one document per variable, ``_id`` = ``uid``). Defaults to
     #: ``<index_name>-variables``. Lexical only: see ``docs/variables-search-contract.md``.
     variables_index_name: str | None = Field(default=None)
+    #: OpenSearch citation index (one document per citation, ``_id`` = the citation's NADA id). Defaults to
+    #: ``<index_name>-citations``. Lexical only: see ``docs/citations-search-contract.md``.
+    citations_index_name: str | None = Field(default=None)
 
     #: Study search: the most studies the semantic side adds to a relevance search (reported by ``GET /info`` as
     #: ``limits.semantic_window``). The keyword matches are not capped: they are all returned and paged.
@@ -252,6 +255,10 @@ class Settings(BaseSettings):
     @property
     def variables_index(self) -> str:
         return self.variables_index_name or f"{self.index_name}-variables"
+
+    @property
+    def citations_index(self) -> str:
+        return self.citations_index_name or f"{self.index_name}-citations"
 
     @model_validator(mode="after")
     def validate_search_backend(self) -> Settings:
