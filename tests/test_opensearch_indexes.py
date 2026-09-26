@@ -364,6 +364,50 @@ def test_writer_prunes_chunks_that_are_not_in_this_run() -> None:
     assert clauses == {4: ["chunk-1", "chunk-2"], 2: []}
 
 
+def _pruned_sids(client: MagicMock) -> set[int] | None:
+    """The studies the writer's prune covered; ``None`` when it did not prune at all."""
+    if not client.delete_by_query.called:
+        return None
+    should = client.delete_by_query.call_args.kwargs["body"]["query"]["bool"]["should"]
+    return {clause["bool"]["filter"][0]["term"]["metadata.sid"] for clause in should}
+
+
+def test_a_study_with_a_failed_chunk_write_keeps_its_old_chunks() -> None:
+    """A changed chunk has a new id: pruning the study would delete the old copy while the new one never landed."""
+    settings = Settings(index_name="chunks", opensearch_put_composable_index_template=False)
+    client = _client()
+    client.delete_by_query.return_value = {"deleted": 0}
+    rejected = {"index": {"_id": "chunk-2", "status": 400, "error": {"type": "mapper_parsing_exception"}}}
+    (_, errors), _ = _run_writer(settings, client, recreate=False, bulk_results=[(1, [rejected]), (2, [])])
+
+    assert errors == [rejected]
+    assert _pruned_sids(client) == {2}  # study 4 is left alone; study 2 had no failure
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"index": {"_id": "not-a-chunk-of-this-run", "status": 400}},
+        {"index": {"status": 400}},
+        "a bare string",
+    ],
+)
+def test_nothing_is_pruned_when_a_chunk_write_error_cannot_be_tied_to_a_study(error: Any) -> None:
+    settings = Settings(index_name="chunks", opensearch_put_composable_index_template=False)
+    client = _client()
+    _run_writer(settings, client, recreate=False, bulk_results=[(1, [error]), (2, [])])
+    assert _pruned_sids(client) is None
+
+
+def test_a_failed_study_document_write_does_not_stop_pruning() -> None:
+    """Only chunk writes decide pruning: a rejected study document loses no chunk content."""
+    settings = Settings(index_name="chunks", opensearch_put_composable_index_template=False)
+    client = _client()
+    client.delete_by_query.return_value = {"deleted": 0}
+    _run_writer(settings, client, recreate=False, bulk_results=[(2, []), (1, [{"index": {"_id": "4", "status": 400}}])])
+    assert _pruned_sids(client) == {2, 4}
+
+
 def test_pruning_is_batched() -> None:
     settings = Settings(index_name="chunks")
     client = _client()
