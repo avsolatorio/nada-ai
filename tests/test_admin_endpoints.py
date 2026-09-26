@@ -471,6 +471,7 @@ def test_search_index_diff_summary_400_when_not_configured(monkeypatch):
 
 def test_search_index_reconcile_diff_submits_job(monkeypatch):
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_REPORT_SEARCH_INDEX_STATE_ENABLED", "true")
     fake_summary = {"missing_total": 0, "stale_total": 0, "indexed": 0, "deleted": 0, "failed": 0, "skipped": 0}
     monkeypatch.setattr("nada_ai.ingest.search_index_sync.reconcile_diff_once", lambda settings, **kw: fake_summary)
 
@@ -483,8 +484,24 @@ def test_search_index_reconcile_diff_submits_job(monkeypatch):
     assert body["key"] == "search_index_reconcile_diff:survey:all"
 
 
+def test_search_index_reconcile_diff_400_without_state_reporting(monkeypatch):
+    """Refused up front, not submitted as a job that fails (or, before, stopped after one page)."""
+    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_REPORT_SEARCH_INDEX_STATE_ENABLED", "false")
+    called = []
+    monkeypatch.setattr("nada_ai.ingest.search_index_sync.reconcile_diff_once", lambda settings, **kw: called.append(1))
+
+    with TestClient(app) as client:
+        _fresh_state()
+        r = client.post("/admin/search-index/reconcile-diff?object_type=survey")
+    assert r.status_code == 400
+    assert "NADA_REPORT_SEARCH_INDEX_STATE_ENABLED" in r.json()["detail"]
+    assert called == []
+
+
 def test_search_index_reconcile_diff_singleflights_per_object_type(monkeypatch):
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_REPORT_SEARCH_INDEX_STATE_ENABLED", "true")
     gate = threading.Event()
 
     def slow(settings, **kw):
@@ -508,6 +525,7 @@ def test_search_index_reconcile_diff_singleflights_per_object_type(monkeypatch):
 def test_search_index_reconcile_diff_singleflights_per_data_type(monkeypatch):
     """Reconciling one data_type must not collide with, or block, another."""
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_REPORT_SEARCH_INDEX_STATE_ENABLED", "true")
     gate = threading.Event()
 
     def slow(settings, **kw):
@@ -534,6 +552,7 @@ def test_search_index_reconcile_diff_writes_progress_onto_the_job(monkeypatch):
     *before* the worker runs, same as index_from_catalog — otherwise Jobs
     shows '—' for the whole reconcile."""
     monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_REPORT_SEARCH_INDEX_STATE_ENABLED", "true")
     started = threading.Event()
     captured: dict = {}
 

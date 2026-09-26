@@ -10,6 +10,7 @@ import pytest
 from nada_ai.ingest.search_index_sync import (
     QueueItemChanged,
     SearchIndexQueueItem,
+    SearchIndexSyncError,
     ack_item,
     apply_and_ack_queue_item,
     get_status,
@@ -590,6 +591,11 @@ def test_list_diff_missing_omits_has_error_when_false():
 # ---------------------------------------------------------------------------
 
 
+def _diff_settings(**overrides) -> Settings:
+    """reconcile_diff_once refuses to run without state reporting (see its docstring)."""
+    return _settings(report_search_index_state_enabled=True, **overrides)
+
+
 def _diff_page(items, total=None):
     from nada_ai.ingest.search_index_sync import DiffItem, DiffPage
 
@@ -607,7 +613,7 @@ def test_reconcile_diff_once_indexes_each_missing_item_with_resolved_type():
             return_value={"indexed": 1, "errors": [], "load_errors": [], "empty_docs": []},
         ) as mock_index,
     ):
-        summary = reconcile_diff_once(_settings())
+        summary = reconcile_diff_once(_diff_settings())
 
     assert mock_index.call_count == 2
     calls_by_idno = {c.kwargs["idnos"][0]: c.kwargs["metadata_type"] for c in mock_index.call_args_list}
@@ -638,7 +644,7 @@ def test_reconcile_diff_once_counts_soft_failure_as_failed_not_indexed():
             },
         ),
     ):
-        summary = reconcile_diff_once(_settings())
+        summary = reconcile_diff_once(_diff_settings())
 
     assert summary["indexed"] == 0
     assert summary["failed"] == 1
@@ -650,7 +656,7 @@ def test_reconcile_diff_once_passes_data_type_through_to_both_diff_calls():
         patch("nada_ai.ingest.search_index_sync.list_diff_missing", return_value=empty_page) as mock_missing,
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page) as mock_stale,
     ):
-        reconcile_diff_once(_settings(), data_type="geospatial")
+        reconcile_diff_once(_diff_settings(), data_type="geospatial")
 
     assert mock_missing.call_args.kwargs["data_type"] == "geospatial"
     assert mock_stale.call_args.kwargs["data_type"] == "geospatial"
@@ -664,7 +670,7 @@ def test_reconcile_diff_once_skips_unmapped_dataset_type():
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page),
         patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index,
     ):
-        summary = reconcile_diff_once(_settings())
+        summary = reconcile_diff_once(_diff_settings())
 
     mock_index.assert_not_called()
     assert summary["skipped"] == 1
@@ -680,7 +686,7 @@ def test_reconcile_diff_once_deletes_stale_items_in_one_batch_call():
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", side_effect=[stale_page, empty_stale]),
         patch("nada_ai.ingest.search_index_sync.delete_by_idnos_op") as mock_delete,
     ):
-        summary = reconcile_diff_once(_settings())
+        summary = reconcile_diff_once(_diff_settings())
 
     mock_delete.assert_called_once()
     assert set(mock_delete.call_args.args[1]) == {"X", "Y"}
@@ -689,12 +695,11 @@ def test_reconcile_diff_once_deletes_stale_items_in_one_batch_call():
 
 
 def test_reconcile_diff_once_terminates_when_an_item_keeps_failing():
-    """The 'missing' diff re-fetches from offset 0 every iteration (the set
-    shrinks as items succeed) — an item that keeps failing stays in NADA's
-    diff forever (correctly: it's genuinely still not indexed), so this must
-    not loop forever retrying it. Simulates 200 re-fetches all returning the
-    exact same permanently-broken item, plus one that succeeds and should
-    disappear next iteration."""
+    """The 'missing' diff is re-fetched live every iteration (the set shrinks
+    as items succeed) — an item that keeps failing stays in NADA's diff
+    forever (correctly: it's genuinely still not indexed), so this must not
+    loop forever retrying it. Simulates 200 re-fetches all returning the exact
+    same permanently-broken item."""
     stuck_page = _diff_page([{"idno": "STUCK", "type": "survey"}])
     empty_page = _diff_page([])
 
@@ -706,7 +711,7 @@ def test_reconcile_diff_once_terminates_when_an_item_keeps_failing():
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page),
         patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=RuntimeError("permanently broken")),
     ):
-        summary = reconcile_diff_once(_settings())
+        summary = reconcile_diff_once(_diff_settings())
 
     # Attempted exactly once despite appearing on every re-fetch, and terminated.
     assert summary["failed"] == 1
@@ -719,7 +724,7 @@ def test_reconcile_diff_once_summary_shape():
         patch("nada_ai.ingest.search_index_sync.list_diff_missing", return_value=empty_page),
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page),
     ):
-        summary = reconcile_diff_once(_settings())
+        summary = reconcile_diff_once(_diff_settings())
 
     assert summary == {
         "missing_total": 0,
@@ -748,7 +753,7 @@ def test_reconcile_diff_once_reports_progress_per_idno():
         ),
         patch("nada_ai.ingest.search_index_sync.delete_by_idnos_op"),
     ):
-        summary = reconcile_diff_once(_settings(), progress_cb=snapshots.append)
+        summary = reconcile_diff_once(_diff_settings(), progress_cb=snapshots.append)
 
     assert summary["indexed"] == 2
     assert summary["deleted"] == 1
@@ -785,12 +790,108 @@ def test_reconcile_diff_once_stops_when_cancel_token_is_set():
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty),
         patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=index_one),
     ):
-        summary = reconcile_diff_once(_settings(), cancel_token=token)
+        summary = reconcile_diff_once(_diff_settings(), cancel_token=token)
 
     assert indexed == ["A"]
     assert summary["indexed"] == 1
     assert summary["cancelled"] is True
     assert summary["deleted"] == 0
+
+
+def test_reconcile_diff_once_refuses_to_run_without_state_reporting():
+    """NADA's diff only changes when nada-ai reports what it indexed; without that the run would stop after one
+    page and still report success."""
+    with (
+        patch("nada_ai.ingest.search_index_sync.list_diff_missing") as mock_missing,
+        pytest.raises(SearchIndexSyncError, match="NADA_REPORT_SEARCH_INDEX_STATE_ENABLED"),
+    ):
+        reconcile_diff_once(_settings(report_search_index_state_enabled=False))
+
+    mock_missing.assert_not_called()
+
+
+class _FakeDiff:
+    """NADA's diff as a live list: fetched by offset/limit, and an item leaves it once handled."""
+
+    def __init__(self, items):
+        self.items = list(items)
+
+    def fetch(self, settings, *, object_type, limit, offset, data_type):
+        return _diff_page(self.items[offset : offset + limit], total=len(self.items))
+
+    def remove(self, idnos):
+        self.items = [it for it in self.items if it["idno"] not in idnos]
+
+
+def test_reconcile_diff_once_gets_past_a_full_page_of_items_that_keep_failing():
+    """A page whose items all stay in the diff (failed, or skipped for an unmapped type) must not hide the rest."""
+    diff = _FakeDiff(
+        [
+            {"idno": "BROKEN", "type": "survey"},
+            {"idno": "UNMAPPED", "type": "citation"},
+            *({"idno": f"OK{i}", "type": "survey"} for i in range(5)),
+        ]
+    )
+
+    def index_one(settings, idnos, **kwargs):
+        if idnos == ["BROKEN"]:
+            return {**_INDEXED_OK, "indexed": 0, "load_errors": [{"idno": "BROKEN", "error": "boom"}]}
+        diff.remove(idnos)
+        return _INDEXED_OK
+
+    with (
+        patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=diff.fetch),
+        patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=_diff_page([])),
+        patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=index_one) as mock_index,
+    ):
+        summary = reconcile_diff_once(_diff_settings(), page_size=2)
+
+    assert sorted(c.kwargs["idnos"][0] for c in mock_index.call_args_list) == ["BROKEN"] + [f"OK{i}" for i in range(5)]
+    assert summary["indexed"] == 5
+    assert summary["failed"] == 1
+    assert summary["skipped"] == 1
+    assert [it["idno"] for it in diff.items] == ["BROKEN", "UNMAPPED"]
+
+
+def test_reconcile_diff_once_gets_past_a_full_page_of_stale_items_that_fail_to_delete():
+    diff = _FakeDiff([{"idno": "X1"}, {"idno": "X2"}, {"idno": "Y1"}, {"idno": "Y2"}, {"idno": "Y3"}])
+
+    def delete(settings, idnos):
+        if "X1" in idnos:
+            raise RuntimeError("delete failed")
+        diff.remove(idnos)
+
+    with (
+        patch("nada_ai.ingest.search_index_sync.list_diff_missing", return_value=_diff_page([])),
+        patch("nada_ai.ingest.search_index_sync.list_diff_stale", side_effect=diff.fetch),
+        patch("nada_ai.ingest.search_index_sync.delete_by_idnos_op", side_effect=delete),
+    ):
+        summary = reconcile_diff_once(_diff_settings(), page_size=2)
+
+    assert summary["deleted"] == 3
+    assert summary["failed"] == 2
+    assert [it["idno"] for it in diff.items] == ["X1", "X2"]
+
+
+def test_reconcile_diff_once_moves_past_an_item_that_stays_after_a_reported_success():
+    """A success whose state report never reached NADA leaves the item in the diff; it is fetched again, recognised
+    as seen, and stepped over rather than stopping the run."""
+    diff = _FakeDiff([{"idno": f"S{i}", "type": "survey"} for i in range(4)])
+
+    def index_one(settings, idnos, **kwargs):
+        if idnos != ["S0"]:  # S0's report is lost: it stays in the diff
+            diff.remove(idnos)
+        return _INDEXED_OK
+
+    with (
+        patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=diff.fetch),
+        patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=_diff_page([])),
+        patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=index_one) as mock_index,
+    ):
+        summary = reconcile_diff_once(_diff_settings(), page_size=2)
+
+    assert [c.kwargs["idnos"][0] for c in mock_index.call_args_list] == ["S0", "S1", "S2", "S3"]
+    assert summary["indexed"] == 4
 
 
 # ---------------------------------------------------------------------------

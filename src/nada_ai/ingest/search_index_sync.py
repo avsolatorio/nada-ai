@@ -548,10 +548,15 @@ def reconcile_once(
 
 
 #: Absolute circuit breaker on reconcile_diff_once's re-fetch loop — real
-#: termination is guaranteed by the seen-idno tracking below regardless of
-#: page_size or how many items are stuck failing; this only guards against an
-#: unforeseen bug turning that into an infinite loop.
+#: termination is guaranteed by the offset only ever moving forward past items
+#: that stay in the diff; this only guards against an unforeseen bug turning
+#: that into an infinite loop.
 _DIFF_RECONCILE_MAX_ITERATIONS = 10_000
+
+DIFF_RECONCILE_NEEDS_STATE_REPORTING = (
+    "reconcile-diff needs NADA_REPORT_SEARCH_INDEX_STATE_ENABLED=true: NADA's diff only changes when nada-ai "
+    "reports what it indexed, so without it the run cannot make progress"
+)
 
 
 def reconcile_diff_once(
@@ -576,15 +581,21 @@ def reconcile_diff_once(
     a fresh deployment "missing" is simply the whole catalog — this doubles as
     backfill) or a routine later reconciliation (only genuine drift surfaces).
 
-    Re-fetches each diff from offset 0 on every iteration rather than paging
-    through a fixed snapshot: a successfully indexed/deleted item drops out of
-    the "missing"/"stale" result on the *next* fetch (NADA's own diff query,
-    not a local cache), which would silently skip entries under naive
-    offset-incrementing pagination as the underlying set shrinks mid-run. An
-    in-memory ``seen`` set is what actually guarantees termination — an idno
-    that keeps failing stays in NADA's diff forever (correctly: it's still not
-    indexed), so it must be attempted once and then skipped on later fetches,
-    not retried in an infinite loop within this single call.
+    Requires ``report_search_index_state_enabled``, and raises
+    :class:`SearchIndexSyncError` without it: NADA's diff is computed from its
+    ``search_index_state``, which only changes when nada-ai reports what it
+    indexed/deleted. Without reporting, nothing ever leaves the diff, and the run
+    could not tell the work it did from the work still to do.
+
+    Re-fetches each diff live on every iteration rather than paging through a
+    fixed snapshot: a successfully indexed/deleted item drops out of the
+    "missing"/"stale" result on the *next* fetch (NADA's own diff query, not a
+    local cache), so naive ``offset += page_size`` would skip entries as the set
+    shrinks mid-run. An item that stays — one that failed (correctly: it's still
+    not indexed), was skipped, or was already handled earlier in this run —
+    moves the next fetch's offset past it, so a page full of them never hides
+    the rest of the diff. The in-memory ``seen`` sets mean each item is
+    attempted once per run, not retried every time it comes back.
 
     ``progress_cb``, if given, is called with a Jobs-shaped snapshot
     (``processed``/``total``/``percent``/``failed``/``current_idno``) after
@@ -593,6 +604,9 @@ def reconcile_diff_once(
     ``cancel_token`` is checked once per idno so Stop actually stops the
     worker thread (``asyncio.Task.cancel`` alone cannot).
     """
+    if not settings.report_search_index_state_enabled:
+        raise SearchIndexSyncError(DIFF_RECONCILE_NEEDS_STATE_REPORTING)
+
     summary: dict[str, Any] = {
         "missing_total": 0,
         "stale_total": 0,
@@ -634,16 +648,20 @@ def reconcile_diff_once(
 
     seen_missing: set[str] = set()
     page = missing_page
+    offset = 0
     for i in range(_DIFF_RECONCILE_MAX_ITERATIONS):
         if _cancelled():
             summary["cancelled"] = True
             _emit(phase="missing")
             return summary
         if i > 0:
-            page = list_diff_missing(settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type)
-        new_items = [it for it in page.items if it.idno not in seen_missing]
-        if not new_items:
+            page = list_diff_missing(
+                settings, object_type=object_type, limit=page_size, offset=offset, data_type=data_type
+            )
+        if not page.items:
             break
+        new_items = [it for it in page.items if it.idno not in seen_missing]
+        succeeded = 0
         for item in new_items:
             if _cancelled():
                 summary["cancelled"] = True
@@ -686,28 +704,38 @@ def reconcile_diff_once(
                 logger.warning("diff reconcile: index reported no success for idno=%s: %s", item.idno, result)
             else:
                 summary["indexed"] += 1
+                succeeded += 1
             processed += 1
             _emit(item.idno, phase="missing")
+        # Everything else on this page is still in the diff: move the next fetch past it.
+        offset += len(page.items) - succeeded
 
     seen_stale: set[str] = set()
     page = stale_page
+    offset = 0
     for i in range(_DIFF_RECONCILE_MAX_ITERATIONS):
         if _cancelled():
             summary["cancelled"] = True
             _emit(phase="stale")
             return summary
         if i > 0:
-            page = list_diff_stale(settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type)
-        new_idnos = [it.idno for it in page.items if it.idno not in seen_stale]
-        if not new_idnos:
+            page = list_diff_stale(
+                settings, object_type=object_type, limit=page_size, offset=offset, data_type=data_type
+            )
+        if not page.items:
             break
+        new_idnos = [it.idno for it in page.items if it.idno not in seen_stale]
         seen_stale.update(new_idnos)
-        try:
-            delete_by_idnos_op(settings, new_idnos)
-            summary["deleted"] += len(new_idnos)
-        except Exception as e:  # noqa: BLE001 - report and move on, same as the indexing loop above
-            logger.warning("diff reconcile: delete failed for idnos=%s: %s", new_idnos, e)
-            summary["failed"] += len(new_idnos)
+        succeeded = 0
+        if new_idnos:
+            try:
+                delete_by_idnos_op(settings, new_idnos)
+                summary["deleted"] += len(new_idnos)
+                succeeded = len(new_idnos)
+            except Exception as e:  # noqa: BLE001 - report and move on, same as the indexing loop above
+                logger.warning("diff reconcile: delete failed for idnos=%s: %s", new_idnos, e)
+                summary["failed"] += len(new_idnos)
+        offset += len(page.items) - succeeded
         for idno in new_idnos:
             processed += 1
             _emit(idno, phase="stale")
