@@ -36,11 +36,27 @@ def _close_quiet(client: Any) -> None:
 _PRUNE_BATCH = 50
 
 
-def _recording(actions: Any, ids_by_sid: dict[int, set[str]]) -> Any:
-    """Pass chunk actions through, remembering which document ids were written for each study."""
+def _recording(actions: Any, sid_by_id: dict[str, int]) -> Any:
+    """Pass chunk actions through, remembering the study of every chunk id sent. Sent, not written: see
+    :func:`_failed_sids` for the ones OpenSearch rejected."""
     for action in actions:
-        ids_by_sid.setdefault(int(action["_source"]["metadata"]["sid"]), set()).add(action["_id"])
+        sid_by_id[action["_id"]] = int(action["_source"]["metadata"]["sid"])
         yield action
+
+
+def _failed_sids(errors: list[Any], sid_by_id: dict[str, int]) -> set[int] | None:
+    """The studies with a chunk that failed to write, from ``bulk``'s error items (``{op: {"_id", ...}}``).
+
+    ``None`` when an error cannot be tied to one of this run's chunks: then no study is known to be safe to prune.
+    """
+    failed: set[int] = set()
+    for err in errors:
+        body = next(iter(err.values()), None) if isinstance(err, dict) and len(err) == 1 else None
+        doc_id = body.get("_id") if isinstance(body, dict) else None
+        if doc_id not in sid_by_id:
+            return None
+        failed.add(sid_by_id[doc_id])
+    return failed
 
 
 class OpenSearchIngestWriter(IngestWriterPort):
@@ -70,10 +86,11 @@ class OpenSearchIngestWriter(IngestWriterPort):
         ensure_studies_index(client, settings)
 
     def _prune_stale_chunks(self, client: Any, current_ids: dict[int, set[str]]) -> int:
-        """Delete each study's chunks that are not in ``current_ids`` (its chunk ids from this run).
+        """Delete each study's chunks that are not in ``current_ids`` (its chunk ids from this run, all written).
 
-        A study that produced no chunks this run has an empty set, so all of its old chunks go. Chunks that failed to
-        write are unaffected: an unchanged chunk keeps its id, so its old copy is never in the deleted set.
+        A study that produced no chunks this run has an empty set, so all of its old chunks go. A study with a chunk
+        that failed to write must not be passed in: a changed chunk has a new id, so its old copy would be deleted
+        while the new one never landed.
         """
         pruned = 0
         studies = sorted(current_ids)
@@ -159,7 +176,7 @@ class OpenSearchIngestWriter(IngestWriterPort):
             self._prepare(client, dim, recreate=recreate_target)
 
             studies: list[StudyExtract] = []
-            ids_by_sid: dict[int, set[str]] = {}
+            sid_by_id: dict[str, int] = {}
             actions = iter_bulk_actions(
                 self._settings,
                 _embedding,
@@ -175,8 +192,9 @@ class OpenSearchIngestWriter(IngestWriterPort):
                 studies=studies,
                 stored_vectors=self._stored_vector_lookup(client, force=force, recreated=recreate_target),
             )
-            success, errors = bulk(client, _recording(actions, ids_by_sid), raise_on_error=False, refresh="wait_for")
+            success, errors = bulk(client, _recording(actions, sid_by_id), raise_on_error=False, refresh="wait_for")
             err_list: list[Any] = list(errors) if isinstance(errors, list) else []
+            failed_sids = _failed_sids(err_list, sid_by_id)
 
             # One study document per loaded study, written after its chunks. ``_id`` is the sid, so a re-index
             # replaces the document instead of adding one.
@@ -187,8 +205,21 @@ class OpenSearchIngestWriter(IngestWriterPort):
             if isinstance(study_errors, list):
                 err_list.extend(study_errors)
 
-            # Chunk ids are content hashes, so a study whose text changed leaves its old chunks behind; remove them.
-            self._prune_stale_chunks(client, {s.sid: ids_by_sid.get(s.sid, set()) for s in studies})
+            # Chunk ids are content hashes, so a study whose text changed leaves its old chunks behind; remove them —
+            # but only for studies whose chunks all landed. The others keep their old chunks until a retry succeeds.
+            if failed_sids is None:
+                logger.warning("Not pruning stale chunks: a chunk write error could not be tied to a study")
+            else:
+                if failed_sids:
+                    logger.warning(
+                        "Kept the old chunks of studies with failed chunk writes: sid %s", sorted(failed_sids)
+                    )
+                ids_by_sid: dict[int, set[str]] = {}
+                for doc_id, sid in sid_by_id.items():
+                    ids_by_sid.setdefault(sid, set()).add(doc_id)
+                self._prune_stale_chunks(
+                    client, {s.sid: ids_by_sid.get(s.sid, set()) for s in studies if s.sid not in failed_sids}
+                )
 
             if err_list:
                 logger.error("Bulk indexing errors: %s", err_list[:5])
