@@ -49,7 +49,9 @@ guess. This also catches a nada-ai that was restarted on another backend, whose 
 calls fail at once instead of each waiting for its own timeout. After the cooldown one request probes nada-ai; a success
 closes the breaker, a failure opens it again. The state is a few entries in NADA's file cache (`cache/`), shared by all
 PHP processes on the server; losing it costs a failed attempt or two. `GET /api/admin/semantic/engine_status` returns the
-engine, what serves what, nada-ai's capabilities, the breaker state and the fallbacks counted this hour.
+engine, what serves what, nada-ai's capabilities, the breaker state and the fallbacks counted this hour. The semantic search
+dashboard shows it: a Search engine card on the Overview page, and a banner on every page while nada-ai runs another engine
+than the setting or is not answering.
 
 ## Change tracking
 
