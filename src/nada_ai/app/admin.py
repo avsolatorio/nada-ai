@@ -1174,9 +1174,11 @@ async def admin_search_index_reconcile_diff(
     data type doesn't block or collide with another running concurrently.
     Live progress is written to the job the same way as ``index_from_catalog``.
     """
-    from nada_ai.ingest.search_index_sync import reconcile_diff_once
+    from nada_ai.ingest.search_index_sync import DIFF_RECONCILE_NEEDS_STATE_REPORTING, reconcile_diff_once
 
     settings = s.settings
+    if not settings.report_search_index_state_enabled:
+        raise HTTPException(status_code=400, detail=DIFF_RECONCILE_NEEDS_STATE_REPORTING)
     job_id = uuid.uuid4().hex
     cancel_token = CancelToken()
 
