@@ -227,35 +227,30 @@ class _Embedding:
 
 def _studies() -> list[pipeline.StudyExtract]:
     return [
-        pipeline.StudyExtract(sid=4, core_fields=CORE, filters=FILTERS),
-        pipeline.StudyExtract(sid=2, core_fields={**CORE, "survey_uid": 2, "idno": "EGY"}, filters={}),
+        pipeline.StudyExtract(sid=4, core_fields=CORE, filters=FILTERS, chunks=2),  # chunk-1 and chunk-2 below
+        pipeline.StudyExtract(sid=2, core_fields={**CORE, "survey_uid": 2, "idno": "EGY"}, filters={}),  # no chunks
     ]
 
 
 def _run_writer(
     settings: Settings, client: MagicMock, *, recreate: bool, bulk_results: list[Any], progress: Any = None
 ):
-    """``bulk_results``: ``[(_, chunk errors), (_, study errors)]``. Chunks go through ``streaming_bulk`` (one
-    outcome per chunk: rejected when a chunk error names its ``_id``, else accepted; an error naming no chunk of the
-    run is reported too); study documents through ``bulk``."""
-    bulk_calls: list[list[dict[str, Any]]] = []
+    """``bulk_results``: ``[(_, chunk errors), (_, study document errors)]``. Everything goes through one
+    ``streaming_bulk`` stream, one outcome per action: rejected when an error names its ``_id``, else accepted; an
+    error naming no action of the run is reported too. Returns ``(run_bulk's result, the stream's actions)``."""
+    sent: list[dict[str, Any]] = []
 
     def fake_streaming_bulk(_client, actions, **_):
-        sent = list(actions)
-        bulk_calls.append(sent)
-        errors = list(bulk_results[0][1])
+        errors = [*bulk_results[0][1], *bulk_results[1][1]]
         by_id = {next(iter(e.values())).get("_id"): e for e in errors if isinstance(e, dict) and len(e) == 1}
-        for action in sent:
+        for action in actions:
+            sent.append(action)
             if action["_id"] in by_id:
                 yield False, by_id.pop(action["_id"])
             else:
                 yield True, {"index": {"_id": action["_id"], "status": 201}}
         unmatched = list(by_id.values()) + [e for e in errors if not (isinstance(e, dict) and len(e) == 1)]
         yield from ((False, e) for e in unmatched)
-
-    def fake_bulk(_client, actions, **_):
-        bulk_calls.append(list(actions))
-        return bulk_results[1]
 
     def fake_iter_bulk_actions(_settings, _embedding, _pairs, *, studies, **_):
         studies.extend(_studies())
@@ -275,7 +270,6 @@ def _run_writer(
     with (
         patch("nada_ai.ingest.opensearch_writer.build_client", return_value=client),
         patch("nada_ai.ingest.opensearch_writer.streaming_bulk", side_effect=fake_streaming_bulk),
-        patch("nada_ai.ingest.opensearch_writer.bulk", side_effect=fake_bulk),
         patch("nada_ai.ingest.opensearch_writer.iter_bulk_actions", side_effect=fake_iter_bulk_actions),
     ):
         result = OpenSearchIngestWriter(settings).run_bulk(
@@ -284,19 +278,22 @@ def _run_writer(
             recreate_target=recreate,  # type: ignore[arg-type]
             progress=progress,
         )
-    return result, bulk_calls
+    return result, sent
 
 
 def test_writer_indexes_chunks_then_one_study_document_per_study() -> None:
     settings = Settings(index_name="chunks", opensearch_put_composable_index_template=False)
     client = _client()
-    (success, errors), calls = _run_writer(settings, client, recreate=False, bulk_results=[(2, []), (2, [])])
+    (success, errors), sent = _run_writer(settings, client, recreate=False, bulk_results=[(2, []), (2, [])])
 
-    assert (success, errors) == (2, None)
-    chunk_actions, study_actions = calls
-    assert [a["_id"] for a in chunk_actions] == ["chunk-1", "chunk-2"]
-    assert {a["_index"] for a in study_actions} == {"chunks-studies"}
-    assert sorted(a["_id"] for a in study_actions) == ["2", "4"]
+    assert (success, errors) == (2, None)  # the chunks; study documents are not counted
+    # one stream: study 2 (no chunks) at once, study 4's document right after its last chunk
+    assert [(a["_index"], a["_id"]) for a in sent] == [
+        ("chunks-studies", "2"),
+        ("chunks", "chunk-1"),
+        ("chunks", "chunk-2"),
+        ("chunks-studies", "4"),
+    ]
     assert {c.kwargs["index"] for c in client.indices.create.call_args_list} == {"chunks", "chunks-studies"}
 
 
@@ -360,7 +357,7 @@ def test_writer_run_bulk_loads_no_model_when_embeddings_are_disabled() -> None:
 
     with (
         patch("nada_ai.ingest.opensearch_writer.build_client", return_value=client),
-        patch("nada_ai.ingest.opensearch_writer.bulk", return_value=(0, [])),
+        patch("nada_ai.ingest.opensearch_writer.streaming_bulk", side_effect=lambda _c, actions, **_: iter(())),
         patch("nada_ai.ingest.opensearch_writer.iter_bulk_actions", side_effect=fake_iter_bulk_actions),
         patch("nada_ai.ingest.opensearch_writer.EmbeddingService", _boom),
     ):
@@ -439,9 +436,27 @@ def test_the_writer_confirms_each_chunk_to_the_progress_tracker() -> None:
     _run_writer(settings, client, recreate=False, bulk_results=[(1, [rejected]), (2, [])], progress=progress)
 
     assert progress.confirm.call_args_list == [
+        call(2, True, None),  # study 2's document
         call(4, True, None),
         call(4, False, "mapper_parsing_exception: failed to parse field [n]"),
+        call(4, True, None),  # study 4's document
     ]
+
+
+def test_a_rejected_study_document_is_confirmed_as_failed_but_does_not_stop_pruning() -> None:
+    """The study is not done without its document (a resume retries it); its chunks all landed, so it is pruned."""
+    settings = Settings(index_name="chunks", opensearch_put_composable_index_template=False)
+    client = _client()
+    client.delete_by_query.return_value = {"deleted": 0}
+    progress = MagicMock()
+    rejected = {"index": {"_id": "4", "status": 400, "error": {"type": "strict_dynamic_mapping_exception"}}}
+    (_, errors), _ = _run_writer(
+        settings, client, recreate=False, bulk_results=[(2, []), (1, [rejected])], progress=progress
+    )
+
+    assert call(4, False, "strict_dynamic_mapping_exception") in progress.confirm.call_args_list
+    assert errors == [rejected]
+    assert _pruned_sids(client) == {2, 4}
 
 
 def test_pruning_is_batched() -> None:

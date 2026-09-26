@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from opensearchpy.helpers import bulk, streaming_bulk
+from opensearchpy.helpers import streaming_bulk
 
 from nada_ai.ingest.pipeline import StudyExtract, ensure_index, ensure_studies_index, iter_bulk_actions
 from nada_ai.ingest.ports import IngestWriterPort
@@ -42,6 +42,46 @@ def _recording(actions: Any, sid_by_id: dict[str, int]) -> Any:
     for action in actions:
         sid_by_id[action["_id"]] = int(action["_source"]["metadata"]["sid"])
         yield action
+
+
+def _with_study_documents(
+    chunk_actions: Any, studies: list[StudyExtract], index: str, study_sid_by_id: dict[str, int]
+) -> Any:
+    """Chunk actions with each study's own document right after its last chunk (``StudyExtract.chunks`` says how many
+    to wait for), or at once for a study with no chunks. Written in the same stream, so a study is confirmed done only
+    with its study document (see ``IngestProgressTracker.expect``), and a crash never leaves a run's studies
+    checkpointed without one. ``study_sid_by_id`` records each study document's ``_id``."""
+    seen = 0
+    waiting: dict[int, int] = {}  # sid -> chunks still to pass
+    by_sid: dict[int, StudyExtract] = {}
+
+    def study_action(study: StudyExtract) -> dict[str, Any]:
+        action = study_bulk_action(index, study.sid, study.core_fields, study.filters)
+        study_sid_by_id[action["_id"]] = study.sid
+        return action
+
+    def newly_loaded() -> Any:
+        nonlocal seen
+        for study in studies[seen:]:
+            if study.chunks:
+                waiting[study.sid] = waiting.get(study.sid, 0) + study.chunks
+                by_sid[study.sid] = study
+            else:
+                yield study_action(study)
+        seen = len(studies)
+
+    for action in chunk_actions:
+        yield from newly_loaded()
+        yield action
+        sid = int(action["_source"]["metadata"]["sid"])
+        if sid in waiting:
+            waiting[sid] -= 1
+            if waiting[sid] == 0:
+                del waiting[sid]
+                yield study_action(by_sid[sid])
+    yield from newly_loaded()
+    for sid in list(waiting):  # not reached in a complete run; the study document is still written
+        yield study_action(by_sid[sid])
 
 
 def _failed_sids(errors: list[Any], sid_by_id: dict[str, int]) -> set[int] | None:
@@ -198,32 +238,31 @@ class OpenSearchIngestWriter(IngestWriterPort):
                 empty_docs=empty_docs,
                 studies=studies,
                 stored_vectors=self._stored_vector_lookup(client, force=force, recreated=recreate_target),
+                study_documents=True,
             )
-            # streaming_bulk, not bulk: each chunk's outcome is known as its batch is answered, so a study is
-            # checkpointed as done (progress.confirm) only once OpenSearch has accepted all of its chunks.
+            # One stream: every chunk, and each study's own document (``_id`` = sid, so a re-index replaces it) right
+            # after its chunks. streaming_bulk, not bulk: each outcome is known as its batch is answered, so a study
+            # is checkpointed as done (progress.confirm) only once OpenSearch has accepted its chunks and its document.
+            study_sid_by_id: dict[str, int] = {}
+            stream = _with_study_documents(
+                _recording(actions, sid_by_id), studies, self._settings.studies_index, study_sid_by_id
+            )
             success = 0
-            err_list: list[Any] = []
-            for ok, item in streaming_bulk(
-                client, _recording(actions, sid_by_id), raise_on_error=False, refresh="wait_for"
-            ):
+            chunk_errors: list[Any] = []
+            study_errors: list[Any] = []
+            for ok, item in streaming_bulk(client, stream, raise_on_error=False, refresh="wait_for"):
                 body = next(iter(item.values()), {}) if isinstance(item, dict) else {}
+                doc_id = body.get("_id") if isinstance(body, dict) else None
+                is_study = doc_id in study_sid_by_id
                 if ok:
-                    success += 1
+                    success += 0 if is_study else 1
                 else:
-                    err_list.append(item)
-                sid = sid_by_id.get(body.get("_id")) if isinstance(body, dict) else None
+                    (study_errors if is_study else chunk_errors).append(item)
+                sid = study_sid_by_id.get(doc_id) if is_study else sid_by_id.get(doc_id)
                 if progress is not None and sid is not None:
                     progress.confirm(sid, ok, None if ok else _error_text(body.get("error")))
-            failed_sids = _failed_sids(err_list, sid_by_id)
-
-            # One study document per loaded study, written after its chunks. ``_id`` is the sid, so a re-index
-            # replaces the document instead of adding one.
-            study_actions = [
-                study_bulk_action(self._settings.studies_index, s.sid, s.core_fields, s.filters) for s in studies
-            ]
-            _, study_errors = bulk(client, study_actions, raise_on_error=False, refresh="wait_for")
-            if isinstance(study_errors, list):
-                err_list.extend(study_errors)
+            failed_sids = _failed_sids(chunk_errors, sid_by_id)
+            err_list: list[Any] = chunk_errors + study_errors
 
             # Chunk ids are content hashes, so a study whose text changed leaves its old chunks behind; remove them —
             # but only for studies whose chunks all landed. The others keep their old chunks until a retry succeeds.

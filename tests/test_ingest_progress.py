@@ -168,6 +168,41 @@ def test_a_crash_leaves_unconfirmed_studies_out_of_the_checkpoint(tmp_path):
     assert loaded.completed_idnos == {"A"}
 
 
+def test_with_study_documents_a_study_waits_for_its_study_document_too(tmp_path):
+    """OpenSearch writes one study document per study: a study (even one with no chunks) is done only with it."""
+    import nada_ai.ingest.pipeline as pipeline_module
+
+    _FakeLoader._by_idno = {"A": [_doc("A")], "E": []}
+    _FakeLoader._raises = set()
+    studies: list[Any] = []
+
+    with (
+        patch.object(pipeline_module, "MetadataLoader", _FakeLoader),
+        patch.object(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata["idno"]),
+    ):
+        settings = _settings(tmp_path, search_backend="opensearch")
+        tracker = IngestProgressTracker(settings, "document", total=2)
+        records = list(
+            pipeline_module.iter_langdoc_records(
+                settings,
+                _FakeEmbedding(),
+                [("A", "document"), ("E", "document")],
+                show_progress_bar=False,
+                progress=tracker,
+                studies=studies,
+                study_documents=True,
+            )
+        )
+
+    assert [(s.sid, s.chunks) for s in studies] == [(_FAKE_SIDS["A"], 1), (_FAKE_SIDS["E"], 0)]
+    for _id, _vec, source in records:
+        tracker.confirm(source["metadata"]["sid"], True)
+    assert tracker.checkpoint.completed_idnos == set()  # chunks written, study documents not yet
+    for study in studies:
+        tracker.confirm(study.sid, True)
+    assert tracker.checkpoint.completed_idnos == {"A", "E"}
+
+
 # ---------------------------------------------------------------------------
 # CancelToken
 # ---------------------------------------------------------------------------

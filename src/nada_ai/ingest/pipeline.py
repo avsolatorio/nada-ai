@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import ai4data.discovery.catalog.extract as catalog_extract
@@ -113,6 +113,8 @@ class StudyExtract:
     sid: int
     core_fields: dict[str, Any]
     filters: dict[str, Any]
+    #: How many chunk documents the pipeline hands to the writer for this study (set once they are known).
+    chunks: int = 0
 
 
 def _study_extract(raw: dict[str, Any] | None) -> StudyExtract:
@@ -167,6 +169,7 @@ def iter_langdoc_records(
     empty_docs: list[dict[str, Any]] | None = None,
     studies: list[StudyExtract] | None = None,
     stored_vectors: Callable[[list[str]], dict[str, list[float]]] | None = None,
+    study_documents: bool = False,
 ) -> Iterator[tuple[str, list[float] | None, dict[str, Any]]]:
     """Yield ``(document_id, embedding_or_none_if_ml_backend, source_payload)`` for each langdoc row.
 
@@ -178,6 +181,8 @@ def iter_langdoc_records(
     resume checkpoint (see ``ingest/progress.py``). A row that fails to load, or has nothing to write, is marked here.
     A row with documents is only announced (``progress.expect``): the writer marks it by confirming each document's
     write (``progress.confirm``), so a row is never checkpointed as done before its documents are in the backend.
+    ``study_documents``: the writer also writes one document per study (OpenSearch's study index), so that one is
+    expected too -- a study with no chunks then waits for its study document instead of being marked here.
 
     ``cancel_token``, if given, is checked once per row; when set, the loop
     stops yielding immediately (whatever is already buffered still gets
@@ -306,25 +311,24 @@ def iter_langdoc_records(
             if progress is not None:
                 progress.mark(idno, ok=False, error=str(e))
             continue
+        non_empty = [d for d in docs if d.page_content and str(d.page_content).strip()]
+        study = replace(study, chunks=len(non_empty))
         if studies is not None:
             studies.append(study)
-        if not docs:
-            if empty_docs is not None:
-                empty_docs.append({"idno": idno, "metadata_type": metadata_type, "reason": "no_langdocs"})
-            if progress is not None:
-                progress.mark(idno, ok=True)
-            continue
-        non_empty = [d for d in docs if d.page_content and str(d.page_content).strip()]
+        # Announced before any of its documents can be flushed and confirmed.
+        expected = len(non_empty) + (1 if study_documents else 0)
+        if progress is not None:
+            if expected:
+                progress.expect(idno, study.sid, expected)
+            else:
+                progress.mark(idno, ok=True)  # nothing will be written for it
         if not non_empty:
             if empty_docs is not None:
-                empty_docs.append({"idno": idno, "metadata_type": metadata_type, "reason": "empty_page_content"})
-            if progress is not None:
-                progress.mark(idno, ok=True)
+                reason = "empty_page_content" if docs else "no_langdocs"
+                empty_docs.append({"idno": idno, "metadata_type": metadata_type, "reason": reason})
             continue
         raw_meta = raw if metadata_type == "microdata" else None
         filter_fields, filter_facets = _filter_payload(settings, study.filters)
-        if progress is not None:
-            progress.expect(idno, study.sid, len(non_empty))  # before any of them can be flushed and confirmed
         for doc in non_empty:
             buffer.append((doc, raw_meta, filter_fields, filter_facets, study))
             if len(buffer) >= buffer_size:
@@ -347,6 +351,7 @@ def iter_bulk_actions(
     empty_docs: list[dict[str, Any]] | None = None,
     studies: list[StudyExtract] | None = None,
     stored_vectors: Callable[[list[str]], dict[str, list[float]]] | None = None,
+    study_documents: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """pairs: (idno, metadata_type).
 
@@ -368,6 +373,7 @@ def iter_bulk_actions(
         empty_docs=empty_docs,
         studies=studies,
         stored_vectors=stored_vectors,
+        study_documents=study_documents,
     ):
         if use_ml:
             yield {
