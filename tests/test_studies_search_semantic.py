@@ -561,6 +561,24 @@ def test_more_than_one_title_match_keeps_their_relative_keyword_rank() -> None:
     assert [h["sid"] for h in page.hits][:2] == [1, 2]  # both match; 1 keeps its lead over 2
 
 
+def test_a_short_query_promotes_no_title_match() -> None:
+    """For one or two words, "every word in the title" would promote every title containing them (163 of 1,383 local
+    titles contain "census") and push everything only the semantic leg found off the first pages."""
+    head = _lexical_response(
+        [(5, "NADA_5", 9.0, "geospatial"), (234, "AGO_2020_HRPM_GEO_v01_M", 8.0, "geospatial")],
+        titles={234: "High Resolution Poverty Map (Geospatial Data), Angola, 2020", 5: "Surface water extent, 2020"},
+    )
+    client = _cluster(
+        head=head,
+        lexical=_lexical_response([], counts={}),
+        knn=_knn_response(_knn_hit(5, 0.9, "geospatial"), _knn_hit(6, 0.89)),
+        lookup=_lookup_response([(5, "NADA_5", "geospatial"), (6, "NADA_6", "survey")]),
+    )
+    for query in ("angola", "resolution angola"):
+        page = _run(hybrid, _job(client, query=query))
+        assert _sids(page)[0] == 5, query  # the fused order: found by both legs, first
+
+
 def test_the_promotion_only_applies_to_a_relevance_sort() -> None:
     """A non-relevance sort orders the union of the semantic studies and the keyword matches by that sort; the
     title-match promotion (a relevance-only idea) plays no part."""

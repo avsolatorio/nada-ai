@@ -152,9 +152,10 @@ studies (`page` is 1-based, `excerpt` is whitespace-normalised text); it replace
   `offset_out_of_range`. `truncated` is true when `found` exceeds that depth, so the last results cannot be paged.
 - **Order in `hybrid` with a relevance sort.** The best keyword matches (`fusion_window`, starting at 50) and the semantic
   studies are fused by rank (reciprocal rank fusion, equal weights): a study found by both comes first and the two lists
-  otherwise alternate. Ahead of that fused order, any keyword match whose title names every real word of the query
-  (stopwords aside) is promoted first, in keyword rank order — rank fusion only counts position, so a study the semantic
-  leg also returned could otherwise outrank a study that plainly is the answer. The other keyword matches follow, best
+  otherwise alternate. Ahead of that fused order, for a query of at least three real words (stopwords aside), any keyword
+  match whose title names every one of them (ignoring case and accents) is promoted first, in keyword rank order — rank
+  fusion only counts position, so a study the semantic leg also returned could otherwise outrank a study that plainly
+  is the answer. The other keyword matches follow, best
   first. With any other sort, the union of the semantic studies and the keyword matches is ordered by that sort, so
   `found` is the same whatever the sort.
 - There is **no score cutoff on keyword matches**: every study the match rules accept is a keyword match, and a study that

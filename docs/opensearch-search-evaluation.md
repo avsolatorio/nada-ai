@@ -291,3 +291,21 @@ Measured: hybrid nDCG@10 0.852 -> 0.869, MRR 0.919 -> 0.927, p@10 0.665 -> 0.669
 rate unchanged. `matched_by` is unaffected (a promoted study keeps whatever it already had, `["lexical"]` or both);
 this is a pure reordering, not a new kind of match.
 
+## Update: the title promotion needs three real words, and ignores accents
+
+With one word, "every query word is in the title" is just "the word is in the title": 163 of the local index's 1,383
+titles contain `census`, so the whole keyword head was promoted and every study only the semantic leg found was pushed
+off the first pages — hybrid behaved like keyword search on broad one-word queries. The promotion now needs a query of
+at least three real words: study titles are long, and two words in one single nothing out either. The title check also strips accents now, as the index's `nada_text` analyzer does (`cote
+d'ivoire` matches a "Côte d'Ivoire" title). Neither stems: the index does not stem either (`surveys` matches 1 title,
+`survey` 260), so stemming is an index-wide decision, not this rule's.
+
+**Alternative tried and rejected**: promoting only when at most 5 (or 10) studies qualify, so a broad title match is
+not promoted at all. It cost hybrid nDCG@10 0.839 -> 0.828 (0.831 with 10): for `population census` (1.000 -> 0.697),
+`census 2011` and `gender statistics profile 2013` the many matching titles are the relevant studies.
+
+Measured (local index, 67 golden queries): hybrid nDCG@10 0.839 -> 0.832, p@10 0.672 -> 0.667, MRR, recall and the
+negative-query pass rate unchanged. The cost is two 2-word queries whose matching titles are the relevant studies:
+`population census` (1.000 -> 0.697) and `census 2011` (1.000 -> 0.915) — accepted, since a minimum of two would also
+promote every title of a broad 2-word query the golden set does not cover well (`household survey`). A minimum of two
+measured 0.838. Of the one-word queries, `DHS` fell (1.000 -> 0.934) and `MICS` rose (0.910 -> 1.000).
