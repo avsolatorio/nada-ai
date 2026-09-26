@@ -55,7 +55,13 @@ from ai4data.discovery.config import metadata_catalog
 from pydantic import BaseModel
 
 from nada_ai.ingest.progress import CancelToken
-from nada_ai.ingest.service import delete_by_idno_op, delete_by_idnos_op, index_ids_op
+from nada_ai.ingest.service import (
+    _attribute_write_error,
+    _error_by_idno,
+    delete_by_idno_op,
+    delete_by_idnos_op,
+    index_ids_op,
+)
 from nada_ai.nada.admin_auth import resolve_admin_cookies, resolve_admin_headers
 from nada_ai.settings import Settings
 
@@ -381,8 +387,26 @@ def _apply_citation(settings: Settings, item: SearchIndexQueueItem) -> Literal["
     if item.is_delete:
         delete_citation_op(settings, item.object_id)
         return "deleted"
-    sync_citation_op(settings, item.object_id)
+    _raise_on_write_errors(f"citation {item.object_id}", sync_citation_op(settings, item.object_id)["errors"])
     return "indexed"
+
+
+def _raise_on_write_errors(what: str, errors: list[Any]) -> None:
+    """The sync ops return backend write errors instead of raising; raise so the queue item is acked failed, not
+    indexed."""
+    if errors:
+        raise SearchIndexSyncError(f"{what}: {len(errors)} write error(s), first: {errors[0]}")
+
+
+def _raise_if_not_indexed(idno: str, result: dict[str, Any]) -> None:
+    """``index_ids_op`` never raises for a per-idno failure (metadata failed to load/parse, no documents produced,
+    a backend write error) — it reports them in its return value. Raise so the queue item is acked failed: acking it
+    indexed would also overwrite the failed ``search_index_state`` that ``index_ids_op`` just reported, and the study
+    would drop out of NADA's "missing" diff, so neither the queue nor ``reconcile_diff_once`` would retry it."""
+    reasons = list(_error_by_idno(result["load_errors"], result["empty_docs"]).values())
+    reasons += [_attribute_write_error(e)[1] for e in result["errors"]]
+    if reasons:
+        raise SearchIndexSyncError(f"index reported no success for idno {idno!r}: {'; '.join(reasons)}")
 
 
 def _apply_options_in_place(settings: Settings, idno: str) -> bool:
@@ -442,7 +466,7 @@ def apply_and_ack_queue_item(
             if settings.search_backend == "opensearch":
                 from nada_ai.ingest.variables_index import sync_survey_variables_op
 
-                sync_survey_variables_op(settings, idno)
+                _raise_on_write_errors(f"variables of {idno!r}", sync_survey_variables_op(settings, idno)["errors"])
             action = "indexed"
         elif (
             item.change_class == "upsert_partial"
@@ -459,7 +483,7 @@ def apply_and_ack_queue_item(
                 raise SearchIndexSyncError(
                     f"No metadata_type mapping for idno {idno!r} — unsupported or unknown dataset_type"
                 )
-            index_ids_op(
+            report = index_ids_op(
                 settings,
                 idnos=[idno],
                 metadata_type=resolved_type,
@@ -467,6 +491,7 @@ def apply_and_ack_queue_item(
                 show_progress_bar=False,
                 embedding=embedding,
             )
+            _raise_if_not_indexed(idno, report)
             action = "indexed"
     except Exception as e:  # noqa: BLE001 - reported back to NADA, not swallowed
         logger.warning("search-index reconcile failed for idno=%s: %s", idno, e)
