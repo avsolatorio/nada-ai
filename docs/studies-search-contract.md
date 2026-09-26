@@ -192,6 +192,7 @@ All errors on these routes use one envelope and never the framework default:
 | `index_not_ready` | 503 | Index missing, empty or being rebuilt |
 | `backend_unavailable` | 503 | The engine cannot be reached, or access cannot be checked (no credential configured, key store unreadable) |
 | `embedding_unavailable` | 503 | The embedding model failed and the request required semantic search |
+| `query_rejected` | 400 | The engine is up but refused the query nada-ai built (a nada-ai bug, not an outage; `details.engine_error`) |
 | `unauthorized` | 401 | Missing or invalid key |
 | `forbidden` | 403 | Key role too low |
 | `rate_limited` | 429 | Rate limit exceeded |

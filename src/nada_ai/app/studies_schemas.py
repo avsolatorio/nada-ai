@@ -94,6 +94,7 @@ class ErrorCode(StrEnum):
     index_not_ready = "index_not_ready"
     backend_unavailable = "backend_unavailable"
     embedding_unavailable = "embedding_unavailable"
+    query_rejected = "query_rejected"
     unauthorized = "unauthorized"
     forbidden = "forbidden"
     rate_limited = "rate_limited"
@@ -108,6 +109,7 @@ ERROR_HTTP_STATUS: dict[ErrorCode, int] = {
     ErrorCode.index_not_ready: 503,
     ErrorCode.backend_unavailable: 503,
     ErrorCode.embedding_unavailable: 503,
+    ErrorCode.query_rejected: 400,
     ErrorCode.unauthorized: 401,
     ErrorCode.forbidden: 403,
     ErrorCode.rate_limited: 429,

@@ -24,7 +24,7 @@ from nada_ai.app.auth import Principal
 from nada_ai.app.info import modes_for
 from nada_ai.app.keys_store import Role
 from nada_ai.app.state import AppState, ensure_embedding_initialized, get_state
-from nada_ai.app.studies_errors import StudiesApiError, studies_error_handler, studies_guard
+from nada_ai.app.studies_errors import StudiesApiError, opensearch_error, studies_error_handler, studies_guard
 from nada_ai.app.studies_schemas import (
     CANONICAL_FILTERS,
     MAX_OFFSET,
@@ -288,8 +288,7 @@ async def studies_search(
             {"index": str(e)},
         ) from e
     except TransportError as e:
-        logger.warning("POST /studies/search: OpenSearch request failed: %s", e)
-        raise StudiesApiError(ErrorCode.backend_unavailable, "OpenSearch is not reachable") from e
+        raise opensearch_error("POST /studies/search", e) from e
 
     return StudySearchResponse(
         engine=engine,

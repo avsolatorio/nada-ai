@@ -12,6 +12,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from opensearchpy.exceptions import ConnectionError as OpenSearchConnectionError
+from opensearchpy.exceptions import RequestError
 from starlette.testclient import TestClient
 
 from nada_ai.app.main import app, state
@@ -110,6 +112,23 @@ def test_a_name_sort_with_an_order_is_sent_to_the_sortable_field(monkeypatch: py
     assert response.json()["applied"]["sort"] == "name"
     assert response.json()["applied"]["order"] == "desc"
     assert client.search.call_args.kwargs["body"]["sort"][0] == {"name.sort": {"order": "desc", "missing": "_last"}}
+
+
+def test_a_query_opensearch_rejects_is_query_rejected_not_an_outage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """How the name sort on a text field surfaced: a 400 from OpenSearch, which used to be answered 503."""
+    client = _opensearch_client(side_effect=RequestError(400, "search_phase_execution_exception", {}))
+    with _running(monkeypatch, "opensearch", client=client) as c:
+        response = c.post("/variables/search", json={"query": "x", "sort": "name"})
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "query_rejected"
+
+
+def test_an_unreachable_engine_is_backend_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _opensearch_client(side_effect=OpenSearchConnectionError("N/A", "refused", Exception("refused")))
+    with _running(monkeypatch, "opensearch", client=client) as c:
+        response = c.post("/variables/search", json={"query": "x"})
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "backend_unavailable"
 
 
 def test_an_unknown_filter_is_rejected_with_the_contract_error(monkeypatch: pytest.MonkeyPatch) -> None:

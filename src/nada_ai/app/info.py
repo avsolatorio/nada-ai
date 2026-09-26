@@ -15,7 +15,7 @@ from opensearchpy.exceptions import NotFoundError, TransportError
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 
 from nada_ai.app.state import AppState, get_state
-from nada_ai.app.studies_errors import StudiesApiError, studies_guard
+from nada_ai.app.studies_errors import StudiesApiError, opensearch_error, studies_guard
 from nada_ai.app.studies_schemas import (
     CANONICAL_FILTERS,
     MAX_LIMIT,
@@ -104,8 +104,7 @@ async def _opensearch_details(s: AppState) -> tuple[str | None, IndexInfo]:
         study_meta, studies = await meta_and_count(settings.studies_index, want_count=True)
         chunk_meta, _ = await meta_and_count(settings.index_name, want_count=False)
     except TransportError as e:
-        logger.warning("GET /info: OpenSearch request failed: %s", e)
-        raise StudiesApiError(ErrorCode.backend_unavailable, "OpenSearch is not reachable") from e
+        raise opensearch_error("GET /info", e) from e
 
     return version, IndexInfo(
         name=settings.studies_index,
