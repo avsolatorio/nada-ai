@@ -341,10 +341,7 @@ flowchart LR
 1. `src/nada_ai/ingest/pipeline.py::iter_langdoc_records` loads catalog metadata
    through `ai4data`'s `MetadataLoader` and converts each study into a "langdoc"
    (the canonical document shape defined in `search/documents.py`).
-2. It also fetches, normalizes, and auto-registers that idno's filters/facets
-   (`nada_ai.filters.sync.fetch_filters_for_idno`) and bakes them into the same
-   document — see [Dynamic filters and facets](#dynamic-filters-and-facets). No
-   separate filters-sync pass is needed after a content ingest.
+2. It reads filters from the metadata-extract payload, normalizes them, auto-registers facet keys, and stores them with the document (see [Dynamic filters and facets](#dynamic-filters-and-facets)); no separate filters-sync pass is needed after content ingest.
 3. Embeddings are computed in batches (`buffer_size`) to bound memory.
 4. `iter_bulk_actions` builds backend-specific bulk write actions; `run_bulk_index`
    executes them via whichever writer `create_ingest_writer()` (`ingest/factory.py`)
