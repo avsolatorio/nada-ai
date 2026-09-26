@@ -145,6 +145,29 @@ class IngestProgressTracker:
         # whole run, not just the segment still to do.
         self.processed = len(self.checkpoint.completed_idnos) + len(self.checkpoint.failed)
         self.failed_count = len(self.checkpoint.failed)
+        # Studies whose chunks are handed to the writer but not all confirmed written yet, by sid (every chunk
+        # carries ``metadata.sid``, set from the study itself): [idno, chunks left, first write error]. A study is
+        # marked (and so checkpointed) only once all of its chunks are confirmed.
+        self._unconfirmed: dict[int, list[Any]] = {}
+
+    def expect(self, idno: str, sid: int, chunks: int) -> None:
+        """Study ``sid``'s ``chunks`` documents are about to be handed to the writer; ``idno`` is marked once the
+        writer has :meth:`confirm`-ed every one. Until then it is not in the checkpoint, so a resume after a cancel or
+        crash retries it instead of skipping chunks that were never written."""
+        entry = self._unconfirmed.setdefault(sid, [idno, 0, None])
+        entry[1] += chunks
+
+    def confirm(self, sid: int, ok: bool, error: str | None = None) -> None:
+        """The writer's outcome for one of study ``sid``'s chunks: the backend accepted it (``ok``) or rejected it."""
+        entry = self._unconfirmed.get(sid)
+        if entry is None:
+            return
+        if not ok and entry[2] is None:
+            entry[2] = f"write failed: {error or 'unknown error'}"
+        entry[1] -= 1
+        if entry[1] == 0:
+            del self._unconfirmed[sid]
+            self.mark(entry[0], ok=entry[2] is None, error=entry[2])
 
     def mark(self, idno: str, ok: bool, error: str | None = None) -> None:
         self.processed += 1

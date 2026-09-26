@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from opensearchpy.helpers import bulk
+from opensearchpy.helpers import bulk, streaming_bulk
 
 from nada_ai.ingest.pipeline import StudyExtract, ensure_index, ensure_studies_index, iter_bulk_actions
 from nada_ai.ingest.ports import IngestWriterPort
@@ -57,6 +57,13 @@ def _failed_sids(errors: list[Any], sid_by_id: dict[str, int]) -> set[int] | Non
             return None
         failed.add(sid_by_id[doc_id])
     return failed
+
+
+def _error_text(error: Any) -> str:
+    """A bulk item's ``error`` (a dict with ``type`` and ``reason`` from OpenSearch) as one short line."""
+    if isinstance(error, dict):
+        return ": ".join(str(error[k]) for k in ("type", "reason") if error.get(k)) or str(error)
+    return str(error)
 
 
 class OpenSearchIngestWriter(IngestWriterPort):
@@ -192,8 +199,21 @@ class OpenSearchIngestWriter(IngestWriterPort):
                 studies=studies,
                 stored_vectors=self._stored_vector_lookup(client, force=force, recreated=recreate_target),
             )
-            success, errors = bulk(client, _recording(actions, sid_by_id), raise_on_error=False, refresh="wait_for")
-            err_list: list[Any] = list(errors) if isinstance(errors, list) else []
+            # streaming_bulk, not bulk: each chunk's outcome is known as its batch is answered, so a study is
+            # checkpointed as done (progress.confirm) only once OpenSearch has accepted all of its chunks.
+            success = 0
+            err_list: list[Any] = []
+            for ok, item in streaming_bulk(
+                client, _recording(actions, sid_by_id), raise_on_error=False, refresh="wait_for"
+            ):
+                body = next(iter(item.values()), {}) if isinstance(item, dict) else {}
+                if ok:
+                    success += 1
+                else:
+                    err_list.append(item)
+                sid = sid_by_id.get(body.get("_id")) if isinstance(body, dict) else None
+                if progress is not None and sid is not None:
+                    progress.confirm(sid, ok, None if ok else _error_text(body.get("error")))
             failed_sids = _failed_sids(err_list, sid_by_id)
 
             # One study document per loaded study, written after its chunks. ``_id`` is the sid, so a re-index

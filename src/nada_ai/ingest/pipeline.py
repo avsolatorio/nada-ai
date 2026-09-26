@@ -174,9 +174,10 @@ def iter_langdoc_records(
     built (see ``ingest/quality.py``) — purely additive, never skips or
     rejects a document.
 
-    ``progress``, if given, is stepped once per ``(idno, metadata_type)`` row
-    (after that row's documents are loaded/skipped, regardless of outcome) —
-    this is also what persists the resume checkpoint (see ``ingest/progress.py``).
+    ``progress``, if given, is stepped once per ``(idno, metadata_type)`` row — this is also what persists the
+    resume checkpoint (see ``ingest/progress.py``). A row that fails to load, or has nothing to write, is marked here.
+    A row with documents is only announced (``progress.expect``): the writer marks it by confirming each document's
+    write (``progress.confirm``), so a row is never checkpointed as done before its documents are in the backend.
 
     ``cancel_token``, if given, is checked once per row; when set, the loop
     stops yielding immediately (whatever is already buffered still gets
@@ -322,12 +323,12 @@ def iter_langdoc_records(
             continue
         raw_meta = raw if metadata_type == "microdata" else None
         filter_fields, filter_facets = _filter_payload(settings, study.filters)
+        if progress is not None:
+            progress.expect(idno, study.sid, len(non_empty))  # before any of them can be flushed and confirmed
         for doc in non_empty:
             buffer.append((doc, raw_meta, filter_fields, filter_facets, study))
             if len(buffer) >= buffer_size:
                 yield from flush()
-        if progress is not None:
-            progress.mark(idno, ok=True)
 
     yield from flush()
 

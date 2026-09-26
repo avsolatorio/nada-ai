@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -232,12 +232,30 @@ def _studies() -> list[pipeline.StudyExtract]:
     ]
 
 
-def _run_writer(settings: Settings, client: MagicMock, *, recreate: bool, bulk_results: list[Any]):
+def _run_writer(
+    settings: Settings, client: MagicMock, *, recreate: bool, bulk_results: list[Any], progress: Any = None
+):
+    """``bulk_results``: ``[(_, chunk errors), (_, study errors)]``. Chunks go through ``streaming_bulk`` (one
+    outcome per chunk: rejected when a chunk error names its ``_id``, else accepted; an error naming no chunk of the
+    run is reported too); study documents through ``bulk``."""
     bulk_calls: list[list[dict[str, Any]]] = []
+
+    def fake_streaming_bulk(_client, actions, **_):
+        sent = list(actions)
+        bulk_calls.append(sent)
+        errors = list(bulk_results[0][1])
+        by_id = {next(iter(e.values())).get("_id"): e for e in errors if isinstance(e, dict) and len(e) == 1}
+        for action in sent:
+            if action["_id"] in by_id:
+                yield False, by_id.pop(action["_id"])
+            else:
+                yield True, {"index": {"_id": action["_id"], "status": 201}}
+        unmatched = list(by_id.values()) + [e for e in errors if not (isinstance(e, dict) and len(e) == 1)]
+        yield from ((False, e) for e in unmatched)
 
     def fake_bulk(_client, actions, **_):
         bulk_calls.append(list(actions))
-        return bulk_results[len(bulk_calls) - 1]
+        return bulk_results[1]
 
     def fake_iter_bulk_actions(_settings, _embedding, _pairs, *, studies, **_):
         studies.extend(_studies())
@@ -256,6 +274,7 @@ def _run_writer(settings: Settings, client: MagicMock, *, recreate: bool, bulk_r
 
     with (
         patch("nada_ai.ingest.opensearch_writer.build_client", return_value=client),
+        patch("nada_ai.ingest.opensearch_writer.streaming_bulk", side_effect=fake_streaming_bulk),
         patch("nada_ai.ingest.opensearch_writer.bulk", side_effect=fake_bulk),
         patch("nada_ai.ingest.opensearch_writer.iter_bulk_actions", side_effect=fake_iter_bulk_actions),
     ):
@@ -263,6 +282,7 @@ def _run_writer(settings: Settings, client: MagicMock, *, recreate: bool, bulk_r
             [("PC11_A02-28-v22", "microdata")],
             embedding=_Embedding(),
             recreate_target=recreate,  # type: ignore[arg-type]
+            progress=progress,
         )
     return result, bulk_calls
 
@@ -270,9 +290,9 @@ def _run_writer(settings: Settings, client: MagicMock, *, recreate: bool, bulk_r
 def test_writer_indexes_chunks_then_one_study_document_per_study() -> None:
     settings = Settings(index_name="chunks", opensearch_put_composable_index_template=False)
     client = _client()
-    (success, errors), calls = _run_writer(settings, client, recreate=False, bulk_results=[(5, []), (2, [])])
+    (success, errors), calls = _run_writer(settings, client, recreate=False, bulk_results=[(2, []), (2, [])])
 
-    assert (success, errors) == (5, None)
+    assert (success, errors) == (2, None)
     chunk_actions, study_actions = calls
     assert [a["_id"] for a in chunk_actions] == ["chunk-1", "chunk-2"]
     assert {a["_index"] for a in study_actions} == {"chunks-studies"}
@@ -308,7 +328,7 @@ def test_writer_reports_errors_from_both_indexes() -> None:
         recreate=False,
         bulk_results=[(4, [{"index": {"_id": "c"}}]), (1, [{"index": {"_id": "4"}}])],
     )
-    assert success == 4
+    assert success == 2  # both chunks accepted; "c" is no chunk of this run
     assert errors == [{"index": {"_id": "c"}}, {"index": {"_id": "4"}}]
 
 
@@ -406,6 +426,22 @@ def test_a_failed_study_document_write_does_not_stop_pruning() -> None:
     client.delete_by_query.return_value = {"deleted": 0}
     _run_writer(settings, client, recreate=False, bulk_results=[(2, []), (1, [{"index": {"_id": "4", "status": 400}}])])
     assert _pruned_sids(client) == {2, 4}
+
+
+def test_the_writer_confirms_each_chunk_to_the_progress_tracker() -> None:
+    """A study is checkpointed as done only on OpenSearch's answer for each of its chunks (see IngestProgressTracker)."""
+    settings = Settings(index_name="chunks", opensearch_put_composable_index_template=False)
+    client = _client()
+    client.delete_by_query.return_value = {"deleted": 0}
+    progress = MagicMock()
+    error = {"type": "mapper_parsing_exception", "reason": "failed to parse field [n]"}
+    rejected = {"index": {"_id": "chunk-2", "status": 400, "error": error}}
+    _run_writer(settings, client, recreate=False, bulk_results=[(1, [rejected]), (2, [])], progress=progress)
+
+    assert progress.confirm.call_args_list == [
+        call(4, True, None),
+        call(4, False, "mapper_parsing_exception: failed to parse field [n]"),
+    ]
 
 
 def test_pruning_is_batched() -> None:

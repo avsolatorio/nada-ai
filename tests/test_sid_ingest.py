@@ -181,7 +181,9 @@ def test_every_document_of_a_study_carries_its_sid_and_a_study_without_one_is_no
     assert load_errors[0]["stage"] == "extract"
     assert "survey_uid" in load_errors[0]["error"]
     progress.mark.assert_any_call("C", ok=False, error=load_errors[0]["error"])
-    progress.mark.assert_any_call("A", ok=True)
+    # A has documents: announced for the writer to confirm, not marked done by the pipeline itself
+    progress.expect.assert_any_call("A", 11, 2)
+    assert ("A",) not in [c.args[:1] for c in progress.mark.call_args_list]
 
 
 def test_a_study_without_chunk_documents_still_gets_a_study_record(tmp_path) -> None:
