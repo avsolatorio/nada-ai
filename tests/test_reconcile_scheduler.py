@@ -109,7 +109,7 @@ async def test_submit_one_dedupes_against_itself_for_same_idno():
 async def test_poll_once_submits_a_job_per_pending_item():
     s = _state()
     items = [_queue_item("A"), _queue_item("B", delete=True)]
-    status = SearchIndexStatus(status="success", search_provider="semantic", tracking_enabled=True)
+    status = SearchIndexStatus(status="success", search_engine="nada_ai", tracking_enabled=True)
 
     with patch("nada_ai.app.reconcile_scheduler.get_status", return_value=status), \
          patch("nada_ai.app.reconcile_scheduler.list_queue", return_value=items), \
@@ -123,7 +123,7 @@ async def test_poll_once_submits_a_job_per_pending_item():
 @pytest.mark.asyncio
 async def test_poll_once_warns_but_still_polls_when_tracking_disabled(caplog):
     s = _state()
-    status = SearchIndexStatus(status="success", search_provider="db", tracking_enabled=False)
+    status = SearchIndexStatus(status="success", search_engine="database", tracking_enabled=False)
 
     with patch("nada_ai.app.reconcile_scheduler.get_status", return_value=status), \
          patch("nada_ai.app.reconcile_scheduler.list_queue", return_value=[]) as mock_list, \

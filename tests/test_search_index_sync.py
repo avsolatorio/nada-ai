@@ -46,7 +46,7 @@ def _resp(json_body: dict, status: int = 200) -> httpx.Response:
 def test_get_status_parses_response():
     payload = {
         "status": "success",
-        "search_provider": "semantic",
+        "search_engine": "nada_ai",
         "tracking_enabled": True,
         "queue": {"pending": 3, "failed": 1},
         "state": {"indexed": 100, "pending": 3, "failed": 1, "deleted": 0},

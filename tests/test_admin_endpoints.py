@@ -576,7 +576,7 @@ def test_search_index_status_returns_status(monkeypatch):
     mock_get_status = MagicMock(
         return_value=SearchIndexStatus(
             status="ok",
-            search_provider="nada-ai",
+            search_engine="nada_ai",
             tracking_enabled=True,
             queue={"pending": 2, "failed": 0},
             state={"indexed": 100},

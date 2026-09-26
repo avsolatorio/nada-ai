@@ -12,7 +12,8 @@ blocks each item. Where it lives: **nada-ai** (this repo), **nada-semantic** (NA
 | 2 | Push nada-semantic to `ihsn/nada` | Only when asked. |
 | 3 | Stray `nada-os-baseline-variables` index on the Homebrew OpenSearch (`localhost:9200`) | Written by a variables sync while nada-ai pointed at the wrong OpenSearch. Unrelated to the scratch instance (Docker, port 9201). Drop it or leave it. |
 | 4 | Retest a status flip end to end | `rwa-nisr-russ-2012-v1` and `CES-EC-2014-06` are still pending as full in the change queue. Process them from the Change queue page, flip a status, and check the row queues as `upsert_partial`. Not run since NADA's `atomic`/`publish` mapping was restored. |
-| 5 | Try `citation_search_provider = nada_ai` in Site configurations → Search | Verified through NADA's citations API only, not the settings page. |
+| 5 | Click through the new Search section in Site configurations | Verified through the APIs, the migration on the dev database and the search paths (nada-ai OpenSearch and Qdrant); the page itself was compiled and linted but not opened in a browser. |
+| 5a | Run `php index.php cli/migrate latest` on other NADA installs before deploying the new code | Renames the search settings; see `nada-search-engine-settings.md`. On the dev database only that migration's `up()` was applied; the earlier pending `20260918120001` (purges 340 `deleted` rows of `search_index_state`) is not applied. |
 | 6 | Automatic queue processing | `NADA_RECONCILE_SEARCH_INDEX_ENABLED` is off (default, and in the scratch script). Pending rows wait for "Process pending" on the Change queue page. |
 | 7 | Diff page "Reconcile now" wording | An info note now says it does not process the change queue. The button label is unchanged. |
 
@@ -44,6 +45,13 @@ blocks each item. Where it lives: **nada-ai** (this repo), **nada-semantic** (NA
 | 19 | Generic collection-info endpoint | |
 | 20 | Solr backend | |
 | 21 | OpenSearch quality gaps | Noise, overlap, alias, scale, and `qdrant_db` parity, explicitly deferred. |
+
+## 4a. Search engine clean-up: what is left
+
+| # | Item | Notes |
+|---|---|---|
+| 22 | Admin summary and outage banner (phase 4) | `GET /api/admin/semantic/engine_status` exists (engine, what serves what, breaker, fallbacks this hour); the Overview page does not show it yet. `served_by` / `fallback_reason` are not in search results yet. |
+| 23 | Variable view for Solr and native OpenSearch | Still served by the database (`NATIVE_ENGINES_SERVE_VARIABLES = false`). Decided to leave for now. |
 
 ## 5. Behaviours worth remembering
 

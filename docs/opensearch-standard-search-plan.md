@@ -1,5 +1,7 @@
 # OpenSearch option and standard study search — plan
 
+> **Names changed 2026-09-26.** NADA's `search_provider`, `semantic_search_engine` and `semantic_search_*` settings were replaced by `search_engine` and `nada_ai_*`; the engine nada-ai runs is now read from `GET /info` instead of a typed setting. This plan keeps the names it was written with; see `nada-search-engine-settings.md`.
+
 Branch: `feat/opensearch` (created from `feat/additional-catalog-types`).
 Status: steps 0-8 done (the hybrid-test milestone is reached and the defaults are tuned; the keyword cap of the original design was later removed), and the NADA driver is done
 (NADA `Catalog_search_semantic_studies.php`, selected with the site setting `semantic_search_engine` = `opensearch`).
