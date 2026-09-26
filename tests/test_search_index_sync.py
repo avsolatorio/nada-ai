@@ -317,6 +317,24 @@ def test_reconcile_once_acks_failed_when_index_reports_no_success(report, reason
     assert summary == {"polled": 1, "indexed": 0, "deleted": 0, "failed": 1, "ack_conflicts": 0}
 
 
+def test_a_full_upsert_whose_variables_failed_is_acked_failed():
+    """The variable sync inside index_ids_op never raises; acking the item indexed would drop it from the queue with
+    the study's variables stale or half written."""
+    items = [_queue_item("WLD_2021_TEST_v01")]
+    report = {**_INDEXED_OK, "variables": {"indexed": 2, "errors": [{}], "failed": {"WLD_2021_TEST_v01": "boom"}}}
+    with (
+        patch("nada_ai.ingest.search_index_sync.list_queue", return_value=items),
+        patch("nada_ai.ingest.search_index_sync.lookup_metadata_type", return_value="microdata"),
+        patch("nada_ai.ingest.search_index_sync.index_ids_op", return_value=report),
+        patch("nada_ai.ingest.search_index_sync.ack_item") as mock_ack,
+    ):
+        summary = reconcile_once(_settings(), limit=10)
+
+    assert mock_ack.call_args.kwargs["result"] == "failed"
+    assert "variables: boom" in mock_ack.call_args.kwargs["error"]
+    assert summary["failed"] == 1
+
+
 def test_apply_and_ack_queue_item_uses_pre_resolved_metadata_type():
     """The scheduler resolves metadata_type BEFORE calling this (to build a
     matching job-registry key) and must not pay for a second lookup here."""
@@ -643,6 +661,20 @@ def test_reconcile_diff_once_counts_soft_failure_as_failed_not_indexed():
                 "empty_docs": [],
             },
         ),
+    ):
+        summary = reconcile_diff_once(_diff_settings())
+
+    assert summary["indexed"] == 0
+    assert summary["failed"] == 1
+
+
+def test_reconcile_diff_once_counts_a_study_whose_variables_failed_as_failed():
+    page = _diff_page([{"idno": "M", "type": "survey"}])
+    report = {**_INDEXED_OK, "variables": {"indexed": 0, "errors": [{}], "failed": {"M": "boom"}}}
+    with (
+        patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[page, _diff_page([])]),
+        patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=_diff_page([])),
+        patch("nada_ai.ingest.search_index_sync.index_ids_op", return_value=report),
     ):
         summary = reconcile_diff_once(_diff_settings())
 

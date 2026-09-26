@@ -77,13 +77,14 @@ def _state_report_items(
     load_errors: list[dict[str, Any]],
     empty_docs: list[dict[str, Any]],
     write_errors: list[Any] | None,
+    variables_failed: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build the ``search_index_state`` items for one indexing call.
 
-    ``load_errors``/``empty_docs`` and backend ``write_errors`` are all failures
-    — an idno whose documents never made it into the backend must not be
-    reported ``indexed``, or NADA drops it from its "missing" diff and
-    reconcile never retries it.
+    ``load_errors``/``empty_docs``, backend ``write_errors`` and ``variables_failed`` (idno -> reason, see
+    :func:`_sync_variables_best_effort`) are all failures — an idno whose documents never made it into the backend
+    must not be reported ``indexed``, or NADA drops it from its "missing" diff and reconcile never retries it. A full
+    index of a study is study + chunks + variables, so a study whose variables failed is not indexed either.
 
     Write errors that can't be tied to an idno (see :func:`_attribute_write_error`)
     mean we can't tell which idnos are affected, so in that case nothing is
@@ -98,6 +99,7 @@ def _state_report_items(
             fully_attributed = False
         else:
             failed.setdefault(idno, f"write failed: {message}")
+    failed.update({idno: f"variables: {reason}" for idno, reason in (variables_failed or {}).items()})
     failed.update(_error_by_idno(load_errors, empty_docs))
 
     items: list[dict[str, Any]] = []
@@ -471,7 +473,11 @@ def _sync_variables_best_effort(
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Sync each idno's variables (best-effort: one idno's failure doesn't stop the rest, and never raises —
-    a full study index must not fail just because the separate variable index couldn't be reached).
+    a full study index must not stop just because the separate variable index couldn't be reached).
+
+    Returns ``{"indexed", "errors", "failed"}``; ``failed`` maps each idno whose variables were not fully synced to
+    the reason — an error, write errors, or a cancellation (the idnos not reached count too) — so the caller reports
+    that study failed rather than indexed.
 
     Only called for ``metadata_type=microdata`` (variables only exist on that dataset type — see
     ``_metadata_type`` in NADA's ``Semantic.php`` for the same map). By design, a full index of a study is
@@ -483,30 +489,34 @@ def _sync_variables_best_effort(
     todo = list(idnos)
     indexed = 0
     errors: list[Any] = []
-    failed = 0
+    failed: dict[str, str] = {}
     for done, idno in enumerate(todo, start=1):
         if cancel_token is not None and cancel_token.is_set():
+            failed.update({i: "cancelled before its variables were synced" for i in todo[done - 1 :]})
             break
         try:
             result = sync_survey_variables_op(settings, idno, cancel_token=cancel_token)
             indexed += int(result.get("indexed") or 0)
             errors.extend(result.get("errors") or [])
-            failed += 1 if result.get("errors") else 0
+            if result.get("errors"):
+                failed[idno] = f"{len(result['errors'])} write error(s)"
+            elif result.get("cancelled"):
+                failed[idno] = "cancelled while its variables were being synced"
         except Exception as e:  # noqa: BLE001 - reported in the result, not raised
             logger.warning("variable sync failed for idno=%s: %s", idno, e)
             errors.append({"idno": idno, "error": str(e)})
-            failed += 1
+            failed[idno] = str(e)
         if progress_cb is not None:
             progress_cb(
                 {
                     "processed": done,
                     "total": len(todo),
-                    "failed": failed,
+                    "failed": len(failed),
                     "percent": round(100 * done / len(todo), 1),
                     "current_idno": idno,
                 }
             )
-    return {"indexed": indexed, "errors": errors}
+    return {"indexed": indexed, "errors": errors, "failed": failed}
 
 
 #: Errors kept in a variables-only job's result: a bulk failure echoes whole documents, and a job's result is stored
@@ -648,12 +658,17 @@ def index_ids_op(
         load_errors=load_errors,
         empty_docs=empty_docs,
     )
-    _report_state_bulk_best_effort(settings, _state_report_items(idnos, load_errors, empty_docs, err))
-
     variables_result: dict[str, Any] | None = None
     if metadata_type == "microdata" and settings.search_backend == "opensearch":
         failed_idnos = {e["idno"] for e in load_errors if e.get("idno")}
         variables_result = _sync_variables_best_effort(settings, (i for i in idnos if i not in failed_idnos))
+    # Reported after the variables: a study whose variables failed is not indexed (see _state_report_items).
+    _report_state_bulk_best_effort(
+        settings,
+        _state_report_items(
+            idnos, load_errors, empty_docs, err, variables_result["failed"] if variables_result else None
+        ),
+    )
 
     idx = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
     return {
@@ -774,19 +789,26 @@ def index_from_catalog_op(
     # above, so there's nothing left worth resuming; clear the checkpoint.
     tracker.finalize(completed=not cancelled)
 
-    _report_state_bulk_best_effort(
-        settings, _state_report_items(tracker.checkpoint.completed_idnos, load_errors, empty_docs, err)
-    )
-
     # A full index of a study is study + chunks + variables (see index_ids_op). Variables only exist on microdata,
     # so this is one NADA call per microdata study of this run, not per catalog row — a run over thousands of
-    # documents makes none. A cancelled run stops here rather than starting a long sync nobody is waiting for.
+    # documents makes none. A cancelled run stops here rather than starting a long sync nobody is waiting for; its
+    # microdata studies are then reported failed (their variables were never synced), so a reconcile retries them.
     variables_result: dict[str, Any] | None = None
-    if settings.search_backend == "opensearch" and not cancelled:
+    variables_failed: dict[str, str] = {}
+    if settings.search_backend == "opensearch":
         failed_idnos = {e["idno"] for e in load_errors if e.get("idno")}
         microdata_idnos = [idno for idno, t in pairs if t == "microdata" and idno not in failed_idnos]
-        if microdata_idnos:
+        if cancelled:
+            variables_failed = {i: "cancelled before its variables were synced" for i in microdata_idnos}
+        elif microdata_idnos:
             variables_result = _sync_variables_best_effort(settings, microdata_idnos, cancel_token=cancel_token)
+            variables_failed = variables_result["failed"]
+
+    # Reported after the variables: a study whose variables failed is not indexed (see _state_report_items).
+    _report_state_bulk_best_effort(
+        settings,
+        _state_report_items(tracker.checkpoint.completed_idnos, load_errors, empty_docs, err, variables_failed),
+    )
 
     idx = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
     return {
