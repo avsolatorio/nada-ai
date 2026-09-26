@@ -165,7 +165,7 @@ class Settings(BaseSettings):
     #: of only via the manual `reconcile_search_index` CLI command. Off by
     #: default — enabling it requires an admin credential for the target NADA
     #: instance (see metadata_extract_* above) and NADA's own search-index
-    #: tracking configured for this deployment (search_provider set,
+    #: tracking configured for this deployment (search_engine set,
     #: tracking_enabled true — check with `search_index_status` first).
     reconcile_search_index_enabled: bool = Field(default=False)
     #: Seconds between reconciliation polls when enabled.

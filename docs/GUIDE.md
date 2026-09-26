@@ -537,7 +537,7 @@ racing a concurrent scheduler tick, webhook, or admin reindex for the same idno.
 ```bash
 curl -s localhost:8020/admin/search-index/status \
   -H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY"
-# => {"status": "ok", "search_provider": "nada-ai", "tracking_enabled": true,
+# => {"status": "ok", "search_engine": "nada_ai", "tracking_enabled": true,
 #     "queue": {"pending": 2, "failed": 0}, "state": {"indexed": 100}}
 ```
 
@@ -546,7 +546,7 @@ or `AI4DATA_METADATA_CATALOG_URL`), `503` if NADA's status endpoint is unreachab
 
 Enabling the scheduler needs two things configured on NADA's side, not just here:
 an admin-capable credential (`AI4DATA_METADATA_CATALOG_X_API_KEY` — the same one
-everything else uses), and NADA's own `search_provider`/tracking configuration
+everything else uses), and NADA's own `search_engine`/tracking configuration
 actually pointed at this deployment — check with `search_index_status` first. If
 `tracking_enabled` is `false`, the queue stays empty and the scheduler logs a warning
 each poll rather than failing silently.

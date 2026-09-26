@@ -112,7 +112,7 @@ class SearchIndexQueueItem(BaseModel):
 
 class SearchIndexStatus(BaseModel):
     status: str
-    search_provider: str | None = None
+    search_engine: str | None = None
     tracking_enabled: bool = False
     queue: dict[str, int] = {}
     state: dict[str, int] = {}

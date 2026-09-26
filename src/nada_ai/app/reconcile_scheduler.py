@@ -107,10 +107,10 @@ async def poll_once(s: AppState) -> dict[str, Any]:
         if not status.tracking_enabled:
             logger.warning(
                 "search-index reconciliation is enabled here, but NADA reports "
-                "tracking_enabled=false (search_provider=%r) — the queue will "
+                "tracking_enabled=false (search_engine=%r) — the queue will "
                 "stay empty until this deployment is configured as NADA's "
                 "search provider. Nothing to do this poll.",
-                status.search_provider,
+                status.search_engine,
             )
     except Exception as e:  # noqa: BLE001 - status check is informational only
         logger.warning("search-index scheduler: status check failed: %s", e)

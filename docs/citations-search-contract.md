@@ -44,7 +44,7 @@ Only **published** citations are ever searched; that is not a filter. Unknown fi
 
 Filters NADA's own database search has and this one does not: flag, user, url status, has notes, no survey attached and
 the repository scope. They are admin-list filters that are not in the index. NADA's driver for this search says so and
-does not send them (see NADA's `citation_search_provider` setting; the database driver remains available for those).
+does not send them (NADA serves citations from the engine its `search_engine` setting names, and from the database when that engine has no citation search).
 
 ## 4. Indexing
 
