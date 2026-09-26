@@ -7,16 +7,20 @@ the framework default that the other routes return.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from opensearchpy.exceptions import RequestError, TransportError
 
 from nada_ai.app.auth import Principal, require_role
 from nada_ai.app.keys_store import Role
 from nada_ai.app.rate_limit import client_key
 from nada_ai.app.state import AppState, get_state
 from nada_ai.app.studies_schemas import ERROR_HTTP_STATUS, ErrorCode, ErrorDetail, ErrorResponse
+
+logger = logging.getLogger(__name__)
 
 
 class StudiesApiError(Exception):
@@ -27,6 +31,24 @@ class StudiesApiError(Exception):
         self.code = code
         self.message = message
         self.details = details
+
+
+def opensearch_error(route: str, e: TransportError) -> StudiesApiError:
+    """The contract error for a failed OpenSearch call.
+
+    A 400 means OpenSearch was up and refused the query nada-ai built — a nada-ai bug, not an outage: it is
+    ``query_rejected`` (400), logged as an error with OpenSearch's reason. Anything else (no connection, a 5xx) is
+    ``backend_unavailable`` (503), which NADA counts as an outage.
+    """
+    if isinstance(e, RequestError):
+        logger.error("%s: OpenSearch rejected the query: %s", route, e.info or e)
+        return StudiesApiError(
+            ErrorCode.query_rejected,
+            "OpenSearch rejected the query; this is a nada-ai bug, see its log",
+            {"engine_error": str(e.error)},
+        )
+    logger.warning("%s: OpenSearch request failed: %s", route, e)
+    return StudiesApiError(ErrorCode.backend_unavailable, "OpenSearch is not reachable")
 
 
 async def studies_error_handler(_request: Request, exc: StudiesApiError) -> JSONResponse:

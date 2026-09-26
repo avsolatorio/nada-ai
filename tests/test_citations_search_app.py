@@ -8,7 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from opensearchpy.exceptions import NotFoundError
+from opensearchpy.exceptions import NotFoundError, RequestError
 from starlette.testclient import TestClient
 
 from nada_ai.app.main import app, state
@@ -136,6 +136,14 @@ def test_the_qdrant_engine_answers_unsupported_capability(monkeypatch: pytest.Mo
     assert response.status_code == 501
     assert response.json()["error"]["code"] == "unsupported_capability"
     assert response.json()["error"]["details"]["capability"] == "citations_search"
+
+
+def test_a_query_opensearch_rejects_is_query_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _client(side_effect=RequestError(400, "search_phase_execution_exception", {}))
+    with _running(monkeypatch, "opensearch", client=client) as c:
+        response = c.post("/citations/search", json={"query": "poverty"})
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "query_rejected"
 
 
 def test_a_missing_index_is_index_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:

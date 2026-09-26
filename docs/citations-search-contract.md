@@ -30,7 +30,8 @@ the full rows (authors, survey counts, ...) from its own database, as it does fo
 Only **published** citations are ever searched; that is not a filter. Unknown filter keys are `unknown_filter`
 (422), listing the supported ones. Errors use the study search's envelope and codes (`invalid_request`,
 `invalid_filter_value`, `unknown_filter`, `offset_out_of_range`, `unsupported_capability` (501 on Qdrant),
-`index_not_ready` (503 before the first sync), `backend_unavailable`, `unauthorized`, `forbidden`, `rate_limited`).
+`index_not_ready` (503 before the first sync), `backend_unavailable`, `query_rejected`, `unauthorized`, `forbidden`,
+`rate_limited`).
 
 ## 2. Response
 

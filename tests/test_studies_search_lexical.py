@@ -9,7 +9,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from opensearchpy.exceptions import NotFoundError
+from opensearchpy.exceptions import NotFoundError, RequestError
 from starlette.testclient import TestClient
 
 from nada_ai.app.main import app, state
@@ -425,6 +425,15 @@ def _running(monkeypatch: pytest.MonkeyPatch, client_mock: Any) -> Iterator[Test
             yield client
         finally:
             state.client = previous
+
+
+def test_a_query_opensearch_rejects_is_query_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _client()
+    client.search = AsyncMock(side_effect=RequestError(400, "search_phase_execution_exception", {}))
+    with _running(monkeypatch, client) as c:
+        response = c.post("/studies/search", json={"query": "poverty"})
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "query_rejected"
 
 
 def _post(client: TestClient, body: dict[str, Any]):

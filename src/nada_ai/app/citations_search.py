@@ -23,7 +23,7 @@ from nada_ai.app.citations_schemas import (
     CitationSearchResponse,
 )
 from nada_ai.app.state import AppState, get_state
-from nada_ai.app.studies_errors import StudiesApiError, studies_guard
+from nada_ai.app.studies_errors import StudiesApiError, opensearch_error, studies_guard
 from nada_ai.app.studies_schemas import MAX_OFFSET, Engine, ErrorCode
 from nada_ai.app.studies_search import register_validation_classifier
 from nada_ai.search.backend.opensearch.citations_search import (
@@ -127,8 +127,7 @@ async def citations_search(
             {"index": str(e)},
         ) from e
     except TransportError as e:
-        logger.warning("POST /citations/search: OpenSearch request failed: %s", e)
-        raise StudiesApiError(ErrorCode.backend_unavailable, "OpenSearch is not reachable") from e
+        raise opensearch_error("POST /citations/search", e) from e
 
     return CitationSearchResponse(
         engine=engine,

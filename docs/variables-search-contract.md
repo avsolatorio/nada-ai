@@ -98,7 +98,7 @@ implement.
 Same envelope, same codes, same auth guard and rate limiter as the study search (`studies_errors.py`,
 `ErrorCode` in `studies_schemas.py`) — reused directly rather than duplicated: `unknown_filter`,
 `invalid_filter_value`, `offset_out_of_range`, `invalid_request`, `unsupported_capability`, `index_not_ready`,
-`backend_unavailable`, `unauthorized`, `forbidden`, `rate_limited`.
+`backend_unavailable`, `query_rejected`, `unauthorized`, `forbidden`, `rate_limited`.
 
 ## 5. Indexing
 
