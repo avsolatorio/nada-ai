@@ -50,6 +50,13 @@ def _payload_for_point(source: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in source.items() if k != EMBEDDING_FIELD}
 
 
+def _sid_of(source: dict[str, Any]) -> int | None:
+    """The NADA study id a source document belongs to (``metadata.sid``, set by the pipeline from the study)."""
+    meta = source.get("metadata")
+    sid = meta.get("sid") if isinstance(meta, dict) else None
+    return int(sid) if sid is not None else None
+
+
 def _idno_of(source: dict[str, Any]) -> str | None:
     """The catalog idno a source document belongs to, for attributing write errors to it."""
     meta = source.get("metadata")
@@ -66,7 +73,9 @@ def _ensure_payload_indexes(client: QdrantClient, collection: str) -> None:
 
     _try(
         TEXT_FIELD,
-        qm.TextIndexParams(type="text", tokenizer=qm.TokenizerType.WORD, min_token_len=2, max_token_len=40, lowercase=True),
+        qm.TextIndexParams(
+            type="text", tokenizer=qm.TokenizerType.WORD, min_token_len=2, max_token_len=40, lowercase=True
+        ),
     )
     for f in sorted(_KEYWORD_INDEX_FIELDS):
         _try(stored_filter_field_name(f), qm.KeywordIndexParams(type=qm.KeywordIndexType.KEYWORD))
@@ -198,11 +207,19 @@ class QdrantIngestWriter(IngestWriterPort):
             else:
                 points = [_point(did, v, src) for did, v, src in batch_buf]
             idno_by_point_id = {str(did): _idno_of(src) for did, _, src in batch_buf}
+            sid_by_point_id = {str(did): _sid_of(src) for did, _, src in batch_buf}
             batch_buf.clear()
+
+            def confirm(point_id: Any, ok: bool, error: str | None = None) -> None:
+                sid = sid_by_point_id.get(str(point_id))
+                if progress is not None and sid is not None:
+                    progress.confirm(sid, ok, error)
 
             try:
                 client.upsert(collection_name=coll, points=points, wait=True)
                 success += len(points)
+                for point in points:
+                    confirm(point.id, True)
             except Exception as e:
                 # Retry one-at-a-time so a single bad point (e.g. a payload
                 # value Qdrant rejects) doesn't blank out the whole batch as
@@ -213,8 +230,12 @@ class QdrantIngestWriter(IngestWriterPort):
                     try:
                         client.upsert(collection_name=coll, points=[point], wait=True)
                         success += 1
+                        confirm(point.id, True)
                     except Exception as point_exc:
-                        errors.append({"id": point.id, "idno": idno_by_point_id.get(str(point.id)), "error": str(point_exc)})
+                        errors.append(
+                            {"id": point.id, "idno": idno_by_point_id.get(str(point.id)), "error": str(point_exc)}
+                        )
+                        confirm(point.id, False, str(point_exc))
 
         try:
             for doc_id, vec, source in iter_langdoc_records(
@@ -231,18 +252,17 @@ class QdrantIngestWriter(IngestWriterPort):
                 empty_docs=empty_docs,
             ):
                 if not vec:
-                    errors.append(
-                        {
-                            "id": doc_id,
-                            "idno": _idno_of(source),
-                            "error": "missing vector (opensearch_ml is not supported on Qdrant)",
-                        }
-                    )
+                    message = "missing vector (opensearch_ml is not supported on Qdrant)"
+                    errors.append({"id": doc_id, "idno": _idno_of(source), "error": message})
+                    if progress is not None and (sid := _sid_of(source)) is not None:
+                        progress.confirm(sid, False, message)
                     continue
                 try:
                     batch_buf.append((doc_id, vec, source))
                 except Exception as e:
                     errors.append({"id": doc_id, "idno": _idno_of(source), "error": str(e)})
+                    if progress is not None and (sid := _sid_of(source)) is not None:
+                        progress.confirm(sid, False, str(e))
                     continue
                 if len(batch_buf) >= batch_size:
                     flush_buf()

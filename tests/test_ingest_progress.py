@@ -136,6 +136,38 @@ def test_finalize_not_completed_keeps_checkpoint(tmp_path):
     assert loaded.completed_idnos == {"A"}
 
 
+def test_a_study_is_marked_only_once_every_chunk_is_confirmed_written(tmp_path):
+    tracker = IngestProgressTracker(_settings(tmp_path), "survey", total=2, save_every=1)
+    tracker.expect("A", 11, 2)
+    tracker.confirm(11, True)
+    assert tracker.checkpoint.completed_idnos == set()  # one chunk still unconfirmed
+    tracker.confirm(11, True)
+    assert tracker.checkpoint.completed_idnos == {"A"}
+
+
+def test_a_study_with_a_rejected_chunk_is_marked_failed_so_a_resume_retries_it(tmp_path):
+    tracker = IngestProgressTracker(_settings(tmp_path), "survey", total=1, save_every=1)
+    tracker.expect("A", 11, 2)
+    tracker.confirm(11, False, "mapper_parsing_exception")
+    tracker.confirm(11, True)
+    assert tracker.checkpoint.completed_idnos == set()
+    assert tracker.checkpoint.failed == {"A": "write failed: mapper_parsing_exception"}
+
+
+def test_a_crash_leaves_unconfirmed_studies_out_of_the_checkpoint(tmp_path):
+    """Chunks handed to the writer but never answered (the run crashed) are not written: a resume must redo them."""
+    settings = _settings(tmp_path)
+    tracker = IngestProgressTracker(settings, "survey", total=2, save_every=1)
+    tracker.expect("A", 11, 1)
+    tracker.confirm(11, True)
+    tracker.expect("B", 22, 3)  # sent, never answered
+    tracker.finalize(completed=False)
+
+    loaded = load_checkpoint(settings, "survey")
+    assert loaded is not None
+    assert loaded.completed_idnos == {"A"}
+
+
 # ---------------------------------------------------------------------------
 # CancelToken
 # ---------------------------------------------------------------------------
@@ -167,6 +199,9 @@ class _FakeHandler:
         return self._docs
 
 
+_FAKE_SIDS: dict[str, int] = {}
+
+
 class _FakeLoader:
     """Stand-in for ai4data.discovery.metadata.handler.MetadataLoader."""
 
@@ -178,7 +213,8 @@ class _FakeLoader:
             raise RuntimeError(f"metadata fetch failed for {idno}")
         self.idno = idno
         self.metadata_type = metadata_type
-        self.metadata = {"_extract_filters": {}, "_extract_core_fields": {"survey_uid": 1, "idno": idno}}
+        sid = _FAKE_SIDS.setdefault(idno, len(_FAKE_SIDS) + 1)  # a study's own id, as in NADA
+        self.metadata = {"_extract_filters": {}, "_extract_core_fields": {"survey_uid": sid, "idno": idno}}
 
     def get_metadata_handler(self) -> _FakeHandler:
         return _FakeHandler(self._by_idno.get(self.idno, []))
@@ -302,7 +338,7 @@ def test_iter_langdoc_records_marks_progress_per_idno(tmp_path):
     ):
         settings = _settings(tmp_path, search_backend="opensearch")
         tracker = IngestProgressTracker(settings, "document", total=2)
-        list(
+        records = list(
             pipeline_module.iter_langdoc_records(
                 settings,
                 _FakeEmbedding(),
@@ -312,5 +348,10 @@ def test_iter_langdoc_records_marks_progress_per_idno(tmp_path):
             )
         )
 
+    # Handed to the writer is not written: nothing is done until the writer confirms each document.
+    assert tracker.processed == 0
+    assert tracker.checkpoint.completed_idnos == set()
+    for _id, _vec, source in records:
+        tracker.confirm(source["metadata"]["sid"], True)
     assert tracker.processed == 2
     assert tracker.checkpoint.completed_idnos == {"A", "B"}
