@@ -101,6 +101,17 @@ def test_a_query_is_run_and_the_response_matches_the_contract_shape(monkeypatch:
     assert body["applied"]["sort"] == "relevance"
 
 
+def test_a_name_sort_with_an_order_is_sent_to_the_sortable_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What NADA sends for a variable list sorted by name, descending."""
+    client = _opensearch_client()
+    with _running(monkeypatch, "opensearch", client=client) as c:
+        response = c.post("/variables/search", json={"query": "x", "sort": "name", "order": "desc"})
+    assert response.status_code == 200
+    assert response.json()["applied"]["sort"] == "name"
+    assert response.json()["applied"]["order"] == "desc"
+    assert client.search.call_args.kwargs["body"]["sort"][0] == {"name.sort": {"order": "desc", "missing": "_last"}}
+
+
 def test_an_unknown_filter_is_rejected_with_the_contract_error(monkeypatch: pytest.MonkeyPatch) -> None:
     with _running(monkeypatch, "opensearch", client=_opensearch_client()) as c:
         response = c.post("/variables/search", json={"query": "x", "filters": {"countries": [1]}})
