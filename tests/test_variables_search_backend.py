@@ -63,9 +63,26 @@ def test_search_body_is_a_bool_query_of_the_lexical_multi_match_and_filters() ->
     assert "sort" not in body
 
 
-def test_search_body_sorts_by_name_or_title_when_not_relevance() -> None:
-    assert search_body(_job(sort_by="name"))["sort"] == [{"name": "asc"}, "_score"]
-    assert search_body(_job(sort_by="title"))["sort"] == [{"title": "asc"}, "_score"]
+def test_search_body_sorts_on_the_sortable_fields_when_not_relevance() -> None:
+    """``name`` is a text field (OpenSearch refuses to sort on it): the sort goes to its ``name.sort`` keyword."""
+    assert search_body(_job(sort_by="name"))["sort"] == [{"name.sort": {"order": "asc", "missing": "_last"}}, "_score"]
+    assert search_body(_job(sort_by="title", order="desc"))["sort"] == [
+        {"title": {"order": "desc", "missing": "_last"}},
+        "_score",
+    ]
+
+
+def test_every_sort_field_is_a_normalized_keyword_in_the_variables_mapping() -> None:
+    """What the body sorts on must be sortable in the mapping — the check the body test alone could not make."""
+    from nada_ai.search.backend.opensearch.mapping import variables_index_body
+    from nada_ai.search.backend.opensearch.variables_search import _SORT_FIELDS
+
+    properties = variables_index_body()["mappings"]["properties"]
+    for path in _SORT_FIELDS.values():
+        field, _, sub = path.partition(".")
+        mapping = properties[field]["fields"][sub] if sub else properties[field]
+        assert mapping["type"] == "keyword", path
+        assert mapping["normalizer"] == "nada_sort", path
 
 
 def test_search_variables_parses_hits_and_total() -> None:

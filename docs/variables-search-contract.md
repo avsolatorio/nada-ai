@@ -41,6 +41,7 @@ Request:
   "query": "diarrhea",
   "filters": { "sids": [305], "types": ["survey"] },
   "sort": "relevance",
+  "order": "asc",
   "limit": 15,
   "offset": 0
 }
@@ -54,6 +55,8 @@ Request:
   `vsearch()`: countries, years, collections, repository and data-access-type are not implemented here yet (documented
   gap, not silently dropped — an unknown filter key is rejected, same as the study search).
 - `sort` — `relevance` (default), `name` or `title`. NADA's DB search also sorts by `nation`; not implemented here.
+  Name and title sorts ignore case and accents.
+- `order` — `asc` (default) or `desc`: the direction of a `name` or `title` sort; ignored for `relevance`.
 - Only published variables (of published studies) are ever searched — implicit, not a filter, exactly like the
   study search's "only published studies."
 
@@ -74,7 +77,7 @@ Response:
       "dataset_type": "survey", "year_start": 2014, "year_end": 2014, "score": 12.02
     }
   ],
-  "applied": { "query": "diarrhea", "filters": {}, "sort": "relevance", "limit": 15, "offset": 0 },
+  "applied": { "query": "diarrhea", "filters": {}, "sort": "relevance", "order": "asc", "limit": 15, "offset": 0 },
   "timing_ms": { "total": 4.2, "engine": 3.0 }
 }
 ```

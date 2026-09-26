@@ -246,7 +246,8 @@ def variables_index_body() -> dict[str, Any]:
     Denormalized with the owning study's fields (no join at query time), following NADA's own, separate variable
     indexer (``OpenSearch_variable_indexer.php``) for the field set. Lexical only: ``name``/``label``/``question``/
     ``categories`` are searched; ``idno``/``title``/``nation`` are stored for display, not matched (NADA's own
-    variable search does not match on them either).
+    variable search does not match on them either). Sorting uses ``name.sort`` and ``title``, both normalized
+    (case- and accent-insensitive): a ``text`` field cannot be sorted on.
     """
     return {
         "settings": {
@@ -260,7 +261,8 @@ def variables_index_body() -> dict[str, Any]:
                             "tokenizer": "standard",
                             "filter": ["lowercase", "asciifolding"],
                         }
-                    }
+                    },
+                    "normalizer": {"nada_sort": {"type": "custom", "filter": ["lowercase", "asciifolding"]}},
                 },
             }
         },
@@ -272,8 +274,13 @@ def variables_index_body() -> dict[str, Any]:
                 "fid": {"type": "keyword"},
                 "vid": {"type": "keyword"},
                 **{field: {"type": "text", "analyzer": "nada_text"} for field in VARIABLE_TEXT_FIELDS},
+                "name": {
+                    "type": "text",
+                    "analyzer": "nada_text",
+                    "fields": {"sort": {"type": "keyword", "normalizer": "nada_sort", "ignore_above": 256}},
+                },
                 "idno": {"type": "keyword"},
-                "title": {"type": "keyword"},
+                "title": {"type": "keyword", "normalizer": "nada_sort"},
                 "nation": {"type": "keyword"},
                 "dataset_type": {"type": "keyword"},
                 "published": {"type": "integer"},

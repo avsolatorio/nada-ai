@@ -13,7 +13,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from nada_ai.app.studies_schemas import MAX_OFFSET, Engine, PositiveInt, Token
+from nada_ai.app.studies_schemas import MAX_OFFSET, Engine, PositiveInt, SortOrder, Token
 
 DEFAULT_LIMIT = 15
 MAX_LIMIT = 100
@@ -55,6 +55,7 @@ class VariableSearchRequest(BaseModel):
     query: Query
     filters: VariableFilters = Field(default_factory=VariableFilters)
     sort: VariableSortLiteral = VariableSortLiteral.relevance
+    order: SortOrder = Field(default=SortOrder.asc, description="Direction of a name or title sort.")
     limit: PositiveInt = Field(default=DEFAULT_LIMIT, le=MAX_LIMIT)
     offset: int = Field(default=0, ge=0, le=MAX_OFFSET)
 
@@ -81,6 +82,7 @@ class VariableApplied(BaseModel):
     query: str
     filters: dict[str, object]
     sort: VariableSortLiteral
+    order: SortOrder
     limit: int
     offset: int
 

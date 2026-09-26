@@ -35,6 +35,7 @@ class VariableSearchJob:
     limit: int
     offset: int
     sort_by: str  # "relevance", "name" or "title"
+    order: str = "asc"  # "asc" or "desc"; ignored for "relevance"
 
 
 @dataclass(frozen=True)
@@ -83,7 +84,7 @@ def filter_clauses(filters: VariableFilters) -> list[dict[str, Any]]:
     return clauses
 
 
-_SORT_FIELDS: dict[str, str] = {"name": "name", "title": "title"}
+_SORT_FIELDS: dict[str, str] = {"name": "name.sort", "title": "title"}
 
 
 def search_body(job: VariableSearchJob) -> dict[str, Any]:
@@ -109,8 +110,8 @@ def search_body(job: VariableSearchJob) -> dict[str, Any]:
         ],
     }
     if job.sort_by != "relevance":
-        sort_field = _SORT_FIELDS.get(job.sort_by, "name")
-        body["sort"] = [{sort_field: "asc"}, "_score"]
+        sort_field = _SORT_FIELDS[job.sort_by]
+        body["sort"] = [{sort_field: {"order": job.order, "missing": "_last"}}, "_score"]
     return body
 
 

@@ -114,6 +114,7 @@ async def variables_search(
         limit=body.limit,
         offset=body.offset,
         sort_by=body.sort.value,
+        order=body.order.value,
     )
     try:
         page = await search_variables(job)
@@ -157,6 +158,7 @@ async def variables_search(
             query=body.query,
             filters=body.filters.active(),
             sort=body.sort,
+            order=body.order,
             limit=body.limit,
             offset=body.offset,
         ),
