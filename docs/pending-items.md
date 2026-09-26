@@ -50,7 +50,7 @@ blocks each item. Where it lives: **nada-ai** (this repo), **nada-semantic** (NA
 
 | # | Item | Notes |
 |---|---|---|
-| 22 | Admin summary and outage banner (phase 4) | `GET /api/admin/semantic/engine_status` exists (engine, what serves what, breaker, fallbacks this hour); the Overview page does not show it yet. `served_by` / `fallback_reason` are not in search results yet. |
+| 22 | ~~Admin summary and outage banner (phase 4)~~ | Done: a Search engine card on the Overview page (engine, what serves studies/variables/citations, what nada-ai runs, fallbacks this hour) and a banner on every dashboard page when nada-ai runs another engine than the setting or is not answering. `served_by` / `fallback_reason` are still not in search results. |
 | 23 | Variable view for Solr and native OpenSearch | Still served by the database (`NATIVE_ENGINES_SERVE_VARIABLES = false`). Decided to leave for now. |
 
 ## 5. Behaviours worth remembering
