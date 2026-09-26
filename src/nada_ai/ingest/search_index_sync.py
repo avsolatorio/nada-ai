@@ -261,11 +261,7 @@ def requeue_failed(settings: Settings) -> dict[str, Any]:
 
 _STATE_BULK_CHUNK_SIZE = 500
 
-#: NADA's search_index_state.object_type is 'survey' for every dataset type
-#: nada_ai indexes (document/timeseries/microdata/geospatial all live in
-#: NADA's own `surveys` table, discriminated by its own `type` column — see
-#: the design discussion this constant closes out). 'citation' is a distinct,
-#: separate NADA content type, indexed on its own (``ingest/citations_index.py``).
+#: NADA stores indexed study dataset types under the ``survey`` object type; citations use a separate object type.
 STATE_OBJECT_TYPE_SURVEY = "survey"
 
 
@@ -356,11 +352,7 @@ def list_diff_stale(
 def lookup_metadata_type(settings: Settings, idno: str) -> str | None:
     """Resolve NADA's dataset_type for idno and map it to a nada_ai metadata_type.
 
-    Confirmed against a live instance: the study document has no top-level
-    ``dataset_type`` — despite what the catalog-admin OpenAPI spec documents,
-    the real field lives at ``study["filters"]["dataset_type"]`` (``filters``
-    is NADA's own per-study computed facet dict — see ``ai4data``'s
-    ``study_metadata_type()``, which reads it from the same place).
+    The dataset type is read from ``study["filters"]["dataset_type"]`` in the metadata extract.
     """
     extract_base = settings.metadata_extract_base_url or catalog_extract.extract_base_url()
     kwargs: dict[str, Any] = {

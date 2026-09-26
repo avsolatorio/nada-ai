@@ -941,7 +941,7 @@ skip cleanly without them:
 | `test_index_from_catalog_live.py` | `NADA_INTEGRATION_OPENSEARCH=1` | Live OpenSearch + catalog network |
 | `test_opensearch_live.py` | `NADA_INTEGRATION_OPENSEARCH=1` | Live OpenSearch |
 | `test_qdrant_live.py` | `NADA_INTEGRATION_QDRANT=1` | Live Qdrant |
-| `test_search_index_reconcile_live.py` | `NADA_INTEGRATION_NADA_API=1` | Only network to the configured NADA instance's admin API — **no Docker/backend needed**. Verified live against `nada-demo.ihsn.org`; this is the one test class that catches a live API not matching its own documented spec, which is exactly the class of bug (`dataset_type` location) found this way earlier — mocked tests structurally cannot catch that. |
+| `test_search_index_reconcile_live.py` | `NADA_INTEGRATION_NADA_API=1` | Network access to the configured NADA instance's admin API — **no Docker/backend needed**. This verifies compatibility with the live API in addition to mocked unit tests. |
 
 ---
 
