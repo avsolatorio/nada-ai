@@ -17,6 +17,11 @@ describes the deployment and is not a NADA setting.
 
 There is one engine setting, not one per search. Site settings win over the config files, which only supply defaults.
 
+In Site configurations > Search each engine is a collapsible section (Database, Solr, OpenSearch, nada-ai); the active one is
+marked, and "Use this engine" selects one (saved with the section's Save button). nada-ai is one section for both
+`nada_ai_*` values: a choice of the engine it runs (OpenSearch or Qdrant), then the connection, the outage behaviour and an
+Advanced fold, so the settings both engines share appear once.
+
 ## What each engine does
 
 | `search_engine` | Studies | Variables | Citations |
