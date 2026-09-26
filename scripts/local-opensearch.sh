@@ -61,6 +61,10 @@ nada_ai_env() {
   # being recorded as NADA's source of truth for "is this idno indexed."
   export NADA_REPORT_SEARCH_INDEX_STATE_ENABLED=true
   export NADA_RECONCILE_SEARCH_INDEX_ENABLED=false
+  # Local scratch instance on 127.0.0.1: admin auth off, as it always ran. The key is unset because nada-ai refuses
+  # to start with both. To run it with auth, drop these two lines and export NADA_ADMIN_API_KEY instead.
+  unset NADA_ADMIN_API_KEY
+  export NADA_ADMIN_AUTH_DISABLED=true
   # requests per minute per caller; NADA is the only caller, so the whole site shares this. To be reviewed.
   export NADA_RATE_LIMIT_SEARCH_PER_MINUTE="${NADA_RATE_LIMIT_SEARCH_PER_MINUTE:-1000}"
   export NADA_DYNAMIC_FILTER_FACETS_PATH="$STATE/dynamic_filter_facets.json"

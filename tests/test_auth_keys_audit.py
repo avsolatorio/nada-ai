@@ -9,13 +9,16 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock
 
+import pytest
 from starlette.testclient import TestClient
 
 from nada_ai.app import admin as admin_module
 from nada_ai.app.jobs import JobRegistry
+from nada_ai.app.keys_store import KeyStoreError, Role, create_key
 from nada_ai.app.main import app, state
 from nada_ai.app.rate_limit import RateLimiter
 from nada_ai.search.ports import SearchOutcome
+from nada_ai.settings import Settings
 
 
 def _fresh_state() -> None:
@@ -27,9 +30,28 @@ def _isolate_stores(monkeypatch, tmp_path):
     monkeypatch.setenv("NADA_AUDIT_LOG_PATH", str(tmp_path / "audit.log"))
 
 
-def test_unconfigured_server_is_fail_open(monkeypatch, tmp_path):
-    """No env key and no stored keys => admin routes remain open (dev default)."""
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+def _issue_key(tmp_path, role: Role) -> tuple[str, str]:
+    """Write a key straight into the store (no route: issuing one over HTTP needs an admin already)."""
+    settings = Settings(api_keys_path=str(tmp_path / "api_keys.json"))
+    record, raw_key = asyncio.run(create_key("seed", role, settings, asyncio.Lock()))
+    return raw_key, record.id
+
+
+def test_unconfigured_server_answers_503_not_anonymous_admin(monkeypatch, tmp_path):
+    """No env key, no stored key, auth not disabled => protected routes refuse everyone, with the reason."""
+    _isolate_stores(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        _fresh_state()
+        r = client.get("/jobs")
+        with_header = client.get("/jobs", headers={"X-NADA-Admin-Key": "anything"})
+    assert r.status_code == with_header.status_code == 503
+    assert "NADA_ADMIN_API_KEY" in r.json()["detail"]
+    assert "NADA_ADMIN_AUTH_DISABLED" in r.json()["detail"]
+
+
+def test_auth_disabled_lets_every_caller_through(monkeypatch, tmp_path):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     # /admin/index is OpenSearch-only (_require_opensearch) — pin the backend
     # explicitly rather than relying on whatever NADA_SEARCH_BACKEND defaults to.
     monkeypatch.setenv("NADA_SEARCH_BACKEND", "opensearch")
@@ -40,6 +62,79 @@ def test_unconfigured_server_is_fail_open(monkeypatch, tmp_path):
         _fresh_state()
         r = client.post("/admin/index", json={"recreate": False})
     assert r.status_code == 202
+
+
+def test_startup_refuses_auth_disabled_with_an_env_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    monkeypatch.setenv("NADA_ADMIN_API_KEY", "secret")
+    _isolate_stores(monkeypatch, tmp_path)
+
+    with pytest.raises(RuntimeError, match="NADA_ADMIN_AUTH_DISABLED"), TestClient(app):
+        pass
+
+
+def test_startup_refuses_auth_disabled_with_an_active_stored_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    _isolate_stores(monkeypatch, tmp_path)
+    _issue_key(tmp_path, Role.read)
+
+    with pytest.raises(RuntimeError, match="NADA_ADMIN_AUTH_DISABLED"), TestClient(app):
+        pass
+
+
+def test_revoking_the_last_stored_key_does_not_open_the_server(monkeypatch, tmp_path):
+    _isolate_stores(monkeypatch, tmp_path)
+    admin_key, admin_id = _issue_key(tmp_path, Role.admin)
+
+    with TestClient(app) as client:
+        _fresh_state()
+        headers = {"X-NADA-Admin-Key": admin_key}
+        assert client.get("/jobs", headers=headers).status_code == 200
+        assert client.delete(f"/admin/keys/{admin_id}", headers=headers).status_code == 200
+        after = client.get("/jobs")
+    assert after.status_code == 503
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{not json",
+        '["a list, not an object"]',
+        '{"keys": "not a list"}',
+        '{"keys": [{"id": "k1", "name": "no role or hash"}]}',
+        '{"keys": [{"id": "k1", "name": "n", "role": "superuser", "key_hash": "h", "created_at": "t"}]}',
+    ],
+)
+def test_an_unreadable_key_store_answers_503_and_is_never_overwritten(monkeypatch, tmp_path, content):
+    """Treating it as "no keys" would open the server (before), or lock out every stored key silently; and creating
+    a key would overwrite the file with only the new one."""
+    _isolate_stores(monkeypatch, tmp_path)
+    monkeypatch.setenv("NADA_ADMIN_API_KEY", "legacy-secret")
+    keys_file = tmp_path / "api_keys.json"
+    keys_file.write_text('{"keys": []}', encoding="utf-8")  # readable at startup; broken while running
+
+    with TestClient(app) as client:
+        _fresh_state()
+        keys_file.write_text(content, encoding="utf-8")
+        stored = client.get("/jobs", headers={"X-NADA-Admin-Key": "nada_some_stored_key"})
+        env = client.get("/jobs", headers={"X-NADA-Admin-Key": "legacy-secret"})
+        create = client.post(
+            "/admin/keys", json={"name": "x", "role": "read"}, headers={"X-NADA-Admin-Key": "legacy-secret"}
+        )
+    assert stored.status_code == 503
+    assert env.status_code == 200  # the env key never reads the store
+    assert create.status_code == 503
+    assert keys_file.read_text(encoding="utf-8") == content
+
+
+def test_startup_fails_on_an_unreadable_key_store(monkeypatch, tmp_path):
+    """Also with the env key set, which on its own would never read the store."""
+    _isolate_stores(monkeypatch, tmp_path)
+    monkeypatch.setenv("NADA_ADMIN_API_KEY", "legacy-secret")
+    (tmp_path / "api_keys.json").write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(KeyStoreError), TestClient(app):
+        pass
 
 
 def test_legacy_env_key_creates_and_scopes_new_keys(monkeypatch, tmp_path):
@@ -84,9 +179,7 @@ def test_write_role_key_cannot_perform_admin_actions(monkeypatch, tmp_path):
         assert r.status_code == 200
 
         # ...but cannot create keys (requires admin role)
-        r = client.post(
-            "/admin/keys", json={"name": "x", "role": "read"}, headers={"X-NADA-Admin-Key": raw_key}
-        )
+        r = client.post("/admin/keys", json={"name": "x", "role": "read"}, headers={"X-NADA-Admin-Key": raw_key})
         assert r.status_code == 403
 
         # ...and cannot mutate facets (requires write role)

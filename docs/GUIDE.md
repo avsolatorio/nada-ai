@@ -671,8 +671,17 @@ Every admin/catalog/facets/webhook/job route (everything under `/admin/*` and
 | `NADA_ADMIN_API_KEY` | Legacy super-admin key. Checked directly against the environment (not part of `Settings`, deliberately — see the trust-boundary note in [Connecting to NADA](#connecting-to-nada)). Presented as header `X-NADA-Admin-Key`. | `admin` |
 | Per-caller API keys | Issued via `POST /admin/keys` (`app/keys_admin.py`), stored hashed at `NADA_API_KEYS_PATH` (default `config/api_keys.json`), revocable. | scoped at issuance |
 
-If **neither** exists, the server runs fully unauthenticated with a loud startup
-warning — fine for local dev, never acceptable for anything reachable over a network.
+Auth is always on. If **neither** is configured, every protected route answers 503
+("no admin credentials configured") — never anonymous access. The env key is also how
+the first per-caller key is issued, since `POST /admin/keys` needs an admin; revoking
+the last stored key locks stored-key callers out and leaves the env key working.
+
+A key store file that exists but cannot be read or parsed fails startup, and answers
+503 at runtime: it is never treated as "no keys", and never overwritten.
+
+For local development only, `NADA_ADMIN_AUTH_DISABLED=true` turns auth off: every
+caller is `admin`, logged as an error at startup. The server refuses to start when it
+is set while `NADA_ADMIN_API_KEY` or an active stored key is configured too.
 
 Every mutating action is recorded to an append-only JSONL audit trail
 (`NADA_AUDIT_LOG_PATH`, default `config/audit.log`), queryable via `GET /admin/audit`.
@@ -767,6 +776,7 @@ in `src/nada_ai/settings.py` unless noted.
 | Variable | Default | Purpose |
 |---|---|---|
 | `NADA_ADMIN_API_KEY` | unset | Legacy super-admin key (see [Admin API](#admin-api-auth-rbac-audit-rate-limiting)) |
+| `NADA_ADMIN_AUTH_DISABLED` | `false` | Local development only: every caller is admin. Refused at startup together with any credential |
 | `NADA_API_KEYS_PATH` | `config/api_keys.json` | Per-caller API key store (hashed) |
 | `NADA_AUDIT_LOG_PATH` | `config/audit.log` | Append-only JSONL audit trail |
 | `NADA_RATE_LIMIT_SEARCH_PER_MINUTE` | `120` | Cap on public search endpoints (`0` disables) |

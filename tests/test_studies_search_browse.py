@@ -194,9 +194,12 @@ def test_a_query_defaults_to_relevance_descending() -> None:
 
 
 @contextmanager
-def _running(monkeypatch: pytest.MonkeyPatch, client_mock: Any, backend: str = "opensearch") -> Iterator[TestClient]:
+def _running(
+    monkeypatch: pytest.MonkeyPatch, client_mock: Any, backend: str = "opensearch", *, auth_disabled: bool = True
+) -> Iterator[TestClient]:
     monkeypatch.setenv("NADA_SEARCH_BACKEND", backend)
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    if auth_disabled:
+        monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         previous = state.client
         state.client = client_mock
@@ -310,7 +313,7 @@ def test_facets_are_not_implemented(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_debug_output_needs_the_admin_role(monkeypatch: pytest.MonkeyPatch) -> None:
     with _running(monkeypatch, _os()) as client:
-        # unconfigured dev instances treat every caller as admin, so debug is available...
+        # with auth disabled every caller is admin, so debug is available...
         requests = _post(client, {"include_debug": True}).json()["debug"]["opensearch_requests"]
         assert requests[0]["track_total_hits"] is True
 
@@ -464,8 +467,8 @@ def test_no_implemented_modes_means_study_search_is_unsupported(monkeypatch: pyt
 
 
 def test_access_errors_come_before_validation_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    with _running(monkeypatch, _os()) as client:
-        monkeypatch.setenv("NADA_ADMIN_API_KEY", "secret")
+    monkeypatch.setenv("NADA_ADMIN_API_KEY", "secret")
+    with _running(monkeypatch, _os(), auth_disabled=False) as client:
         response = _post(client, {"limit": 0})
         ok = _post(client, {}, headers={"X-NADA-Admin-Key": "secret"})
     assert response.status_code == 401

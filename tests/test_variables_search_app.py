@@ -20,7 +20,7 @@ from nada_ai.app.main import app, state
 @contextmanager
 def _running(monkeypatch: pytest.MonkeyPatch, backend: str, **overrides: Any) -> Iterator[TestClient]:
     monkeypatch.setenv("NADA_SEARCH_BACKEND", backend)
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         previous = {name: getattr(state, name) for name in overrides}
         for name, value in overrides.items():

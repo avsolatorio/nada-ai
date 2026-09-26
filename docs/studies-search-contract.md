@@ -26,8 +26,9 @@ which engine is running and what it supports.
 
 ## 2. Authentication and limits
 
-- Role `read` (existing role model), key in the `X-NADA-Admin-Key` header. In an unconfigured dev instance the existing
-  fail-open behaviour applies. Same rate limiter as `POST /search`.
+- Role `read` (existing role model), key in the `X-NADA-Admin-Key` header. With no credential configured nada-ai
+  answers `backend_unavailable` (503); `NADA_ADMIN_AUTH_DISABLED=true` turns auth off for local development. Same rate
+  limiter as `POST /search`.
 - **Open question 1** below: whether to also accept `Authorization: Bearer` (which NADA already sends today).
 
 ## 3. `GET /info`
@@ -189,7 +190,7 @@ All errors on these routes use one envelope and never the framework default:
 | `offset_out_of_range` | 422 | `offset + limit` is beyond what the mode can page |
 | `unsupported_capability` | 501 | The active engine cannot do this (for example `studies_search` on Qdrant) |
 | `index_not_ready` | 503 | Index missing, empty or being rebuilt |
-| `backend_unavailable` | 503 | The engine cannot be reached |
+| `backend_unavailable` | 503 | The engine cannot be reached, or access cannot be checked (no credential configured, key store unreadable) |
 | `embedding_unavailable` | 503 | The embedding model failed and the request required semantic search |
 | `unauthorized` | 401 | Missing or invalid key |
 | `forbidden` | 403 | Key role too low |
