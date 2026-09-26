@@ -4,7 +4,6 @@ import asyncio
 import dataclasses
 import json
 import logging
-import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -21,7 +20,7 @@ from opensearchpy.exceptions import NotFoundError, RequestError
 from nada_ai import __version__
 from nada_ai.app.admin import admin_router, jobs_router
 from nada_ai.app.audit_admin import audit_router
-from nada_ai.app.auth import require_role, resolve_principal
+from nada_ai.app.auth import check_auth_config, key_store_error_handler, require_role, resolve_principal
 from nada_ai.app.catalog_admin import catalog_router
 from nada_ai.app.citations_search import citations_router
 from nada_ai.app.demo_preview import render_pdf_page_png, resolve_document_pdf_path
@@ -29,7 +28,7 @@ from nada_ai.app.facets_admin import facets_router
 from nada_ai.app.info import info_router
 from nada_ai.app.jobs import JobRegistry
 from nada_ai.app.keys_admin import keys_router
-from nada_ai.app.keys_store import Role
+from nada_ai.app.keys_store import KeyStoreError, Role
 from nada_ai.app.logging_setup import configure_logging
 from nada_ai.app.metrics import MetricsRegistry
 from nada_ai.app.metrics_admin import metrics_router
@@ -64,6 +63,7 @@ mcp_app = mcp.http_app(path="/mcp")
 async def lifespan(app: FastAPI):
     state.settings = Settings()
     configure_logging(state.settings.log_format, state.settings.log_level)
+    await check_auth_config(state.settings)
     if state.settings.search_backend == "opensearch":
         state.client = build_async_client(state.settings)
     else:
@@ -85,14 +85,6 @@ async def lifespan(app: FastAPI):
 
         state.reconcile_scheduler_task = asyncio.create_task(
             reconcile_loop(state), name="search-index-reconcile-scheduler"
-        )
-
-    if not os.getenv("NADA_ADMIN_API_KEY"):
-        logger.warning(
-            "SECURITY: NADA_ADMIN_API_KEY is not set — admin, webhook, and "
-            "warmup endpoints are unauthenticated until at least one API key "
-            "is issued via POST /admin/keys. Set the env var or create a key "
-            "before exposing the server on any network."
         )
 
     async with mcp_app.router.lifespan_context(mcp_app):
@@ -122,6 +114,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="NADA AI Search", version=__version__, lifespan=lifespan)
 app.add_exception_handler(StudiesApiError, studies_error_handler)
+app.add_exception_handler(KeyStoreError, key_store_error_handler)
 app.add_exception_handler(RequestValidationError, studies_validation_handler)
 app.include_router(info_router)
 app.include_router(studies_router)

@@ -52,7 +52,10 @@ def studies_guard(min_role: Role = Role.read):
         try:
             return await authenticate(x_admin_key=x_admin_key, s=s)
         except HTTPException as e:
-            code = ErrorCode.unauthorized if e.status_code == 401 else ErrorCode.forbidden
+            # 503: auth is on and cannot be checked (no credentials configured, or the key store is unreadable).
+            code = {401: ErrorCode.unauthorized, 503: ErrorCode.backend_unavailable}.get(
+                e.status_code, ErrorCode.forbidden
+            )
             raise StudiesApiError(code, str(e.detail)) from e
 
     return dependency

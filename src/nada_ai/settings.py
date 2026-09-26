@@ -191,6 +191,11 @@ class Settings(BaseSettings):
     #: see ``ingest/progress.py``.
     ingest_checkpoint_dir: str | None = Field(default=None)
 
+    #: Turn admin authentication off: every caller of a protected route (``/admin/*``, ``/webhooks/*``, ``/jobs``,
+    #: ``/info``, ``/studies/search``) is admin. For local development only; off by default, and the server refuses
+    #: to start when it is on while ``NADA_ADMIN_API_KEY`` or an active stored key is also configured.
+    admin_auth_disabled: bool = Field(default=False)
+
     #: Override path to the API keys store (default ``config/api_keys.json``).
     #: Contains only key hashes/prefixes, never raw key values — still keep out of version control.
     api_keys_path: str | None = Field(default=None)

@@ -19,7 +19,7 @@ def _fresh_state() -> None:
 
 
 def test_batch_index_validates_idnos(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
         r = client.post("/admin/catalog/index", json={"idnos": ["   ", ""], "metadata_type": "indicator"})
@@ -31,7 +31,7 @@ def test_batch_index_singleflight_and_passes_all_options(monkeypatch):
     /admin/ingest/by-ids was removed) — assert it still single-flights on
     (metadata_type, idnos) and still forwards recreate_index/show_progress_bar/
     buffer_size through to index_ids_op, same as the route it replaced."""
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     gate = threading.Event()
     captured: dict = {}
 
@@ -63,7 +63,7 @@ def test_batch_index_singleflight_and_passes_all_options(monkeypatch):
 
 
 def test_batch_delete_validates_idnos(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
         r = client.post("/admin/catalog/delete", json={"idnos": ["   ", ""]})
@@ -71,7 +71,7 @@ def test_batch_delete_validates_idnos(monkeypatch):
 
 
 def test_batch_delete_calls_op_with_all_idnos(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     captured: dict = {}
 
     def fake_op(settings, idnos):
@@ -90,7 +90,7 @@ def test_batch_delete_calls_op_with_all_idnos(monkeypatch):
 
 
 def test_batch_delete_error_path_returns_503(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
 
     def failing_op(settings, idnos):
         raise RuntimeError("backend down")
@@ -132,7 +132,7 @@ def test_delete_by_idnos_op_dispatches_by_backend(monkeypatch):
 
 
 def test_embedding_drift_no_model_loaded(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
 
     fake_vectors = MagicMock()
     fake_vectors.size = 384
@@ -162,7 +162,7 @@ def test_embedding_drift_no_model_loaded(monkeypatch):
 
 
 def test_embedding_drift_mismatch_warns(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
 
     fake_vectors = MagicMock()
     fake_vectors.size = 384
@@ -195,7 +195,7 @@ def test_embedding_drift_mismatch_warns(monkeypatch):
 
 
 def test_embedding_drift_matching_dimensions(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
 
     fake_vectors = MagicMock()
     fake_vectors.size = 384

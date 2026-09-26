@@ -32,10 +32,13 @@ def _fixture(name: str) -> dict[str, Any]:
 
 
 @contextmanager
-def _running(monkeypatch: pytest.MonkeyPatch, backend: str, **overrides: Any) -> Iterator[TestClient]:
+def _running(
+    monkeypatch: pytest.MonkeyPatch, backend: str, *, auth_disabled: bool = True, **overrides: Any
+) -> Iterator[TestClient]:
     """The app with the given backend, and ``overrides`` swapped onto the shared state for the duration."""
     monkeypatch.setenv("NADA_SEARCH_BACKEND", backend)
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    if auth_disabled:
+        monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         previous = {name: getattr(state, name) for name in overrides}
         for name, value in overrides.items():
@@ -209,14 +212,24 @@ def test_unreachable_qdrant_is_a_contract_error(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_authentication_errors_use_the_contract_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
-    with _running(monkeypatch, "opensearch", client=_opensearch()) as client:
-        monkeypatch.setenv("NADA_ADMIN_API_KEY", "secret")
+    monkeypatch.setenv("NADA_ADMIN_API_KEY", "secret")
+    with _running(monkeypatch, "opensearch", auth_disabled=False, client=_opensearch()) as client:
         missing = client.get("/info")
         wrong = client.get("/info", headers={"X-NADA-Admin-Key": "nope"})
         ok = client.get("/info", headers={"X-NADA-Admin-Key": "secret"})
     assert missing.status_code == wrong.status_code == 401
     assert ErrorResponse.model_validate(missing.json()).error.code.value == "unauthorized"
     assert ok.status_code == 200
+
+
+def test_unconfigured_auth_uses_the_contract_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Auth on and no credential configured: 503 backend_unavailable with the reason, not anonymous access."""
+    with _running(monkeypatch, "opensearch", auth_disabled=False, client=_opensearch()) as client:
+        response = client.get("/info")
+    assert response.status_code == 503
+    error = ErrorResponse.model_validate(response.json()).error
+    assert error.code.value == "backend_unavailable"
+    assert "NADA_ADMIN_API_KEY" in error.message
 
 
 def test_rate_limit_errors_use_the_contract_envelope(monkeypatch: pytest.MonkeyPatch) -> None:

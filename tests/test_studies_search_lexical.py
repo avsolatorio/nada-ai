@@ -417,7 +417,7 @@ def test_matches_are_paged_like_any_other_result() -> None:
 @contextmanager
 def _running(monkeypatch: pytest.MonkeyPatch, client_mock: Any) -> Iterator[TestClient]:
     monkeypatch.setenv("NADA_SEARCH_BACKEND", "opensearch")
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         previous = state.client
         state.client = client_mock

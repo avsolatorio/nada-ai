@@ -47,8 +47,8 @@ def test_admin_auth_required_when_env_set(monkeypatch):
     assert r.status_code == 401
 
 
-def test_admin_auth_optional_when_env_unset(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+def test_admin_auth_disabled_lets_every_caller_through(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     monkeypatch.setattr(admin_module, "create_index_op", lambda settings, recreate=False: {"index": "x", "dim": 0})
 
     with TestClient(app) as client:
@@ -71,7 +71,7 @@ def test_admin_auth_passes_with_correct_key(monkeypatch):
 
 
 def test_put_index_template_returns_json(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     monkeypatch.setattr(
         admin_module,
         "put_index_template_op",
@@ -95,7 +95,7 @@ def test_put_index_template_requires_admin_key_when_configured(monkeypatch):
 
 
 def test_put_index_template_501_when_qdrant(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
         prev_settings, prev_client = state.settings, state.client
@@ -109,7 +109,7 @@ def test_put_index_template_501_when_qdrant(monkeypatch):
 
 
 def test_create_index_returns_409_when_already_running(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     gate = threading.Event()
 
     def slow(settings, recreate=False):
@@ -130,7 +130,7 @@ def test_create_index_returns_409_when_already_running(monkeypatch):
 
 
 def test_jobs_list_and_get(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     monkeypatch.setattr(
         admin_module,
         "create_index_op",
@@ -160,7 +160,8 @@ def test_jobs_list_and_get(monkeypatch):
         assert job_id in ids
 
 
-def test_jobs_get_404():
+def test_jobs_get_404(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
         r = client.get("/jobs/nope")
@@ -168,7 +169,7 @@ def test_jobs_get_404():
 
 
 def test_ingest_from_catalog_singleflight(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     gate = threading.Event()
 
     def slow(settings, catalog_type="timeseries", *args, **kwargs):
@@ -192,7 +193,7 @@ def test_ingest_from_catalog_singleflight(monkeypatch):
 def test_ingest_from_catalog_works_under_qdrant(monkeypatch):
     """index_from_catalog_op dispatches through search.factory.create_ingest_writer,
     which is backend-agnostic — this route must not require an OpenSearch client."""
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     monkeypatch.setattr(
         admin_module,
         "index_from_catalog_op",
@@ -218,7 +219,7 @@ def test_ingest_from_catalog_works_under_qdrant(monkeypatch):
 
 
 def test_ingest_from_catalog_all_submits_one_job_per_type(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     seen_types: list[str] = []
 
     def fake(settings, catalog_type="timeseries", *a, **kw):
@@ -250,7 +251,7 @@ def test_ingest_from_catalog_all_submits_one_job_per_type(monkeypatch):
 
 
 def test_ingest_from_catalog_all_reports_already_running_type(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     gate = threading.Event()
 
     def slow(settings, catalog_type="timeseries", *a, **kw):
@@ -275,7 +276,7 @@ def test_ingest_from_catalog_all_reports_already_running_type(monkeypatch):
 
 
 def test_ingest_from_catalog_all_recreates_once_not_per_type(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     recreate_calls: list[bool] = []
 
     def fake_create_index_op(settings, recreate=False):
@@ -304,7 +305,7 @@ def test_ingest_from_catalog_all_recreates_once_not_per_type(monkeypatch):
 
 
 def test_ingest_reconcile_triggers_poll_once(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     mock_poll_once = AsyncMock(return_value={"polled": 3})
     monkeypatch.setattr("nada_ai.app.reconcile_scheduler.poll_once", mock_poll_once)
 
@@ -317,7 +318,7 @@ def test_ingest_reconcile_triggers_poll_once(monkeypatch):
 
 
 def test_search_index_diff_missing_list_returns_items(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     from nada_ai.ingest.search_index_sync import DiffItem, DiffPage
 
     monkeypatch.setattr(
@@ -335,7 +336,7 @@ def test_search_index_diff_missing_list_returns_items(monkeypatch):
 
 
 def test_search_index_diff_missing_list_passes_has_error_through(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     from nada_ai.ingest.search_index_sync import DiffPage
 
     mock_list = MagicMock(return_value=DiffPage(items=[], total=0))
@@ -349,7 +350,7 @@ def test_search_index_diff_missing_list_passes_has_error_through(monkeypatch):
 
 
 def test_search_index_diff_stale_list_returns_items(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     from nada_ai.ingest.search_index_sync import DiffItem, DiffPage
 
     monkeypatch.setattr(
@@ -367,7 +368,7 @@ def test_search_index_diff_stale_list_returns_items(monkeypatch):
 
 
 def test_search_index_diff_missing_list_400_when_not_configured(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     from nada_ai.ingest.search_index_sync import SearchIndexSyncError
 
     def raises(*a, **kw):
@@ -382,7 +383,7 @@ def test_search_index_diff_missing_list_400_when_not_configured(monkeypatch):
 
 
 def test_search_index_diff_summary_returns_counts(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     from nada_ai.ingest.search_index_sync import DiffItem, DiffPage, ObjectTypeSummary
 
     monkeypatch.setattr(
@@ -416,7 +417,7 @@ def test_search_index_diff_summary_returns_counts(monkeypatch):
 
 
 def test_search_index_type_breakdown_returns_items(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     from nada_ai.ingest.search_index_sync import TypeBreakdownItem
 
     monkeypatch.setattr(
@@ -440,7 +441,7 @@ def test_search_index_type_breakdown_returns_items(monkeypatch):
 
 
 def test_search_index_type_breakdown_400_when_not_configured(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     from nada_ai.ingest.search_index_sync import SearchIndexSyncError
 
     def raises(*a, **kw):
@@ -455,7 +456,7 @@ def test_search_index_type_breakdown_400_when_not_configured(monkeypatch):
 
 
 def test_search_index_diff_summary_400_when_not_configured(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     from nada_ai.ingest.search_index_sync import SearchIndexSyncError
 
     def raises(*a, **kw):
@@ -470,7 +471,7 @@ def test_search_index_diff_summary_400_when_not_configured(monkeypatch):
 
 
 def test_search_index_reconcile_diff_submits_job(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     monkeypatch.setenv("NADA_REPORT_SEARCH_INDEX_STATE_ENABLED", "true")
     fake_summary = {"missing_total": 0, "stale_total": 0, "indexed": 0, "deleted": 0, "failed": 0, "skipped": 0}
     monkeypatch.setattr("nada_ai.ingest.search_index_sync.reconcile_diff_once", lambda settings, **kw: fake_summary)
@@ -486,7 +487,7 @@ def test_search_index_reconcile_diff_submits_job(monkeypatch):
 
 def test_search_index_reconcile_diff_400_without_state_reporting(monkeypatch):
     """Refused up front, not submitted as a job that fails (or, before, stopped after one page)."""
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     monkeypatch.setenv("NADA_REPORT_SEARCH_INDEX_STATE_ENABLED", "false")
     called = []
     monkeypatch.setattr("nada_ai.ingest.search_index_sync.reconcile_diff_once", lambda settings, **kw: called.append(1))
@@ -500,7 +501,7 @@ def test_search_index_reconcile_diff_400_without_state_reporting(monkeypatch):
 
 
 def test_search_index_reconcile_diff_singleflights_per_object_type(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     monkeypatch.setenv("NADA_REPORT_SEARCH_INDEX_STATE_ENABLED", "true")
     gate = threading.Event()
 
@@ -524,7 +525,7 @@ def test_search_index_reconcile_diff_singleflights_per_object_type(monkeypatch):
 
 def test_search_index_reconcile_diff_singleflights_per_data_type(monkeypatch):
     """Reconciling one data_type must not collide with, or block, another."""
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     monkeypatch.setenv("NADA_REPORT_SEARCH_INDEX_STATE_ENABLED", "true")
     gate = threading.Event()
 
@@ -551,7 +552,7 @@ def test_search_index_reconcile_diff_writes_progress_onto_the_job(monkeypatch):
     """The route must bind JobRegistry.set_progress to the submitted job id
     *before* the worker runs, same as index_from_catalog — otherwise Jobs
     shows '—' for the whole reconcile."""
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     monkeypatch.setenv("NADA_REPORT_SEARCH_INDEX_STATE_ENABLED", "true")
     started = threading.Event()
     captured: dict = {}
@@ -591,7 +592,7 @@ def test_search_index_reconcile_diff_writes_progress_onto_the_job(monkeypatch):
 def test_search_index_status_returns_status(monkeypatch):
     from nada_ai.ingest.search_index_sync import SearchIndexStatus
 
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     mock_get_status = MagicMock(
         return_value=SearchIndexStatus(
             status="ok",
@@ -616,7 +617,7 @@ def test_search_index_status_returns_status(monkeypatch):
 def test_search_index_status_400_when_not_configured(monkeypatch):
     from nada_ai.ingest.search_index_sync import SearchIndexSyncError
 
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     mock_get_status = MagicMock(side_effect=SearchIndexSyncError("No search-index base URL configured."))
     monkeypatch.setattr("nada_ai.ingest.search_index_sync.get_status", mock_get_status)
 
@@ -627,7 +628,7 @@ def test_search_index_status_400_when_not_configured(monkeypatch):
 
 
 def test_search_index_status_503_on_unexpected_error(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     mock_get_status = MagicMock(side_effect=RuntimeError("boom"))
     monkeypatch.setattr("nada_ai.ingest.search_index_sync.get_status", mock_get_status)
 
@@ -649,7 +650,7 @@ def test_qdrant_search_backend_exposes_public_client_property():
 
 
 def test_qdrant_collection_endpoint_returns_info(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     from nada_ai.search.backend.qdrant.search_backend import QdrantSearchBackend
 
     fake_info = MagicMock()
@@ -676,7 +677,7 @@ def test_qdrant_collection_endpoint_returns_info(monkeypatch):
 
 def test_index_delete_drops_chunk_study_and_variable_indexes(monkeypatch):
     """The whole search store: dropping only the chunk index left /studies/search and /variables/search serving."""
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
         prev_settings, prev_client = state.settings, state.client
@@ -699,7 +700,7 @@ def test_index_delete_tolerates_an_index_that_never_existed(monkeypatch):
     """A deployment that never indexed variables has no variable index; that is not a failure."""
     from opensearchpy.exceptions import NotFoundError
 
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
         prev_settings, prev_client = state.settings, state.client
@@ -722,7 +723,7 @@ def test_index_delete_tolerates_an_index_that_never_existed(monkeypatch):
 
 
 def _variables_stats(monkeypatch, client_mock, backend="opensearch", path="/admin/variables/stats"):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
         prev_settings, prev_client = state.settings, state.client
@@ -801,7 +802,7 @@ def _post_variables_sync(monkeypatch, body, *, backend="opensearch", seen=None):
     """POST /admin/variables/sync with the operation replaced, so the job records what it was asked to do."""
     import nada_ai.app.admin as admin_module
 
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
 
     def fake(settings, idnos, *, progress_cb=None, cancel_token=None):
         if seen is not None:
@@ -846,7 +847,8 @@ def test_variables_sync_is_501_on_qdrant(monkeypatch):
     assert _post_variables_sync(monkeypatch, {}, backend="qdrant").status_code == 501
 
 
-def test_index_delete_requires_confirm():
+def test_index_delete_requires_confirm(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
         r = client.delete("/admin/index")
@@ -854,7 +856,7 @@ def test_index_delete_requires_confirm():
 
 
 def test_catalog_type_counts_combines_qdrant_facet_and_catalog_totals(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     from nada_ai.search.backend.qdrant.search_backend import QdrantSearchBackend
 
     def fake_search_metadata(params):
@@ -898,7 +900,7 @@ def test_catalog_type_counts_combines_qdrant_facet_and_catalog_totals(monkeypatc
 
 
 def test_catalog_type_counts_501_when_not_qdrant_backend(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
         prev_settings = state.settings
@@ -911,7 +913,7 @@ def test_catalog_type_counts_501_when_not_qdrant_backend(monkeypatch):
 
 
 def test_catalog_type_counts_survives_one_catalog_type_being_unreachable(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     from nada_ai.search.backend.qdrant.search_backend import QdrantSearchBackend
 
     def flaky_search_metadata(params):
@@ -942,7 +944,7 @@ def test_catalog_type_counts_survives_one_catalog_type_being_unreachable(monkeyp
 
 
 def test_qdrant_collection_delete_requires_confirm(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
         prev_settings = state.settings
@@ -955,7 +957,7 @@ def test_qdrant_collection_delete_requires_confirm(monkeypatch):
 
 
 def test_qdrant_collection_delete_501_when_not_qdrant_backend(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
         prev_settings = state.settings
@@ -968,7 +970,7 @@ def test_qdrant_collection_delete_501_when_not_qdrant_backend(monkeypatch):
 
 
 def test_qdrant_collection_delete_drops_collection(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     from nada_ai.search.backend.qdrant.search_backend import QdrantSearchBackend
 
     with TestClient(app) as client:
@@ -994,7 +996,7 @@ def test_ingest_from_catalog_reports_live_progress(monkeypatch):
     """progress_cb passed into index_from_catalog_op must land on the job's
     own progress field, readable via GET /jobs/{id} before the job finishes —
     this is what a dashboard polls for a live progress bar."""
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     gate = threading.Event()
 
     def fake(settings, catalog_type="timeseries", *args, progress_cb=None, **kwargs):
@@ -1023,7 +1025,7 @@ def test_ingest_from_catalog_reports_live_progress(monkeypatch):
 
 
 def test_index_stats_passes_through_async_client(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     fake = MagicMock()
 
     with TestClient(app) as client:
@@ -1056,7 +1058,7 @@ def test_index_stats_passes_through_async_client(monkeypatch):
 
 
 def test_admin_doc_get_passes_through(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
 
     fake = MagicMock()
     fake.search = AsyncMock(
@@ -1086,7 +1088,8 @@ def test_admin_doc_get_passes_through(monkeypatch):
     assert body["hits"][0]["_id"] == "abc"
 
 
-def test_jobs_list_invalid_status_returns_400():
+def test_jobs_list_invalid_status_returns_400(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
         r = client.get("/jobs?status=bogus")
@@ -1094,7 +1097,7 @@ def test_jobs_list_invalid_status_returns_400():
 
 
 def test_cancel_running_job_via_endpoint(monkeypatch):
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     gate = threading.Event()
 
     def slow(settings, recreate=False):
@@ -1132,7 +1135,7 @@ def test_webhook_and_admin_index_dedupe_same_idno(monkeypatch):
     import nada_ai.app.catalog_admin as catalog_admin_module
     import nada_ai.app.webhooks as webhooks_module
 
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     gate = threading.Event()
 
     def slow_index(settings, idnos, metadata_type, force, embedding=None):
@@ -1175,7 +1178,7 @@ def _citations_call(monkeypatch, method, path, *, body=None, backend="opensearch
     """Call an /admin/citations route with the operation replaced, so a sync job records what it was asked to do."""
     import nada_ai.app.admin as admin_module
 
-    monkeypatch.delenv("NADA_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     seen = []
 
     def fake(settings, ids, *, progress_cb=None, cancel_token=None):

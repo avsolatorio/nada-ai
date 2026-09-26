@@ -33,6 +33,11 @@ from nada_ai.settings import Settings
 _DEFAULT_KEYS_PATH = Path(__file__).resolve().parents[3] / "config" / "api_keys.json"
 
 
+class KeyStoreError(RuntimeError):
+    """The key store file exists but cannot be read or parsed. Never treated as "no keys": that would lock out every
+    stored key silently, and ``create_key``/``revoke_key`` would overwrite the file with what they could read."""
+
+
 class Role(StrEnum):
     read = "read"
     write = "write"
@@ -74,15 +79,19 @@ def _hash_key(raw_key: str) -> str:
 
 
 def _load_all(settings: Settings | None) -> list[KeyRecord]:
+    """Every stored key. A missing file is an empty store; anything else that goes wrong raises :class:`KeyStoreError`."""
     path = _resolve_keys_path(settings)
-    if not path.is_file():
+    if not path.exists():
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise KeyStoreError(f"API key store {path} is unreadable: {e}") from e
+    keys = data.get("keys") if isinstance(data, dict) else None
+    if not isinstance(keys, list):
+        raise KeyStoreError(f'API key store {path} is malformed: expected {{"keys": [...]}}')
     out: list[KeyRecord] = []
-    for raw in data.get("keys", []):
+    for i, raw in enumerate(keys):
         try:
             out.append(
                 KeyRecord(
@@ -95,8 +104,8 @@ def _load_all(settings: Settings | None) -> list[KeyRecord]:
                     revoked_at=raw.get("revoked_at"),
                 )
             )
-        except (KeyError, ValueError):
-            continue
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            raise KeyStoreError(f"API key store {path} is malformed: key #{i}: {e!r}") from e
     return out
 
 

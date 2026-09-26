@@ -9,11 +9,12 @@ Two credential sources feed a single :class:`Principal`:
 2. The per-caller key store (:mod:`nada_ai.app.keys_store`) — individually
    issued, revocable, role-scoped API keys created via ``POST /admin/keys``.
 
-If neither an env key nor any stored key exists, the server is in an
-unconfigured (local-dev) state: requests are let through anonymously as
-role ``admin`` with a one-time warning — the same fail-open behaviour this
-module replaces. As soon as either credential source is configured, auth
-is strictly enforced for every request.
+Auth is always enforced unless ``NADA_ADMIN_AUTH_DISABLED=true`` turns it off
+explicitly (local development): then every caller is ``admin``. With auth on
+and no credential configured at all, protected routes answer 503 — never
+anonymous access. A key store that cannot be read also answers 503 (see
+:class:`~nada_ai.app.keys_store.KeyStoreError`), except for the env key, which
+never touches the store.
 """
 
 from __future__ import annotations
@@ -22,16 +23,22 @@ import hmac
 import logging
 import os
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 
-from nada_ai.app.keys_store import ROLE_RANK, Role, has_any_active_keys, verify_key
+from nada_ai.app.keys_store import ROLE_RANK, KeyStoreError, Role, has_any_active_keys, verify_key
 from nada_ai.app.state import AppState, get_state
+from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 ADMIN_API_KEY_ENV = "NADA_ADMIN_API_KEY"
+ADMIN_AUTH_DISABLED_ENV = "NADA_ADMIN_AUTH_DISABLED"
 
-_UNCONFIGURED_WARNED = False
+NO_CREDENTIALS_MESSAGE = (
+    f"no admin credentials configured: set {ADMIN_API_KEY_ENV}, "
+    f"or {ADMIN_AUTH_DISABLED_ENV}=true for local development only"
+)
 
 
 class Principal:
@@ -47,18 +54,34 @@ class Principal:
         return f"Principal(id={self.id!r}, name={self.name!r}, role={self.role!r}, source={self.source!r})"
 
 
-def _warn_unconfigured() -> None:
-    global _UNCONFIGURED_WARNED
-    if not _UNCONFIGURED_WARNED:
-        logger.warning(
-            "SECURITY: no admin credentials configured (%s unset and no API "
-            "keys issued) — all admin/webhook endpoints are unauthenticated. "
-            "Set %s or create a key via POST /admin/keys before exposing the "
-            "server on any network.",
-            ADMIN_API_KEY_ENV,
-            ADMIN_API_KEY_ENV,
+KEY_STORE_UNREADABLE_MESSAGE = "the API key store is unreadable; see the server log"
+
+
+async def key_store_error_handler(_request: Request, exc: KeyStoreError) -> JSONResponse:
+    """503 for a key store that cannot be read outside ``require_role`` (the key routes, ``/search``'s debug check)."""
+    logger.error("API key store: %s", exc)
+    return JSONResponse(status_code=503, content={"detail": KEY_STORE_UNREADABLE_MESSAGE})
+
+
+async def check_auth_config(settings: Settings) -> None:
+    """Startup check. Raises when auth is disabled while credentials are configured too — someone who adds a key for
+    production and leaves the flag set would believe they are protected. Logs an error when auth is disabled, or on
+    and nothing is configured. A key store that cannot be read raises :class:`KeyStoreError`."""
+    has_stored_keys = await has_any_active_keys(settings)  # always read, so a broken store fails startup
+    has_credentials = bool(os.getenv(ADMIN_API_KEY_ENV)) or has_stored_keys
+    if settings.admin_auth_disabled:
+        if has_credentials:
+            raise RuntimeError(
+                f"{ADMIN_AUTH_DISABLED_ENV}=true but admin credentials are configured "
+                f"({ADMIN_API_KEY_ENV} or an active stored key): remove one of them"
+            )
+        logger.error(
+            "SECURITY: %s=true — admin authentication is off, every caller of a protected route is admin. "
+            "For local development only.",
+            ADMIN_AUTH_DISABLED_ENV,
         )
-        _UNCONFIGURED_WARNED = True
+    elif not has_credentials:
+        logger.error("SECURITY: %s; protected routes answer 503 until then", NO_CREDENTIALS_MESSAGE)
 
 
 async def resolve_principal(x_admin_key: str | None, s: AppState) -> Principal | None:
@@ -85,12 +108,16 @@ def require_role(min_role: Role):
         x_admin_key: str | None = Header(default=None, alias="X-NADA-Admin-Key"),
         s: AppState = Depends(get_state),
     ) -> Principal:
-        legacy = os.getenv(ADMIN_API_KEY_ENV)
-        if not legacy and not await has_any_active_keys(s.settings):
-            _warn_unconfigured()
-            return Principal(id="anonymous", name="unauthenticated (unconfigured)", role=Role.admin, source="none")
+        if s.settings.admin_auth_disabled:
+            return Principal(id="anonymous", name="unauthenticated (auth disabled)", role=Role.admin, source="none")
 
-        principal = await resolve_principal(x_admin_key, s)
+        try:
+            principal = await resolve_principal(x_admin_key, s)
+            if principal is None and not os.getenv(ADMIN_API_KEY_ENV) and not await has_any_active_keys(s.settings):
+                raise HTTPException(status_code=503, detail=NO_CREDENTIALS_MESSAGE)
+        except KeyStoreError as e:
+            logger.error("admin auth: %s", e)
+            raise HTTPException(status_code=503, detail=KEY_STORE_UNREADABLE_MESSAGE) from e
         if principal is None:
             raise HTTPException(status_code=401, detail="invalid or missing X-NADA-Admin-Key")
         if ROLE_RANK[principal.role] < ROLE_RANK[min_role]:
@@ -100,4 +127,13 @@ def require_role(min_role: Role):
     return dependency
 
 
-__all__ = ["ADMIN_API_KEY_ENV", "Principal", "Role", "require_role", "resolve_principal"]
+__all__ = [
+    "ADMIN_API_KEY_ENV",
+    "ADMIN_AUTH_DISABLED_ENV",
+    "Principal",
+    "Role",
+    "check_auth_config",
+    "key_store_error_handler",
+    "require_role",
+    "resolve_principal",
+]
