@@ -405,6 +405,8 @@ def _raise_if_not_indexed(idno: str, result: dict[str, Any]) -> None:
     would drop out of NADA's "missing" diff, so neither the queue nor ``reconcile_diff_once`` would retry it."""
     reasons = list(_error_by_idno(result["load_errors"], result["empty_docs"]).values())
     reasons += [_attribute_write_error(e)[1] for e in result["errors"]]
+    # A full index of a study includes its variables; their sync never raises, so read what it reported.
+    reasons += [f"variables: {reason}" for reason in ((result.get("variables") or {}).get("failed") or {}).values()]
     if reasons:
         raise SearchIndexSyncError(f"index reported no success for idno {idno!r}: {'; '.join(reasons)}")
 
@@ -699,7 +701,8 @@ def reconcile_diff_once(
             # that didn't raise does not by itself mean this idno got indexed.
             # Since this call is scoped to exactly one idno, any of these being
             # non-empty can only be about *this* idno.
-            if result.get("load_errors") or result.get("empty_docs") or result.get("errors"):
+            variables_failed = (result.get("variables") or {}).get("failed")
+            if result.get("load_errors") or result.get("empty_docs") or result.get("errors") or variables_failed:
                 summary["failed"] += 1
                 logger.warning("diff reconcile: index reported no success for idno=%s: %s", item.idno, result)
             else:

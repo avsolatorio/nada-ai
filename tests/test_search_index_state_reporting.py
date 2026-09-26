@@ -147,7 +147,7 @@ def test_index_ids_op_syncs_variables_for_microdata():
     assert mock_sync.call_count == 2
     synced = {c.args[1] for c in mock_sync.call_args_list}
     assert synced == {"A", "B"}
-    assert result["variables"] == {"indexed": 6, "errors": []}
+    assert result["variables"] == {"indexed": 6, "errors": [], "failed": {}}
 
 
 def test_index_ids_op_skips_variables_for_a_failed_idno():
@@ -209,6 +209,64 @@ def test_index_ids_op_variable_sync_failure_does_not_fail_the_call():
 
     assert result["indexed"] == 1  # the study/chunk indexing itself still succeeded
     assert result["variables"]["errors"] == [{"idno": "A", "error": "boom"}]
+
+
+def _reported(mock_report) -> dict[str, tuple[str, str | None]]:
+    items = mock_report.call_args.args[1]
+    return {i["object_key"]: (i["status"], i.get("error")) for i in items}
+
+
+def test_index_ids_op_reports_a_study_whose_variables_failed_as_failed():
+    """A full index of a study is study + chunks + variables: a study whose variables did not all land is not
+    indexed, or NADA drops it from its "missing" diff and nothing retries its variables."""
+    import nada_ai.ingest.service as service_module
+
+    def sync(settings, idno, **_):
+        return {"indexed": 1, "errors": [{"index": {"status": 400}}] if idno == "A" else []}
+
+    fake = _fake_run_bulk_index_with_one_failure("__none__")
+    with (
+        patch.object(service_module, "run_bulk_index", fake),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report,
+        patch("nada_ai.ingest.variables_index.sync_survey_variables_op", side_effect=sync),
+    ):
+        result = service_module.index_ids_op(_settings(search_backend="opensearch"), ["A", "B"], "microdata")
+
+    assert _reported(mock_report) == {"A": ("failed", "variables: 1 write error(s)"), "B": ("indexed", None)}
+    assert result["variables"]["failed"] == {"A": "1 write error(s)"}
+
+
+def test_index_ids_op_reports_a_study_whose_variable_sync_raised_as_failed():
+    import nada_ai.ingest.service as service_module
+
+    fake = _fake_run_bulk_index_with_one_failure("__none__")
+    with (
+        patch.object(service_module, "run_bulk_index", fake),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report,
+        patch("nada_ai.ingest.variables_index.sync_survey_variables_op", side_effect=RuntimeError("boom")),
+    ):
+        service_module.index_ids_op(_settings(search_backend="opensearch"), ["A"], "microdata")
+
+    assert _reported(mock_report) == {"A": ("failed", "variables: boom")}
+
+
+def test_a_cancelled_variable_sync_counts_every_study_not_synced_as_failed():
+    import nada_ai.ingest.service as service_module
+    from nada_ai.ingest.progress import CancelToken
+
+    token = CancelToken()
+
+    def sync(settings, idno, **_):
+        token.set()  # cancelled during the first study, after it finished
+        return {"indexed": 1, "errors": []}
+
+    with patch("nada_ai.ingest.variables_index.sync_survey_variables_op", side_effect=sync):
+        result = service_module._sync_variables_best_effort(_settings(), ["A", "B", "C"], cancel_token=token)
+
+    assert result["failed"] == {
+        "B": "cancelled before its variables were synced",
+        "C": "cancelled before its variables were synced",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +388,7 @@ def test_index_from_catalog_op_syncs_variables_of_microdata_rows_only(tmp_path, 
     result, mock_sync = _run_catalog(tmp_path, monkeypatch, rows, settings=_settings(search_backend="opensearch"))
 
     assert {c.args[1] for c in mock_sync.call_args_list} == {"M1", "M2"}  # never the document row
-    assert result["variables"] == {"indexed": 4, "errors": []}
+    assert result["variables"] == {"indexed": 4, "errors": [], "failed": {}}
 
 
 def test_index_from_catalog_op_skips_variables_of_a_study_that_failed_to_load(tmp_path, monkeypatch):
@@ -366,6 +424,42 @@ def test_index_from_catalog_op_skips_variables_when_cancelled(tmp_path, monkeypa
     )
     mock_sync.assert_not_called()
     assert result["cancelled"] is True
+
+
+def test_a_cancelled_catalog_run_reports_its_microdata_studies_failed_not_indexed(tmp_path, monkeypatch):
+    """Their variables were never synced, so they are not fully indexed: a reconcile must retry them."""
+    import nada_ai.ingest.service as service_module
+    from nada_ai.ingest.progress import CancelToken
+
+    monkeypatch.setenv("NADA_INGEST_CHECKPOINT_DIR", str(tmp_path))
+    token = CancelToken()
+
+    def fake_run_bulk_index(settings, pairs, **kwargs):
+        for idno, _ in pairs:
+            kwargs["progress"].mark(idno, ok=True)
+        token.set()  # cancelled once the studies were written, before the variables
+        return len(pairs), None
+
+    rows = [{"idno": "M1", "type": "microdata"}, {"idno": "D1", "type": "document"}]
+    with (
+        patch("ai4data.discovery.catalog.get_metadata_ids", lambda params, **kw: rows),
+        patch("ai4data.discovery.catalog.is_extract_mode", return_value=False),
+        patch.object(service_module, "run_bulk_index", fake_run_bulk_index),
+        patch("nada_ai.ingest.search_index_sync.report_state_bulk") as mock_report,
+        patch("nada_ai.ingest.variables_index.sync_survey_variables_op") as mock_sync,
+    ):
+        service_module.index_from_catalog_op(
+            _settings(search_backend="opensearch"),
+            catalog_type="microdata",
+            show_progress_bar=False,
+            cancel_token=token,
+        )
+
+    mock_sync.assert_not_called()
+    assert _reported(mock_report) == {
+        "D1": ("indexed", None),
+        "M1": ("failed", "variables: cancelled before its variables were synced"),
+    }
 
 
 # ---------------------------------------------------------------------------

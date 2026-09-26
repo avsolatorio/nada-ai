@@ -25,8 +25,10 @@ tuning, an eval harness), the deliberate scope decision here was:
   one NADA call per microdata study (a run over thousands of documents makes none). NADA's own
   `change_class="variables"` signal (fired by `Dataset_microdata_model::index_variable_data()` after a DDI/
   data-dictionary re-import — variables changed, nothing else did) syncs *only* the variables, through the same
-  queue `search_index_sync.py` polls for studies, without a full reindex. Sync is best-effort: a failure never fails
-  the study index it rode in on, and is reported in the result's `variables` block.
+  queue `search_index_sync.py` polls for studies, without a full reindex. A variable sync failure never stops the
+  study index it rode in on (it is reported in the result's `variables` block, `failed` per idno), but that study is
+  not indexed: it is reported `failed` to NADA's `search_index_state`, its queue item is acked failed, and
+  reconcile-diff counts it failed, so it is retried. A cancelled run's microdata studies count as failed the same way.
 - **Removal follows the study.** Deleting a study (by idno or `sid`, including reconcile's stale deletions) deletes
   its variables with it, and recreating or dropping the index drops the variable index along with the chunk and
   study indexes (`DELETE /admin/index` used to drop only the chunk index, leaving both other indexes serving). An
