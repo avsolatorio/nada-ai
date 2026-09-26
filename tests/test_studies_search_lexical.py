@@ -355,6 +355,20 @@ def test_title_completeness_is_case_and_punctuation_insensitive() -> None:
     assert _title_is_complete_match("HIGH-RESOLUTION angola!", "high resolution, Angola.")
 
 
+def test_title_completeness_needs_at_least_three_real_words() -> None:
+    """Titles are long: one or two words in a title single nothing out; a broad query would match a large part of
+    the catalog."""
+    assert not _title_is_complete_match("census", "Population and Housing Census 2011")
+    assert not _title_is_complete_match("housing census", "Population and Housing Census 2011")
+    assert not _title_is_complete_match("the housing census", "Population and Housing Census 2011")  # two real words
+    assert _title_is_complete_match("housing census 2011", "Population and Housing Census 2011")
+
+
+def test_title_completeness_ignores_accents_like_the_index() -> None:
+    assert _title_is_complete_match("cote d'ivoire survey", "Côte d'Ivoire Enquête Survey 2018")
+    assert _title_is_complete_match("enquête côte 2018", "Cote d'Ivoire Enquete 2018")
+
+
 def test_a_matching_idno_is_a_term_query_on_the_idno_field() -> None:
     client = _client(idno_match=_idno_response([_idno_hit(234, "AGO_2020_HRPM_GEO_v01_M", "geospatial")]))
     page = asyncio.run(exact_idno_match(_job(client, query="AGO_2020_HRPM_GEO_v01_M")))

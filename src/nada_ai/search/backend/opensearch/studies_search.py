@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import unicodedata
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -380,22 +381,32 @@ _QUERY_STOPWORDS = frozenset(
 
 _WORD = re.compile(r"[^\W\d_]+|\d+", re.UNICODE)
 
+#: A title match is promoted (see ``hybrid``) only for a query of at least this many real words. Study titles are
+#: long: one or two words in a title single nothing out (163 of 1,383 local titles contain "census"), and promoting
+#: every such title would push every study only the semantic leg found off the first pages. On the golden queries
+#: this costs hybrid nDCG@10 0.839 -> 0.832 ("population census" and "census 2011" lose the promotion), accepted.
+#: No cap on how many are promoted: a cap (5 or 10) cost 0.839 -> 0.828/0.831.
+_TITLE_PROMOTION_MIN_WORDS = 3
+
 
 def _title_words(text: str) -> set[str]:
-    """The words of a title or query, lowercased (no stemming, no accent folding -- good enough for a set-membership
-    check; the analyzed index fields do the real matching)."""
-    return set(_WORD.findall(text.casefold()))
+    """The words of a title or query, lowercased and without accents, as the index's ``nada_text`` analyzer reads
+    them (no stemming there either -- good enough for a set-membership check; the analyzed fields do the real
+    matching)."""
+    folded = "".join(c for c in unicodedata.normalize("NFKD", text.casefold()) if not unicodedata.combining(c))
+    return set(_WORD.findall(folded))
 
 
 def _title_is_complete_match(query: str, title: str) -> bool:
-    """Whether every real word of ``query`` (stopwords aside) appears somewhere in ``title``, in any order.
+    """Whether every real word of ``query`` (stopwords aside) appears somewhere in ``title``, in any order -- for a
+    query of at least ``_TITLE_PROMOTION_MIN_WORDS`` real words; a shorter one never matches.
 
     Used to keep a study whose title plainly says what was searched from being outranked, in hybrid mode, by
     studies the fusion happens to rank higher (see ``hybrid``): rank fusion only counts position, not how decisive
     a keyword match is, so a title that names every word of the query is a stronger signal than a fused rank.
     """
     needed = _title_words(query) - _QUERY_STOPWORDS
-    return bool(needed) and needed <= _title_words(title)
+    return len(needed) >= _TITLE_PROMOTION_MIN_WORDS and needed <= _title_words(title)
 
 
 def _dataset_type(hit: dict[str, Any]) -> str:
