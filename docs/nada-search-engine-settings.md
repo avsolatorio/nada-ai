@@ -38,8 +38,8 @@ that gains a search is used without a NADA change. Solr and NADA's OpenSearch ha
 variable view is still served by the database for them.
 
 **nada-ai must run what the setting says.** NADA reads the engine nada-ai reports (`/info`). If it differs from the
-`nada_ai_*` value, catalog searches fail with a message naming both, and the settings page shows a warning; NADA does not
-guess. This also catches a nada-ai that was restarted on another backend, whose index would be empty or of the wrong kind.
+`nada_ai_*` value, catalog searches fail with a message naming both, and the semantic search dashboard shows a banner; NADA
+does not guess. The settings page itself never contacts nada-ai. This also catches a nada-ai that was restarted on another backend, whose index would be empty or of the wrong kind.
 
 ## When nada-ai does not answer
 
