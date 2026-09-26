@@ -348,12 +348,7 @@ async def admin_ingest_from_catalog_all(
     return IndexFromCatalogAllResponse(recreated=body.recreate_index, jobs=results)
 
 
-#: catalog_type (what /admin/ingest/from-catalog accepts and what NADA's own
-#: search API's `type` param expects) -> the stored `metadata.type` value
-#: langdocs actually get indexed under. These differ for three of the nine
-#: (timeseries, survey, timeseriesdb) — timeseries/survey confirmed against
-#: live data, not assumed: a dashboard comparing "catalog total" against
-#: "indexed count" must filter Qdrant on the right-hand side.
+#: Catalog API type -> the stored metadata type used by the index.
 _STORED_TYPE_BY_CATALOG_TYPE: dict[str, str] = {
     "document": "document",
     "timeseries": "indicator",

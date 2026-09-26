@@ -231,8 +231,7 @@ def delete_by_sids_op(settings: Settings, sids: list[int]) -> dict[str, Any]:
 
     The ``sid`` is the key nada-ai stores in ``metadata.sid`` on each document (see ``search.documents``).
 
-    Unlike the idno operations this does not report to NADA's ``search_index_state``: those reports are
-    still keyed by idno, and reporting by id needs a NADA-side change (tracked in the plan).
+    Unlike the idno operations this does not report to NADA's ``search_index_state``, which is keyed by idno.
     """
     clean = list(dict.fromkeys(int(s) for s in sids))
     if not clean or any(s <= 0 for s in clean):
@@ -703,15 +702,9 @@ def index_from_catalog_op(
     Returns ``{"indexed", "errors", "load_errors", "empty_docs", "rows",
     "resumed_skipped", "cancelled", "catalog_type", "index", "quality", "variables"}``. ``variables`` is
     ``{"indexed", "errors"}`` for the microdata studies of this run (see ``_sync_variables_best_effort``), else ``None``.
-    ``errors`` is write-time failures against the search backend; ``load_errors``
-    is per-idno failures fetching/parsing metadata *before* a document was even
-    built (previously silently logged and dropped — see ``ingest/pipeline.py``).
-    ``empty_docs`` is idnos that loaded without error but produced zero
-    documents (no langdocs, or all-empty content) — without this, ``indexed``
-    could be well below ``rows`` with both ``errors`` and ``load_errors`` empty
-    and no explanation anywhere for the gap. ``quality`` is a non-blocking
-    report of thin/malformed source documents *that were built* — see
-    ``ingest/quality.py``. None of these three ever affect what gets indexed.
+    ``errors`` contains backend write failures; ``load_errors`` contains per-idno metadata fetch or parsing failures;
+    ``empty_docs`` records studies that produced no indexable content. ``quality`` reports thin or malformed source
+    documents without blocking indexing. These fields explain gaps between requested and indexed records.
 
     ``resume=True`` loads any existing checkpoint for this ``catalog_type``
     (see ``ingest/progress.py``) and skips idnos it already recorded as done —

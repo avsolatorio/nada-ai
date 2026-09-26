@@ -36,9 +36,7 @@ logger = logging.getLogger(__name__)
 
 info_router = APIRouter()
 
-#: Study search modes each engine implements. OpenSearch's come from its executors (``studies_search.EXECUTORS``), so
-#: a mode is advertised exactly when it is served; steps 6-7 of ``docs/opensearch-standard-search-plan.md`` add
-#: ``lexical``, ``semantic`` and ``hybrid`` there. Qdrant keeps the legacy ``POST /search`` path and stays empty.
+#: Study-search modes implemented by each engine. OpenSearch derives these from its executors; Qdrant exposes none.
 IMPLEMENTED_STUDY_MODES: dict[Engine, frozenset[str]] = {
     Engine.opensearch: OPENSEARCH_STUDY_MODES,
     Engine.qdrant: frozenset(),

@@ -1,7 +1,5 @@
 # Standard study search contract
 
-Status: **approved** (step 1 of `docs/opensearch-standard-search-plan.md`). No endpoint implements this yet.
-
 Models: `src/nada_ai/app/studies_schemas.py`. Sample payloads: `tests/fixtures/studies_search/`. Contract tests:
 `tests/test_studies_contract.py`.
 

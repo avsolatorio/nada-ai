@@ -4,11 +4,10 @@ How the study search was measured and how its defaults were chosen. Reproduce wi
 
 ## Method
 
-- **Catalog.** The full NADA catalog of the development instance: 1391 published studies (914 documents, 199
+- **Catalog.** A full NADA catalog snapshot: 1391 published studies (914 documents, 199
   time series, 190 surveys, and smaller types), indexed with the real embedding model
   (`microsoft/harrier-oss-v1-270m`, 640 dimensions) into 1387 study documents and 1932 chunks. Four studies are not
-  indexed (see findings). About 65 studies are placeholder or test records; they stay in the index on purpose and count
-  as false positives when returned.
+  indexed (see findings). Placeholder and test records in the snapshot count as false positives when returned.
 - **Golden queries** (`eval/golden_queries.json`, 67 queries): navigational (12), topical (12), acronym (7),
   semantic paraphrase (10), topic plus country filter (5), typo (6), multilingual (4), year (4), document (2) and
   negative (5). The expected studies come from rules over catalog fields (title tokens, or title, abstract and keywords
@@ -84,8 +83,8 @@ prefers recall can lower `NADA_STUDIES_LEXICAL_RELATIVE_CUTOFF` and `NADA_STUDIE
 
 ## Limits of this evaluation
 
-- The catalog is a development instance with many placeholder records; results on a curated production catalog will differ,
-  and the thresholds should be re-checked there with `eval/run_golden.py`.
+- Results and tuned thresholds depend on the catalog snapshot; re-evaluate them against the target catalog with
+  `eval/run_golden.py` before deployment.
 - Relevance rules are a proxy for judgement (semantic, multilingual and document queries most of all).
 - Page-level passages are not measured: the documents in the catalog carry metadata only.
 - 62 positive queries make differences below about 0.01 nDCG noise.
