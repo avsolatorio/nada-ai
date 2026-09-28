@@ -105,6 +105,16 @@ def test_sync_stops_between_pages_when_cancelled() -> None:
     assert run.written == [[1]]
 
 
+def test_sync_does_not_delete_existing_variables_when_already_cancelled() -> None:
+    token = CancelToken()
+    token.set()
+    with _Run([[_variable(1)]]) as run:
+        result = vi.sync_survey_variables_op(_settings(), "S-1", cancel_token=token)
+
+    assert result == {"idno": "S-1", "indexed": 0, "errors": [], "cancelled": True}
+    run.client.delete_by_query.assert_not_called()
+
+
 def test_backfill_reports_progress_with_the_first_pages_total() -> None:
     progress: list[dict] = []
 
@@ -132,3 +142,15 @@ def test_backfill_stops_when_cancelled() -> None:
         result = vi.backfill_variables_op(_settings(), show_progress_bar=False, cancel_token=token)
     assert result["cancelled"] is True and result["seen"] == 0
     assert run.written == []
+
+
+def test_backfill_does_not_recreate_index_when_already_cancelled() -> None:
+    token = CancelToken()
+    token.set()
+    with _Run([]) as run:
+        result = vi.backfill_variables_op(
+            _settings(), show_progress_bar=False, recreate_index=True, cancel_token=token
+        )
+
+    assert result == {"seen": 0, "indexed": 0, "errors": [], "total": None, "cancelled": True}
+    run.client.indices.delete.assert_not_called()

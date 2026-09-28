@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from itertools import batched
 from typing import Any
 
 import ai4data.discovery.catalog.extract as catalog_extract
 import httpx
 from opensearchpy.helpers import bulk
 
+from nada_ai.ingest.batching import batched
 from nada_ai.ingest.extract_access import ExtractError, request_kwargs
 from nada_ai.ingest.progress import CancelToken
 from nada_ai.nada.admin_auth import scrub_admin_credentials
@@ -109,6 +109,8 @@ def backfill_citations_op(
     """
     client = build_client(settings)
     try:
+        if cancel_token is not None and cancel_token.is_set():
+            return {"seen": 0, "indexed": 0, "errors": [], "total": None, "cancelled": True}
         if recreate_index and client.indices.exists(index=settings.citations_index):
             client.indices.delete(index=settings.citations_index)
         ensure_citations_index(client, settings)
