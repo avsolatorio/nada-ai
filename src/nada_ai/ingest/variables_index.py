@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from itertools import batched, chain
+from itertools import chain
 from typing import Any
 
 import ai4data.discovery.catalog.extract as catalog_extract
 from opensearchpy.helpers import bulk
 
+from nada_ai.ingest.batching import batched
 from nada_ai.ingest.extract_access import ExtractError, request_kwargs
 from nada_ai.ingest.progress import CancelToken
 from nada_ai.nada.admin_auth import scrub_admin_credentials
@@ -96,6 +97,8 @@ def sync_survey_variables_op(
         except Exception as e:
             raise ExtractError(scrub_admin_credentials(str(e))) from e
 
+        if cancel_token is not None and cancel_token.is_set():
+            return {"idno": idno, "indexed": 0, "errors": [], "cancelled": True}
         client.delete_by_query(index=settings.variables_index, body={"query": {"term": {"idno": idno}}}, refresh=True)
 
         indexed = 0
@@ -141,6 +144,8 @@ def backfill_variables_op(
     """
     client = build_client(settings)
     try:
+        if cancel_token is not None and cancel_token.is_set():
+            return {"seen": 0, "indexed": 0, "errors": [], "total": None, "cancelled": True}
         if recreate_index and client.indices.exists(index=settings.variables_index):
             client.indices.delete(index=settings.variables_index)
         ensure_variables_index(client, settings)

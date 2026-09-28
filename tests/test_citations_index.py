@@ -137,6 +137,18 @@ def test_backfill_stops_between_pages_when_cancelled() -> None:
     del run
 
 
+def test_backfill_does_not_recreate_index_when_already_cancelled() -> None:
+    token = CancelToken()
+    token.set()
+    with _Run() as run, patch.object(ci.catalog_extract, "iter_extract_citations", return_value=iter(())):
+        result = ci.backfill_citations_op(
+            _settings(), show_progress_bar=False, recreate_index=True, cancel_token=token
+        )
+
+    assert result == {"seen": 0, "indexed": 0, "errors": [], "total": None, "cancelled": True}
+    run.client.indices.delete.assert_not_called()
+
+
 def test_backfill_can_recreate_the_index_first() -> None:
     with (
         _Run() as run,
