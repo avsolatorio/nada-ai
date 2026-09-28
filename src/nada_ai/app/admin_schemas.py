@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class CreateIndexRequest(BaseModel):
@@ -60,6 +60,12 @@ class IndexFromCatalogRequest(BaseModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def reject_resume_with_recreate(self) -> IndexFromCatalogRequest:
+        if self.resume and self.recreate_index:
+            raise ValueError("resume cannot be combined with recreate_index")
+        return self
+
 
 class ReconcileSearchIndexResponse(BaseModel):
     polled: int = Field(description="Pending queue items seen this poll; each was submitted as its own job.")
@@ -82,6 +88,12 @@ class IndexFromCatalogAllRequest(BaseModel):
         default=False,
         description="Applied per catalog_type — see IndexFromCatalogRequest.resume.",
     )
+
+    @model_validator(mode="after")
+    def reject_resume_with_recreate(self) -> IndexFromCatalogAllRequest:
+        if self.resume and self.recreate_index:
+            raise ValueError("resume cannot be combined with recreate_index")
+        return self
 
 
 class JobResponse(BaseModel):

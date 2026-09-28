@@ -190,6 +190,23 @@ def test_ingest_from_catalog_singleflight(monkeypatch):
         gate.set()
 
 
+def test_ingest_from_catalog_rejects_resume_with_recreate(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    index_from_catalog = MagicMock()
+    monkeypatch.setattr(admin_module, "index_from_catalog_op", index_from_catalog)
+
+    with TestClient(app) as client:
+        _fresh_state()
+        response = client.post(
+            "/admin/ingest/from-catalog",
+            json={"catalog_type": "timeseries", "resume": True, "recreate_index": True},
+        )
+
+    assert response.status_code == 422
+    assert "resume cannot be combined with recreate_index" in response.text
+    index_from_catalog.assert_not_called()
+
+
 def test_ingest_from_catalog_works_under_qdrant(monkeypatch):
     """index_from_catalog_op dispatches through search.factory.create_ingest_writer,
     which is backend-agnostic — this route must not require an OpenSearch client."""
@@ -302,6 +319,22 @@ def test_ingest_from_catalog_all_recreates_once_not_per_type(monkeypatch):
     assert r.status_code == 202
     assert r.json()["recreated"] is True
     assert recreate_calls == [True]  # exactly one recreate call, not four
+
+
+def test_ingest_from_catalog_all_rejects_resume_with_recreate(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    create_index = MagicMock()
+    monkeypatch.setattr(admin_module, "create_index_op", create_index)
+
+    with TestClient(app) as client:
+        _fresh_state()
+        response = client.post(
+            "/admin/ingest/from-catalog/all", json={"resume": True, "recreate_index": True}
+        )
+
+    assert response.status_code == 422
+    assert "resume cannot be combined with recreate_index" in response.text
+    create_index.assert_not_called()
 
 
 def test_ingest_reconcile_triggers_poll_once(monkeypatch):

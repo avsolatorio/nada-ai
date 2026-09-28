@@ -714,6 +714,9 @@ def index_from_catalog_op(
     ``cancel_token``, checked once per idno, is what makes cancelling this job
     actually stop promptly instead of running the remaining catalog anyway.
     """
+    if resume and recreate_index:
+        raise ValueError("resume cannot be combined with recreate_index")
+
     from ai4data.discovery.catalog import get_metadata_ids, is_extract_mode
 
     params: dict[str, Any] = {"sk": "", "ps": ps, "type": catalog_type, "sort_by": "year", "sort_order": "asc"}
