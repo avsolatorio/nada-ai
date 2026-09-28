@@ -80,6 +80,20 @@ def test_index_from_catalog_op_queries_nada_with_its_own_type_name(
     assert [p["type"] for p in seen_params] == [expected_api_type]
 
 
+def test_index_from_catalog_op_rejects_resume_with_recreate():
+    import nada_ai.ingest.service as service_module
+
+    with (
+        patch("ai4data.discovery.catalog.get_metadata_ids") as get_metadata_ids,
+        patch.object(service_module, "run_bulk_index") as run_bulk_index,
+        pytest.raises(ValueError, match="resume cannot be combined with recreate_index"),
+    ):
+        service_module.index_from_catalog_op(Settings(), resume=True, recreate_index=True, show_progress_bar=False)
+
+    get_metadata_ids.assert_not_called()
+    run_bulk_index.assert_not_called()
+
+
 def test_pinned_ai4data_can_handle_every_metadata_type_nada_ai_maps_to():
     handler = pytest.importorskip("ai4data.discovery.metadata.handler")
     if not hasattr(handler, "TemplatedMetadata"):
