@@ -65,8 +65,8 @@ nada_ai_env() {
   # The API is bound to loopback below, so admin auth can be disabled for this local development process.
   unset NADA_ADMIN_API_KEY
   export NADA_ADMIN_AUTH_DISABLED=true
-  # Requests per minute per caller.
-  export NADA_RATE_LIMIT_SEARCH_PER_MINUTE="${NADA_RATE_LIMIT_SEARCH_PER_MINUTE:-1000}"
+  # Requests per minute per caller; 0 disables rate limiting (the default, see .env.example).
+  export NADA_RATE_LIMIT_SEARCH_PER_MINUTE="${NADA_RATE_LIMIT_SEARCH_PER_MINUTE:-0}"
   export NADA_DYNAMIC_FILTER_FACETS_PATH="$STATE/dynamic_filter_facets.json"
   export AI4DATA_METADATA_CATALOG_URL="$NADA_URL"
   export AI4DATA_DISCOVERY_DATA_PATH="$STATE/discovery"

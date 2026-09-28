@@ -202,8 +202,10 @@ class Settings(BaseSettings):
     #: Override path to the admin audit log (default ``config/audit.log``, JSONL, append-only).
     audit_log_path: str | None = Field(default=None)
     #: Per-minute request cap (per caller: admin key if presented, else client IP) for the public
-    #: /search, /recommendations, /search/explain, and PDF preview endpoints. 0 disables.
-    rate_limit_search_per_minute: int = Field(default=120, ge=0)
+    #: /search, /recommendations, /search/explain, and PDF preview endpoints. 0 disables, and is the default: the
+    #: caller is identified by the X-NADA-Admin-Key header as sent, unverified, so a new random key per request gets a
+    #: fresh bucket. Keep it off until buckets are keyed by the verified key (and by client IP otherwise).
+    rate_limit_search_per_minute: int = Field(default=0, ge=0)
 
     #: Root logger format for the FastAPI process. ``json`` for log-aggregator environments.
     log_format: Literal["text", "json"] = Field(default="text")

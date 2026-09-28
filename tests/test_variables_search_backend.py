@@ -129,3 +129,30 @@ def test_search_variables_raises_index_not_ready_when_the_index_is_missing() -> 
     client.search.side_effect = NotFoundError(404, "index_not_found_exception", {})
     with pytest.raises(IndexNotReady):
         asyncio.run(search_variables(_job(client=client)))
+
+
+def _no_hits(client: AsyncMock, indexed: int) -> None:
+    client.search.return_value = {"took": 1, "hits": {"total": {"value": 0}, "hits": []}}
+    client.count.return_value = {"count": indexed}
+
+
+def test_search_variables_raises_index_not_ready_when_the_index_is_empty() -> None:
+    client = AsyncMock()
+    _no_hits(client, indexed=0)
+    with pytest.raises(IndexNotReady):
+        asyncio.run(search_variables(_job(client=client)))
+
+
+def test_search_variables_returns_an_empty_page_when_nothing_matches() -> None:
+    client = AsyncMock()
+    _no_hits(client, indexed=3)
+    page = asyncio.run(search_variables(_job(client=client)))
+    assert page.found == 0 and page.hits == []
+
+
+def test_index_deleted_between_search_and_count_is_not_ready() -> None:
+    client = AsyncMock()
+    client.search.return_value = {"took": 1, "hits": {"total": {"value": 0}, "hits": []}}
+    client.count.side_effect = NotFoundError(404, "index_not_found_exception", {})
+    with pytest.raises(IndexNotReady):
+        asyncio.run(search_variables(_job(client=client)))

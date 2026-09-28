@@ -38,6 +38,7 @@ def _opensearch_client(
     search_result: dict[str, Any] | None = None, *, side_effect: Exception | None = None
 ) -> MagicMock:
     client = MagicMock()
+    client.count = AsyncMock(return_value={"count": 1})  # a populated index: zero hits means nothing matched
     if side_effect is not None:
         client.search = AsyncMock(side_effect=side_effect)
     else:
@@ -165,6 +166,15 @@ def test_a_missing_index_is_index_not_ready(monkeypatch: pytest.MonkeyPatch) -> 
     from opensearchpy.exceptions import NotFoundError
 
     client = _opensearch_client(side_effect=NotFoundError(404, "index_not_found_exception", {}))
+    with _running(monkeypatch, "opensearch", client=client) as c:
+        response = c.post("/variables/search", json={"query": "household"})
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "index_not_ready"
+
+
+def test_an_empty_index_is_index_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _opensearch_client()
+    client.count = AsyncMock(return_value={"count": 0})
     with _running(monkeypatch, "opensearch", client=client) as c:
         response = c.post("/variables/search", json={"query": "household"})
     assert response.status_code == 503
