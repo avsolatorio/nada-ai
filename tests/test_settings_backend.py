@@ -42,3 +42,9 @@ def test_qdrant_forbids_none_embedding():
     """Qdrant's collection is a vector index; a deployment with no embeddings has nothing for it to store."""
     with pytest.raises(ValidationError):
         Settings(search_backend="qdrant", embedding_backend="none")
+
+
+def test_rate_limiting_is_off_by_default(monkeypatch):
+    # The limiter buckets by the admin key header as sent, unverified; keep it off until that is fixed.
+    monkeypatch.delenv("NADA_RATE_LIMIT_SEARCH_PER_MINUTE", raising=False)
+    assert Settings().rate_limit_search_per_minute == 0

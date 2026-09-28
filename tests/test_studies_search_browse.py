@@ -442,6 +442,15 @@ def test_an_empty_index_is_index_not_ready_but_an_empty_match_is_not(monkeypatch
     assert body.invariant_violations() == []
 
 
+def test_an_index_deleted_between_search_and_count_is_index_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    os_client = _os(found=0, rows=[], counts={})
+    os_client.count = AsyncMock(side_effect=NotFoundError(404, "index_not_found_exception", {}))
+    with _running(monkeypatch, os_client) as client:
+        response = _post(client)
+    assert response.status_code == 503
+    assert _error(response)[0] == "index_not_ready"
+
+
 def test_unreachable_opensearch_is_backend_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     os_client = _os()
     os_client.search = AsyncMock(side_effect=OpenSearchConnectionError("N/A", "refused", Exception("refused")))

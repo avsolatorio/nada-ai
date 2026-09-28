@@ -18,7 +18,7 @@ DOI_BOOST = 10
 
 
 class IndexNotReady(RuntimeError):
-    """Raised when the citation index does not exist yet."""
+    """Raised when the citation index does not exist yet, or holds no documents."""
 
 
 @dataclass(frozen=True)
@@ -121,11 +121,14 @@ async def search_citations(job: CitationSearchJob) -> CitationPage:
 
     try:
         response = await job.client.search(index=job.index, body=search_body(job))
+        hits = response["hits"]
+        found = hits["total"]["value"] if isinstance(hits["total"], dict) else int(hits["total"])
+        # Zero results is either "nothing matches" or "nothing is indexed" (e.g. a backfill that stopped before its
+        # first write); only the second is an error.
+        if int(found) == 0 and int((await job.client.count(index=job.index))["count"]) == 0:
+            raise IndexNotReady(job.index)
     except NotFoundError as e:
         raise IndexNotReady(job.index) from e
-
-    hits = response["hits"]
-    found = hits["total"]["value"] if isinstance(hits["total"], dict) else int(hits["total"])
     return CitationPage(
         found=int(found),
         hits=[_hit(h) for h in hits["hits"]],

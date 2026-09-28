@@ -237,8 +237,13 @@ def _by_type(response: dict[str, Any]) -> dict[str, int]:
 
 
 async def _raise_if_index_empty(job: SearchJob) -> None:
-    """Zero results is either "nothing matches" or "nothing is indexed"; only the second is an error."""
-    if int((await job.client.count(index=job.index))["count"]) == 0:
+    """Zero results is either "nothing matches" or "nothing is indexed"; only the second is an error. An index deleted
+    since the search (e.g. by a recreate) is not ready either."""
+    try:
+        response = await job.client.count(index=job.index)
+    except NotFoundError as e:
+        raise IndexNotReady(job.index) from e
+    if int(response["count"]) == 0:
         raise IndexNotReady(job.index)
 
 

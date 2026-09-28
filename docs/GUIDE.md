@@ -683,9 +683,13 @@ is set while `NADA_ADMIN_API_KEY` or an active stored key is configured too.
 Every mutating action is recorded to an append-only JSONL audit trail
 (`NADA_AUDIT_LOG_PATH`, default `config/audit.log`), queryable via `GET /admin/audit`.
 
-Public search endpoints (`/search`, `/recommendations`, `/search/explain`, PDF
-preview) are rate-limited per caller by `NADA_RATE_LIMIT_SEARCH_PER_MINUTE` (default
-`120`/min; `0` disables).
+Rate limiting of the public search endpoints (`/search`, `/recommendations`,
+`/search/explain`, PDF preview, and the study search routes) is off by default
+(`NADA_RATE_LIMIT_SEARCH_PER_MINUTE=0`). Leave it off for now: the limiter
+identifies a caller by the `X-NADA-Admin-Key` header without verifying it, so a
+caller that sends a new random key per request is never limited. Before it is
+turned back on, requests need to be counted by the verified key, and by client
+IP for missing or invalid keys.
 
 ---
 
@@ -776,7 +780,7 @@ in `src/nada_ai/settings.py` unless noted.
 | `NADA_ADMIN_AUTH_DISABLED` | `false` | Local development only: every caller is admin. Refused at startup together with any credential |
 | `NADA_API_KEYS_PATH` | `config/api_keys.json` | Per-caller API key store (hashed) |
 | `NADA_AUDIT_LOG_PATH` | `config/audit.log` | Append-only JSONL audit trail |
-| `NADA_RATE_LIMIT_SEARCH_PER_MINUTE` | `120` | Cap on public search endpoints (`0` disables) |
+| `NADA_RATE_LIMIT_SEARCH_PER_MINUTE` | `0` | Cap on public search endpoints (`0` disables; keep it off, see [Admin API](#admin-api-auth-rbac-audit-rate-limiting)) |
 
 ### Logging
 
