@@ -460,11 +460,12 @@ encode+write batch, which also sets how often progress/checkpoint updates happen
 smaller means more frequent updates and less lost work if a run is stopped, at a
 small cost in per-call overhead.
 
-**Dropping the index without reindexing**: previously the only way to delete a
-Qdrant collection was bundled inside `recreate_index=True` on a full reindex call
-(`DELETE /admin/index` only ever worked for OpenSearch, 501ing under
-`NADA_SEARCH_BACKEND=qdrant`). `DELETE /admin/qdrant/collection?confirm=true`
-(role `admin`) drops the collection on its own, with no reindex attached.
+**Dropping the index without reindexing**: `DELETE /admin/index?confirm=true`
+(role `admin`) drops the search store of the configured backend, with no reindex
+attached: the OpenSearch chunk, study and variable indexes, or the Qdrant
+collection. `POST /admin/index` creates it again on either backend.
+`DELETE /admin/qdrant/collection?confirm=true` still drops the Qdrant collection
+for callers that already use it.
 
 ### Embedding drift detection
 

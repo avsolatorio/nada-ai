@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -106,6 +107,36 @@ def test_put_index_template_501_when_qdrant(monkeypatch):
         finally:
             state.settings, state.client = prev_settings, prev_client
     assert r.status_code == 501
+
+
+def test_create_index_works_under_qdrant(monkeypatch):
+    """create_index_op creates the Qdrant collection too, so this route must not be OpenSearch-only."""
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    seen: list[str] = []
+
+    def create(settings, recreate=False):
+        seen.append(settings.search_backend)
+        return {"index": settings.qdrant_collection, "dim": 0}
+
+    monkeypatch.setattr(admin_module, "create_index_op", create)
+
+    with TestClient(app) as client:
+        _fresh_state()
+        prev_settings, prev_client = state.settings, state.client
+        state.settings = Settings(search_backend="qdrant")
+        state.client = None
+        try:
+            r = client.post("/admin/index", json={"recreate": False})
+            assert r.status_code == 202
+            for _ in range(50):
+                job = client.get(f"/jobs/{r.json()['id']}").json()
+                if job["status"] == "succeeded":
+                    break
+                time.sleep(0.02)
+        finally:
+            state.settings, state.client = prev_settings, prev_client
+    assert job["status"] == "succeeded"
+    assert seen == ["qdrant"]
 
 
 def test_create_index_returns_409_when_already_running(monkeypatch):
@@ -1025,6 +1056,31 @@ def test_qdrant_collection_delete_drops_collection(monkeypatch):
     backend._client.delete_collection.assert_awaited_once_with(collection_name=expected_collection)
 
 
+def test_index_delete_drops_the_qdrant_collection_under_qdrant(monkeypatch):
+    """DELETE /admin/index works on either backend, like POST /admin/index."""
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    from nada_ai.search.backend.qdrant.search_backend import QdrantSearchBackend
+
+    with TestClient(app) as client:
+        _fresh_state()
+        prev_settings, prev_search = state.settings, state.search
+        state.settings = Settings(search_backend="qdrant")
+        backend = QdrantSearchBackend(state.settings)
+        backend._client = AsyncMock()
+        backend._client.delete_collection = AsyncMock(return_value=True)
+        state.search = backend
+        expected_collection = state.settings.qdrant_collection
+        try:
+            unconfirmed = client.delete("/admin/index")
+            r = client.delete("/admin/index?confirm=true")
+        finally:
+            state.settings, state.search = prev_settings, prev_search
+    assert unconfirmed.status_code == 400
+    assert r.status_code == 200
+    assert r.json() == {"index": expected_collection, "indexes": [expected_collection], "deleted": True}
+    backend._client.delete_collection.assert_awaited_once_with(collection_name=expected_collection)
+
+
 def test_ingest_from_catalog_reports_live_progress(monkeypatch):
     """progress_cb passed into index_from_catalog_op must land on the job's
     own progress field, readable via GET /jobs/{id} before the job finishes —
@@ -1119,6 +1175,102 @@ def test_admin_doc_get_passes_through(monkeypatch):
     assert body["idno"] == "WB_X"
     assert body["count"] == 1
     assert body["hits"][0]["_id"] == "abc"
+
+
+def _get_qdrant_docs(monkeypatch, scroll: AsyncMock):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    from nada_ai.search.backend.qdrant.search_backend import QdrantSearchBackend
+
+    with TestClient(app) as client:
+        _fresh_state()
+        prev_settings, prev_search = state.settings, state.search
+        state.settings = Settings(search_backend="qdrant")
+        backend = QdrantSearchBackend(state.settings)
+        backend._client = AsyncMock()
+        backend._client.scroll = scroll
+        state.search = backend
+        collection = state.settings.qdrant_collection
+        try:
+            return client.get("/admin/docs/WB_X"), collection
+        finally:
+            state.settings, state.search = prev_settings, prev_search
+
+
+def test_admin_docs_get_scrolls_the_qdrant_collection_by_idno(monkeypatch):
+    from qdrant_client.http import models as qm
+
+    point = qm.Record(id="p-1", payload={"metadata": {"idno": "WB_X"}, "page_content": "text"})
+    scroll = AsyncMock(return_value=([point], None))
+    r, collection = _get_qdrant_docs(monkeypatch, scroll)
+
+    assert r.status_code == 200
+    assert r.json() == {
+        "index": collection,
+        "idno": "WB_X",
+        "count": 1,
+        "hits": [{"_id": "p-1", "_score": None, "_source": {"metadata": {"idno": "WB_X"}, "page_content": "text"}}],
+    }
+    kwargs = scroll.await_args.kwargs
+    assert kwargs["collection_name"] == collection
+    assert kwargs["with_vectors"] is False
+    assert kwargs["scroll_filter"].must[0].match.value == "WB_X"
+
+
+def test_admin_docs_get_is_404_when_the_qdrant_collection_is_missing(monkeypatch):
+    import httpx
+    from qdrant_client.http.exceptions import UnexpectedResponse
+
+    scroll = AsyncMock(side_effect=UnexpectedResponse(404, "Not Found", b"", httpx.Headers()))
+    r, _ = _get_qdrant_docs(monkeypatch, scroll)
+    assert r.status_code == 404
+
+
+def _delete_docs(monkeypatch, backend: str, op_result: dict):
+    """DELETE /admin/docs/{idno} with delete_by_idno_op stubbed; returns the response and the op's calls."""
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    calls: list[tuple[str, str]] = []
+
+    def op(settings, idno):
+        calls.append((settings.search_backend, idno))
+        return op_result
+
+    monkeypatch.setattr(admin_module, "delete_by_idno_op", op)
+    with TestClient(app) as client:
+        _fresh_state()
+        prev_settings = state.settings
+        state.settings = Settings(search_backend=backend)
+        try:
+            return client.delete("/admin/docs/WB_X"), calls
+        finally:
+            state.settings = prev_settings
+
+
+def test_admin_docs_delete_removes_the_whole_study_on_opensearch(monkeypatch):
+    result = {
+        "backend": "opensearch",
+        "index": "chunks",
+        "idno": "WB_X",
+        "deleted": 4,
+        "total": 4,
+        "studies_index": "chunks-studies",
+        "studies_deleted": 1,
+        "variables_index": "chunks-variables",
+        "variables_deleted": 12,
+    }
+    r, calls = _delete_docs(monkeypatch, "opensearch", result)
+
+    assert calls == [("opensearch", "WB_X")]
+    assert r.status_code == 200
+    assert r.json() == {"index": "chunks", "deleted": 4, "matched": 4, "raw": result}
+
+
+def test_admin_docs_delete_works_under_qdrant(monkeypatch):
+    result = {"backend": "qdrant", "collection": "nada", "idno": "WB_X", "operation": "completed"}
+    r, calls = _delete_docs(monkeypatch, "qdrant", result)
+
+    assert calls == [("qdrant", "WB_X")]
+    assert r.status_code == 200
+    assert r.json() == {"index": "nada", "deleted": None, "matched": None, "raw": result}
 
 
 def test_jobs_list_invalid_status_returns_400(monkeypatch):
