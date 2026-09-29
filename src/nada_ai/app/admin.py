@@ -58,6 +58,7 @@ from nada_ai.ingest.progress import CancelToken
 from nada_ai.ingest.search_index_sync import SearchIndexStatus
 from nada_ai.ingest.service import (
     create_index_op,
+    delete_by_idno_op,
     index_from_catalog_op,
     put_index_template_op,
     setup_ingest_pipeline_op,
@@ -139,7 +140,7 @@ async def admin_create_index(
     s: AppState = Depends(get_state),
     principal: Principal = Depends(require_role(Role.admin)),
 ) -> JSONResponse:
-    _require_engine(s, "opensearch")
+    """Create the search index, or the Qdrant collection, for whichever backend is configured."""
     settings = s.settings
     recreate = body.recreate
 
@@ -660,15 +661,34 @@ async def admin_index_refresh(s: AppState = Depends(get_state)) -> dict[str, Any
         raise HTTPException(status_code=503, detail="backend unavailable") from e
 
 
+async def _drop_qdrant_collection(s: AppState, principal: Principal, *, action: str) -> str:
+    """Drop the Qdrant collection (no reindex), audited as ``action``. Returns the collection's name."""
+    client = getattr(s.search, "client", None)
+    if client is None:
+        raise HTTPException(status_code=503, detail="Qdrant search backend has no client")
+    coll = s.settings.qdrant_collection
+    try:
+        await client.delete_collection(collection_name=coll)
+    except Exception as e:
+        logger.error("qdrant delete_collection failed: %s", e)
+        await audit_log(s, principal, action=action, target=coll, status="error", detail=str(e))
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
+    await audit_log(s, principal, action=action, target=coll, status="ok")
+    return coll
+
+
 @admin_router.delete("/admin/index")
 async def admin_index_delete(
     confirm: bool = Query(default=False, description="Must be true to actually drop the index."),
     s: AppState = Depends(get_state),
     principal: Principal = Depends(require_role(Role.admin)),
 ) -> dict[str, Any]:
-    _require_engine(s, "opensearch")
+    """Drop the whole search store of the configured backend: the OpenSearch indexes, or the Qdrant collection."""
     if not confirm:
         raise HTTPException(status_code=400, detail="add ?confirm=true to drop the index")
+    if s.settings.search_backend == "qdrant":
+        coll = await _drop_qdrant_collection(s, principal, action="index.delete")
+        return {"index": coll, "indexes": [coll], "deleted": True}
     # The whole search store, not just the chunk index: the study index (what /studies/search reads) and the variable
     # index are part of it, and dropping only the chunks left both serving results after "Drop collection".
     name = s.settings.index_name
@@ -691,9 +711,40 @@ async def admin_index_delete(
         raise HTTPException(status_code=503, detail="backend unavailable") from e
 
 
+async def _qdrant_docs(s: AppState, idno: str) -> dict[str, Any]:
+    from qdrant_client.http import models as qm
+    from qdrant_client.http.exceptions import UnexpectedResponse
+
+    client = getattr(s.search, "client", None)
+    if client is None:
+        raise HTTPException(status_code=503, detail="Qdrant search backend has no client")
+    coll = s.settings.qdrant_collection
+    idno_filter = qm.Filter(must=[qm.FieldCondition(key=metadata_field("idno"), match=qm.MatchValue(value=idno))])
+    try:
+        points, _ = await client.scroll(
+            collection_name=coll, scroll_filter=idno_filter, limit=50, with_payload=True, with_vectors=False
+        )
+    except UnexpectedResponse as e:
+        if e.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"collection {coll} not found") from e
+        logger.error("qdrant scroll failed for %s: %s", idno, e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
+    except Exception as e:
+        logger.error("qdrant scroll failed for %s: %s", idno, e)
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
+    return {
+        "index": coll,
+        "idno": idno,
+        "count": len(points),
+        "hits": [{"_id": str(p.id), "_score": None, "_source": p.payload or {}} for p in points],
+    }
+
+
 @admin_router.get("/admin/docs/{idno}", dependencies=[Depends(require_role(Role.read))])
 async def admin_doc_get(idno: str, s: AppState = Depends(get_state)) -> dict[str, Any]:
-    _require_engine(s, "opensearch")
+    """The stored documents (OpenSearch) or points (Qdrant) of one idno, at most 50, in the same shape."""
+    if s.settings.search_backend == "qdrant":
+        return await _qdrant_docs(s, idno)
     name = s.settings.index_name
     body = {
         "size": 50,
@@ -724,23 +775,29 @@ async def admin_doc_delete(
     s: AppState = Depends(get_state),
     principal: Principal = Depends(require_role(Role.write)),
 ) -> DeleteDocsResponse:
-    _require_engine(s, "opensearch")
-    name = s.settings.index_name
-    body = {"query": {"term": {metadata_field("idno"): idno}}}
+    """Delete one study from the search store of the configured backend (``delete_by_idno_op``): on OpenSearch its
+    chunks, its study document and its variables; on Qdrant its points. ``deleted`` counts chunks (OpenSearch only)."""
+    from qdrant_client.http.exceptions import UnexpectedResponse
+
     try:
-        resp = await s.client.delete_by_query(index=name, body=body, refresh="true")
-    except NotFoundError as e:
-        raise HTTPException(status_code=404, detail=f"index {name} not found") from e
+        result = await asyncio.to_thread(delete_by_idno_op, s.settings, idno)
+    except UnexpectedResponse as e:
+        if e.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"collection {s.settings.qdrant_collection} not found") from e
+        logger.error("delete failed for %s: %s", idno, e)
+        await audit_log(s, principal, action="docs.delete", target=idno, status="error", detail=str(e))
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
     except Exception as e:
-        logger.error("delete_by_query failed for %s: %s", idno, e)
+        logger.error("delete failed for %s: %s", idno, e)
         await audit_log(s, principal, action="docs.delete", target=idno, status="error", detail=str(e))
         raise HTTPException(status_code=503, detail="backend unavailable") from e
     await audit_log(s, principal, action="docs.delete", target=idno, status="ok")
+    total = result.get("total")
     return DeleteDocsResponse(
-        index=name,
-        deleted=int(resp.get("deleted") or 0),
-        matched=int(resp.get("total")) if resp.get("total") is not None else None,
-        raw=resp,
+        index=result.get("collection") or result.get("index") or s.settings.index_name,
+        deleted=int(result["deleted"]) if result.get("deleted") is not None else None,
+        matched=int(total) if total is not None else None,
+        raw=result,
     )
 
 
@@ -826,26 +883,13 @@ async def admin_qdrant_collection_delete(
     s: AppState = Depends(get_state),
     principal: Principal = Depends(require_role(Role.admin)),
 ) -> dict[str, Any]:
-    """Drop the Qdrant collection — no reindex. Parity with ``DELETE /admin/index``
-    (OpenSearch), which previously had no Qdrant equivalent (this route 501'd
-    the same way every other OpenSearch-only admin route does under
-    ``NADA_SEARCH_BACKEND=qdrant``, so "delete the index" was only reachable
-    bundled inside ``recreate_index=True`` on a full reindex call).
+    """Drop the Qdrant collection — no reindex. ``DELETE /admin/index`` does the same on Qdrant; this route stays
+    for callers that already use it.
     """
     _require_engine(s, "qdrant")
     if not confirm:
         raise HTTPException(status_code=400, detail="add ?confirm=true to drop the collection")
-    client = getattr(s.search, "client", None)
-    if client is None:
-        raise HTTPException(status_code=503, detail="Qdrant search backend has no client")
-    coll = s.settings.qdrant_collection
-    try:
-        await client.delete_collection(collection_name=coll)
-    except Exception as e:
-        logger.error("qdrant delete_collection failed: %s", e)
-        await audit_log(s, principal, action="qdrant_collection.delete", target=coll, status="error", detail=str(e))
-        raise HTTPException(status_code=503, detail="backend unavailable") from e
-    await audit_log(s, principal, action="qdrant_collection.delete", target=coll, status="ok")
+    coll = await _drop_qdrant_collection(s, principal, action="qdrant_collection.delete")
     return {"collection": coll, "deleted": True}
 
 

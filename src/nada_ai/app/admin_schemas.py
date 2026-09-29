@@ -147,7 +147,8 @@ class IndexStatsResponse(BaseModel):
 
 class DeleteDocsResponse(BaseModel):
     index: str
-    deleted: int
+    #: Chunks deleted; ``None`` on Qdrant, which does not report a count.
+    deleted: int | None
     matched: int | None
     raw: dict[str, Any] | None = None
 
