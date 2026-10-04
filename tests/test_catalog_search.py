@@ -121,8 +121,18 @@ def test_build_paged_response_from_fixture():
     assert response.next_page == 2
     assert response.items[0].idno == "UIS_ADMI.GRADE2OR3PRIM.MAT"
     assert response.items[1].ts_db_title == "World Development Indicators"
-    assert response.search_counts_by_type["timeseries"] == "196"
+    assert response.search_counts_by_type["timeseries"] == 196
     assert response.params["type"] == "timeseries"
+
+
+def test_build_paged_response_accepts_integer_type_counts():
+    """The OpenSearch, Solr and nada-ai engines send the type counts as integers, MySQL as strings."""
+    from nada_ai.nada.api import _build_paged_response
+
+    result = {**SAMPLE_API_RESPONSE["result"], "search_counts_by_type": {"survey": 185, "timeseries": 196}}
+    response = _build_paged_response(CatalogSearchRequest(page_size=2, page=1), result)
+
+    assert response.search_counts_by_type == {"survey": 185, "timeseries": 196}
 
 
 def test_build_paged_response_last_page():

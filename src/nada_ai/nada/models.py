@@ -194,7 +194,7 @@ class CatalogSearchResponse(MCPPagedResponse):
 
     items: list[CatalogStudyRow] = Field(default_factory=list)
     total_pages: int | None = Field(default=None, description="Total number of pages")
-    search_counts_by_type: dict[str, str] | None = None
+    search_counts_by_type: dict[str, int] | None = None
     facets: dict[str, Any] | None = None
     params: dict[str, Any] | None = None
     error: str | None = None
