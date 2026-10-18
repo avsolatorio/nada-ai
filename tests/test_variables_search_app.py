@@ -56,24 +56,7 @@ def _opensearch_client(
 
 
 def test_a_query_is_run_and_the_response_matches_the_contract_shape(monkeypatch: pytest.MonkeyPatch) -> None:
-    hit = {
-        "_score": 9.0,
-        "_source": {
-            "uid": 1,
-            "sid": 10,
-            "idno": "IDNO-1",
-            "fid": "F1",
-            "vid": "V1",
-            "name": "hhid",
-            "label": "Household id",
-            "question": None,
-            "title": "Study one",
-            "nation": "Kenya",
-            "dataset_type": "survey",
-            "year_start": 2020,
-            "year_end": 2020,
-        },
-    }
+    hit = {"_score": 9.0, "_source": {"uid": 1, "sid": 10}}
     client = _opensearch_client({"took": 3, "hits": {"total": {"value": 1}, "hits": [hit]}})
     with _running(monkeypatch, "opensearch", client=client) as c:
         response = c.post("/variables/search", json={"query": "household"})
@@ -81,25 +64,8 @@ def test_a_query_is_run_and_the_response_matches_the_contract_shape(monkeypatch:
     body = response.json()
     assert body["engine"] == "opensearch"
     assert body["found"] == 1
-    assert body["hits"] == [
-        {
-            "rank": 1,
-            "uid": 1,
-            "sid": 10,
-            "idno": "IDNO-1",
-            "fid": "F1",
-            "vid": "V1",
-            "name": "hhid",
-            "label": "Household id",
-            "question": None,
-            "title": "Study one",
-            "nation": "Kenya",
-            "dataset_type": "survey",
-            "year_start": 2020,
-            "year_end": 2020,
-            "score": 9.0,
-        }
-    ]
+    # ids only: the caller reads the variable itself from its database
+    assert body["hits"] == [{"rank": 1, "uid": 1, "sid": 10, "score": 9.0}]
     assert body["applied"]["query"] == "household"
     assert body["applied"]["sort"] == "relevance"
 

@@ -72,19 +72,16 @@ Response:
   "offset": 0,
   "truncated": false,
   "hits": [
-    {
-      "rank": 1, "uid": 25097, "sid": 2, "idno": "EGY_2014_DHS_v01_M",
-      "fid": "F1", "vid": "V4", "name": "hv002", "label": "Household number",
-      "question": null, "title": "custom title goes here", "nation": "Egypt",
-      "dataset_type": "survey", "year_start": 2014, "year_end": 2014, "score": 12.02
-    }
+    { "rank": 1, "uid": 25097, "sid": 2, "score": 12.02 }
   ],
   "applied": { "query": "diarrhea", "filters": {}, "sort": "relevance", "order": "asc", "limit": 15, "offset": 0 },
   "timing_ms": { "total": 4.2, "engine": 3.0 }
 }
 ```
 
-`uid` is the variable's own id (`variables.uid`); `sid` is its study's NADA internal id. Every match is counted and
+A hit is ids only: `uid` is the variable's own id (`variables.uid`), `sid` is its study's NADA internal id. The caller
+reads the variable itself from its database (section 6). The variable index stores only `uid`, `sid` and `published`
+in `_source`; every other field is indexed for search, sorting and filtering, not stored. Every match is counted and
 paged (no cap, no score cutoff — same "nothing is silently dropped" rule as the study search); `truncated` is true
 when `found` exceeds `max_offset` (10,000, same limit as the study search).
 
@@ -131,17 +128,18 @@ Same envelope, same codes, same auth guard and rate limiter as the study search 
 - The NADA-side extract endpoint (`variables_get()` in `Search_metadata_extract.php`) and the extract document
   builder (`build_variable_document`/`build_variables_by_survey`/`build_variable_batch` in
   `Catalog_search_metadata_extract.php`) did not exist before this work — they were a 501 stub. Field set:
-  `uid, sid, fid, vid, name, label, question, categories`, denormalized with the owning study's
+  `uid, catalog_id, fid, vid, name, label, question, categories` (`catalog_id` is stored as the document's `sid`),
+  denormalized with the owning study's
   `idno, title, nation, dataset_type, year_start, year_end, countries` — matching NADA's own, separate legacy
   OpenSearch variable indexer (`OpenSearch_variable_indexer.php`) rather than inventing a new shape.
 
 ## 6. What NADA does with a response
 
-Same as the study search: hydrate nothing further from its own DB for the fields already denormalized here
-(`idno`, `title`, `nation`, `year_start`, `year_end`) — `Catalog_search_semantic_studies.php`'s `vsearch()`/
-`v_quick_search()` map a hit directly to the row shape its database driver already returns
-(`uid, sid, fid, vid, name, labl, qstn, title, idno, nation, year_start, year_end`), so the catalog UI is unaffected
-by which driver ran. `total` in that shape is **not** from this API: `vsearch()`'s total is the catalog-wide
+Same as the study search: NADA reads the matching variables from its own database by `uid`, in the order of the
+hits — `Catalog_search_semantic_studies.php`'s `vsearch()`/`v_quick_search()` load the row shape its database driver
+already returns (`uid, sid, fid, vid, name, labl, qstn, title, idno, nation, year_start, year_end`), so the catalog UI
+is unaffected by which driver ran. A hit whose variable (or study) is gone from the database, or whose study is not
+published, is left out. `total` in that shape is **not** from this API: `vsearch()`'s total is the catalog-wide
 published variable count, `v_quick_search()`'s is that one study's own count — both computed from NADA's database,
 the same way the pre-existing DB driver computes them.
 

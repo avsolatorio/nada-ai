@@ -330,10 +330,19 @@ def apply_study_options_op(settings: Settings, idno: str) -> dict[str, Any]:
     the caller indexes it in full.
     """
     from nada_ai.filters.metadata_extract import fetch_study_extract
+
+    sid, core_fields, filters = fetch_study_extract(settings, idno)
+    return apply_study_options_from_extract(settings, idno, sid, core_fields, filters)
+
+
+def apply_study_options_from_extract(
+    settings: Settings, idno: str, sid: int, core_fields: dict[str, Any], filters: dict[str, Any]
+) -> dict[str, Any]:
+    """:func:`apply_study_options_op` for an extract record already fetched (the scheduler fetches a page of them in
+    one request)."""
     from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, metadata_field
     from nada_ai.search.backend.opensearch.studies import study_to_source
 
-    sid, core_fields, filters = fetch_study_extract(settings, idno)
     client = build_client(settings)
     try:
         if not sids_for_idnos(client, settings.studies_index, [idno]):
@@ -355,30 +364,39 @@ def apply_study_options_op(settings: Settings, idno: str) -> dict[str, Any]:
             refresh=True,
             conflicts="proceed",
         )
+        # The variable index keeps only ids and ``published`` in its _source, so it is never updated in place (that
+        # would drop every searchable field): when the study's published status changed, its variables are synced
+        # again from NADA instead. Nothing is embedded either way.
         published = source[FILTER_FACETS_KEY].get("published") or []
-        variables = client.update_by_query(
-            index=settings.variables_index,
-            body={
-                "query": {"term": {"sid": sid}},
-                "script": {
-                    "lang": "painless",
-                    "source": "ctx._source.published = params.published",
-                    "params": {"published": int(published[0]) if published else 0},
-                },
-            },
-            refresh=True,
-            conflicts="proceed",
-            ignore_unavailable=True,
-        )
+        published = int(published[0]) if published else 0
+        variables_resynced = False
+        if _indexed_variables_published(client, settings.variables_index, sid) not in (None, published):
+            from nada_ai.ingest.variables_index import sync_survey_variables_op
+
+            errors = sync_survey_variables_op(settings, idno, sid=sid)["errors"]
+            if errors:
+                raise RuntimeError(f"variables of {idno!r}: {len(errors)} write error(s), first: {errors[0]}")
+            variables_resynced = True
         return {
             "idno": idno,
             "updated": True,
             "sid": sid,
             "chunks_updated": int(chunks.get("updated") or 0),
-            "variables_updated": int(variables.get("updated") or 0),
+            "variables_resynced": variables_resynced,
         }
     finally:
         _close_quiet(client)
+
+
+def _indexed_variables_published(client: Any, index: str, sid: int) -> int | None:
+    """The ``published`` the variable index holds for a study's variables, or None when it holds none of them."""
+    resp = client.search(
+        index=index,
+        body={"size": 1, "_source": ["published"], "query": {"term": {"sid": sid}}},
+        ignore_unavailable=True,
+    )
+    hits = (resp.get("hits") or {}).get("hits") or []
+    return int(hits[0]["_source"].get("published") or 0) if hits else None
 
 
 def put_index_template_op(settings: Settings) -> dict[str, Any]:

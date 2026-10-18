@@ -40,19 +40,10 @@ class VariableSearchJob:
 
 @dataclass(frozen=True)
 class VariableHit:
+    """A matching variable: its ids only — the caller (NADA) reads the variable itself from its database by uid."""
+
     uid: int
     sid: int
-    idno: str | None
-    fid: str | None
-    vid: str | None
-    name: str | None
-    label: str | None
-    question: str | None
-    title: str | None
-    nation: str | None
-    dataset_type: str | None
-    year_start: int | None
-    year_end: int | None
     score: float | None
 
 
@@ -93,21 +84,7 @@ def search_body(job: VariableSearchJob) -> dict[str, Any]:
         "from": job.offset,
         "track_total_hits": True,
         "query": {"bool": {"must": [lexical_query(job.query)], "filter": filter_clauses(job.filters)}},
-        "_source": [
-            "uid",
-            "sid",
-            "idno",
-            "fid",
-            "vid",
-            "name",
-            "label",
-            "question",
-            "title",
-            "nation",
-            "dataset_type",
-            "year_start",
-            "year_end",
-        ],
+        "_source": ["uid", "sid"],
     }
     if job.sort_by != "relevance":
         sort_field = _SORT_FIELDS[job.sort_by]
@@ -117,22 +94,7 @@ def search_body(job: VariableSearchJob) -> dict[str, Any]:
 
 def _hit(raw: dict[str, Any]) -> VariableHit:
     source = raw["_source"]
-    return VariableHit(
-        uid=int(source["uid"]),
-        sid=int(source["sid"]),
-        idno=source.get("idno"),
-        fid=source.get("fid"),
-        vid=source.get("vid"),
-        name=source.get("name"),
-        label=source.get("label"),
-        question=source.get("question"),
-        title=source.get("title"),
-        nation=source.get("nation"),
-        dataset_type=source.get("dataset_type"),
-        year_start=source.get("year_start"),
-        year_end=source.get("year_end"),
-        score=raw.get("_score"),
-    )
+    return VariableHit(uid=int(source["uid"]), sid=int(source["sid"]), score=raw.get("_score"))
 
 
 async def search_variables(job: VariableSearchJob) -> VariablePage:

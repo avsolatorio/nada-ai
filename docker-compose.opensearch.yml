@@ -1,9 +1,30 @@
-# Dev-only: single-node OpenSearch 3.6 LTS (no security plugin). Do not use in production.
+# Dev-only: OpenSearch 3.6 LTS (security plugin disabled) + nada-ai API (OpenSearch search, local embeddings).
+# Same layout as docker-compose.qdrant.yml, with OpenSearch in place of Qdrant. Do not use in production.
 # Build context: this repo root (`ai4data` comes from the git pin in pyproject.toml / uv.lock).
 #
-# OpenSearch data uses a named volume so the container user (UID 1000) can write without
-# `chown` on a host bind mount. For a host path instead, use
-# `./data/opensearch-data:/usr/share/opensearch/data` and run `chown -R 1000:1000 ./data/opensearch-data`.
+# Its own Compose project (`name:` below), container names and image tag, so it never replaces the Qdrant stack's
+# containers or image. Both stacks can run at once if they use different API ports (NADA_AI_PORT).
+#
+# Keep the API service's settings the same as in docker-compose.qdrant.yml (embedding, query prompt, model cache,
+# catalog, TLS); only the search backend and its URL differ. Change both files together.
+#
+# Ports are published on 127.0.0.1 only (no security on either service):
+#   API         127.0.0.1:${NADA_AI_PORT:-8020}
+#   OpenSearch  127.0.0.1:${OPENSEARCH_PORT:-9200}   (for host-side CLI / curl; the API uses the compose network)
+#
+# Required in .env: NADA_ADMIN_API_KEY (admin routes, /info and /studies/search refuse to answer without a key).
+#
+# OpenSearch data uses a named volume so the container user (UID 1000) can write without `chown` on a host bind
+# mount. For a host path instead, use `./data/opensearch-data:/usr/share/opensearch/data` and run
+# `chown -R 1000:1000 ./data/opensearch-data`.
+#
+# Usage (API + OpenSearch):
+#   docker compose -f docker-compose.opensearch.yml up -d
+#
+# OpenSearch only (no API):
+#   docker compose -f docker-compose.opensearch.yml up -d opensearch-nada
+name: nada-ai-opensearch
+
 volumes:
   opensearch-nada-data:
 
@@ -13,24 +34,32 @@ services:
       context: .
       dockerfile: Dockerfile
       network: host
-    image: nada-ai-api:local
-    container_name: nada-ai-api-dev
+    image: nada-ai-api:opensearch
+    container_name: nada-ai-api-opensearch-dev
     restart: always
     ports:
-      - "8020:8020"
+      - "127.0.0.1:${NADA_AI_PORT:-8020}:8020"
     environment:
       NADA_SEARCH_BACKEND: opensearch
+      NADA_EMBEDDING_BACKEND: local
       NADA_OPENSEARCH_URL: http://opensearch-nada:9200
-      # NADA_EMBEDDING_MODEL_ID: microsoft/harrier-oss-v1-270m
-      NADA_QUERY_PROMPT_NAME: web_search_query
-      HF_HOME: /models/huggingface
-      SENTENCE_TRANSFORMERS_HOME: /models/sentence_transformers
-      AI4DATA_DISCOVERY_DATA_PATH: /workspace/data/nada-discovery
-      NADA_EMBEDDING_DEVICE: cpu
       # Optional OpenSearch ops: composable index template (knn_vector on auto-created indices) and cluster allowlist.
       # NADA_OPENSEARCH_PUT_COMPOSABLE_INDEX_TEMPLATE: "true"
       # NADA_OPENSEARCH_INDEX_TEMPLATE_PRIORITY: "500"
       # NADA_OPENSEARCH_CLUSTER_AUTO_CREATE_INDEX: "false"
+      # NADA_EMBEDDING_MODEL_ID: microsoft/harrier-oss-v1-270m
+      NADA_QUERY_PROMPT_NAME: web_search_query
+      HF_HOME: /models/huggingface
+      # Reuse the Hugging Face hub cache. A separate SENTENCE_TRANSFORMERS_HOME
+      # forces a second download via hf-xet (cas-server.xethub.hf.co), which hangs
+      # behind corporate TLS (UnknownIssuer) while warmup holds the request.
+      # Offline: the model must already be in ~/.cache/huggingface on the host.
+      SENTENCE_TRANSFORMERS_HOME: /models/huggingface/hub
+      HF_HUB_OFFLINE: "1"
+      HF_HUB_DISABLE_XET: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      AI4DATA_DISCOVERY_DATA_PATH: /workspace/data/nada-discovery
+      NADA_EMBEDDING_DEVICE: cpu
       # Optional: override Data Compass URL for ai4data discovery (see ai4data MetadataCatalogConfig).
       # AI4DATA_METADATA_CATALOG_URL: https://your-host.example/index.php
       # Optional bulk metadata extract (replaces catalog search + per-idno JSON when set):
@@ -41,16 +70,25 @@ services:
       # If downloads are hosted on a different subdomain than the catalog (e.g. training.ihsn.org),
       # allow-list the extra hosts that may receive the key:
       # AI4DATA_METADATA_CATALOG_X_API_KEY_HOSTS: training.ihsn.org,files.ihsn.org
-      NADA_QUERY_PROMPT: "Instruct: Retrieve semantically similar text that helps answer the user's query or find related information\nQuery: "
-      # NADA_ADMIN_API_KEY: ${NADA_ADMIN_API_KEY}
+      # Corporate TLS: export org root CA to ./certs/wbg-root-ca.pem, then uncomment:
+      # SSL_CERT_FILE: /etc/ssl/certs/custom/wbg-root-ca.pem
+      # REQUESTS_CA_BUNDLE: /etc/ssl/certs/custom/wbg-root-ca.pem
+      NADA_QUERY_PROMPT: "Instruct: Retrieve texts that help answer the user's query or find related information\nQuery: "
+      NADA_ADMIN_API_KEY: ${NADA_ADMIN_API_KEY:?set NADA_ADMIN_API_KEY in .env}
     volumes:
       - ${HOME}/.cache/huggingface:/models/huggingface
       - ${HOME}/.cache/torch/sentence_transformers:/models/sentence_transformers
       - ./data/nada-discovery:/workspace/data/nada-discovery
+      # API keys store, audit log, ingest checkpoints and the facet registry: kept outside the container so they
+      # survive a recreate, and separate from the repo's ./config and from the Qdrant stack's.
+      - ./data/opensearch-compose/config:/workspace/config
+      # Corporate TLS (optional): place wbg-root-ca.pem in ./certs/ and uncomment next line + SSL_CERT_FILE above
+      # - ./certs/wbg-root-ca.pem:/etc/ssl/certs/custom/wbg-root-ca.pem:ro
     env_file:
       - .env
     depends_on:
-      - opensearch-nada
+      opensearch-nada:
+        condition: service_healthy
 
   opensearch-nada:
     image: opensearchproject/opensearch:3.6.0
@@ -59,15 +97,24 @@ services:
     environment:
       - discovery.type=single-node
       - plugins.security.disabled=true
+      # Without this, OpenSearch 3.x runs its demo security setup, which requires an admin password, and crash-loops.
+      - DISABLE_INSTALL_DEMO_CONFIG=true
       - cluster.routing.allocation.disk.threshold_enabled=false
       - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
     ports:
-      - "9200:9200"
+      - "127.0.0.1:${OPENSEARCH_PORT:-9200}:9200"
     volumes:
       - opensearch-nada-data:/usr/share/opensearch/data
-    env_file:
-      - .env
     ulimits:
       memlock:
         soft: -1
         hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s

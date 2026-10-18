@@ -170,13 +170,13 @@ uv run python -m nada_ai.mcp_server --port 8025
 ```
 
 Prefer OpenSearch instead of Qdrant (the default)? Same shape, different compose file
-and one setting:
+(it sets `NADA_SEARCH_BACKEND=opensearch` itself, and needs `NADA_ADMIN_API_KEY` in `.env`):
 
 ```bash
 docker compose -f docker-compose.opensearch.yml -f docker-compose.dev.yml up --build -d
 ```
 
-with `NADA_SEARCH_BACKEND=opensearch` in `.env`.
+See [Compose files](#compose-files) for running it next to the Qdrant stack.
 
 ---
 
@@ -862,11 +862,16 @@ process that serves *only* MCP.
 
 | File | What it starts |
 |---|---|
-| `docker-compose.opensearch.yml` | `nada-ai-api` (port `8020`) + `opensearch-nada` (OpenSearch 3.6.0, single-node, security plugin disabled — **dev only**, port `9200`) |
-| `docker-compose.qdrant.yml` | `nada-ai-api` (port `8020`) + `qdrant-nada` (Qdrant v1.18.0, ports `6333`/HTTP, `6334`/gRPC) |
-| `docker-compose.dev.yml` | Overlay: bind-mounts `./src`, sets `PYTHONPATH`, runs uvicorn with `--reload` |
+| `docker-compose.opensearch.yml` | Project `nada-ai-opensearch`: `nada-ai-api` (`127.0.0.1:${NADA_AI_PORT:-8020}`) + `opensearch-nada` (OpenSearch 3.6.0, single-node, security plugin disabled — **dev only**, `127.0.0.1:${OPENSEARCH_PORT:-9200}`). Needs `NADA_ADMIN_API_KEY` in `.env`. |
+| `docker-compose.qdrant.yml` | Project `nada-ai`: `nada-ai-api` (port `8020`) + `qdrant-nada` (Qdrant v1.18.0, ports `6333`/HTTP, `6334`/gRPC) |
+| `docker-compose.dev.yml` | Overlay for either file: bind-mounts `./src`, sets `PYTHONPATH`, runs uvicorn with `--reload` |
 
-The two backend compose files are parallel, not complementary — pick one:
+Each backend compose file is one engine: the API runs the engine its file sets (`NADA_SEARCH_BACKEND` in its
+`environment:` block, which `.env` cannot override). The two are separate Compose projects with their own containers,
+images and volumes, so starting one never replaces the other; to run both at once, give the OpenSearch stack another
+API port (`NADA_AI_PORT`). Their API settings (embedding, query prompt, model cache) are kept the same on purpose —
+change both files together. Each engine has its own index: index the catalog after switching to an engine that has
+not been indexed, and set NADA's search engine to match (NADA refuses a nada-ai that runs another engine).
 
 ```bash
 # OpenSearch backend, hot-reload dev

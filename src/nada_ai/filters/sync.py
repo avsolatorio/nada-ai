@@ -201,15 +201,12 @@ def _sync_opensearch(settings: Settings, idno: str, normalized: list[dict[str, l
         resp = client.update_by_query(
             index=settings.index_name, body={"query": chunk_query, "script": chunk_script}, refresh=True
         )
-        client.update_by_query(
-            index=settings.studies_index,
-            body={
-                "query": {"term": {"idno": idno}},
-                "script": {"source": "ctx._source.filter_facets = params.facets;", "params": {"facets": facets}},
-            },
-            refresh=True,
-            ignore_unavailable=True,
-        )
+        if sids:
+            # The study index keeps only a few fields in its _source, so it is never updated in place (that would drop
+            # its searchable text): the study document is rewritten from NADA's extract record instead.
+            from nada_ai.ingest.service import apply_study_options_op
+
+            apply_study_options_op(settings, idno)
         return FilterSyncResult(idno=idno, updated_points=int(resp.get("updated") or 0), found=True)
     finally:
         try:

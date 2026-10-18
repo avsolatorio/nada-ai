@@ -46,6 +46,8 @@ retrying forever or corrupting the index with a wrong type.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from collections.abc import Callable
 from typing import Any, Literal
 
@@ -62,6 +64,7 @@ from nada_ai.ingest.service import (
     delete_by_idnos_op,
     index_ids_op,
 )
+from nada_ai.nada import gate as nada_gate
 from nada_ai.nada.admin_auth import resolve_admin_cookies, resolve_admin_headers
 from nada_ai.settings import Settings
 
@@ -109,6 +112,10 @@ class SearchIndexQueueItem(BaseModel):
     attempts: int = 0
     last_error: str | None = None
     changed: int
+    #: 0 for a catalog change, 1 for a row a sync queued (NADA lists 0 first)
+    priority: int = 0
+    #: the study's surveys.type (None for citations)
+    data_type: str | None = None
     fetch_document: bool = True
 
     @property
@@ -119,9 +126,22 @@ class SearchIndexQueueItem(BaseModel):
 class SearchIndexStatus(BaseModel):
     status: str
     search_engine: str | None = None
+    #: the engine whose index NADA keeps in sync (search_index_engine)
+    index_engine: str | None = None
     tracking_enabled: bool = False
-    queue: dict[str, int] = {}
+    #: what NADA's tracking rows describe: engine, index_generation, tracked_since, last_sync_at, last_poll_at
+    tracked: dict[str, Any] | None = None
+    queue: dict[str, Any] = {}
     state: dict[str, int] = {}
+
+
+class QueuePage(BaseModel):
+    items: list[SearchIndexQueueItem]
+    total: int = 0
+    tracking_enabled: bool = False
+    #: why NADA refused the page when tracking_enabled is false: not_tracking_for_nada_ai | other_nada_ai |
+    #: tracking_disabled
+    reason: str | None = None
 
 
 class DiffItem(BaseModel):
@@ -169,12 +189,58 @@ def _base_url(settings: Settings) -> str:
     return f"{metadata_catalog.url.rstrip('/')}/api"
 
 
+#: The generation of this deployment's study index, sent to NADA with every search-index request (``X-Index-Generation``)
+#: so NADA can refuse a nada-ai whose index is not the one it tracks. Read from the index's mapping, kept for a minute.
+_generation_cache: dict[str, Any] = {"value": None, "at": float("-inf")}
+_generation_lock = threading.Lock()
+_GENERATION_TTL = 60.0
+
+
+def index_generation(settings: Settings) -> str | None:
+    """The study index's generation (``mappings._meta.generation``), or None when there is no study index."""
+    if settings.search_backend != "opensearch":
+        return None
+    with _generation_lock:
+        if time.monotonic() - _generation_cache["at"] < _GENERATION_TTL:
+            return _generation_cache["value"]
+        from nada_ai.search.backend.opensearch.client import build_client
+
+        client = build_client(settings)
+        try:
+            mapping = client.indices.get_mapping(index=settings.studies_index, ignore_unavailable=True)
+            meta = (next(iter(mapping.values()))["mappings"].get("_meta") or {}) if mapping else {}
+            value = meta.get("generation")
+        except Exception as e:  # noqa: BLE001 - the header is optional for NADA; OpenSearch being down must not stop NADA calls
+            logger.warning("could not read the study index generation: %s", e)
+            value = None
+        finally:
+            client.close()
+        _generation_cache.update(value=value, at=time.monotonic())
+        return value
+
+
+def forget_index_generation() -> None:
+    """Read the generation again on the next request (the index was just created or recreated)."""
+    with _generation_lock:
+        _generation_cache.update(value=None, at=float("-inf"))
+
+
+def gated_transport(settings: Settings) -> nada_gate.GatedTransport:
+    """The process's transport to NADA, through the request gate (installed on first use)."""
+    return nada_gate.install(settings, _base_url(settings))
+
+
 def _client(settings: Settings) -> httpx.Client:
+    headers = resolve_admin_headers(user_agent=_USER_AGENT)
+    generation = index_generation(settings)
+    if generation:
+        headers["X-Index-Generation"] = generation
     return httpx.Client(
         base_url=_base_url(settings),
-        headers=resolve_admin_headers(user_agent=_USER_AGENT),
+        headers=headers,
         cookies=resolve_admin_cookies(),
-        timeout=_TIMEOUT,
+        timeout=settings.nada_request_timeout_seconds,
+        transport=gated_transport(settings),
     )
 
 
@@ -211,15 +277,24 @@ def list_queue(
     status: Literal["pending", "failed"] = "pending",
     object_type: Literal["survey", "citation"] | None = None,
     limit: int = 50,
-) -> list[SearchIndexQueueItem]:
+    exclude: list[int] | None = None,
+) -> QueuePage:
+    """One page of queue rows, catalog changes first. ``exclude``: rows held in this pass (not acked), skipped over."""
     params: dict[str, Any] = {"status": status, "limit": limit}
     if object_type:
         params["object_type"] = object_type
+    if exclude:
+        params["exclude"] = ",".join(str(i) for i in exclude)
     with _client(settings) as client:
         resp = client.get("/admin/search-index/queue", params=params)
         resp.raise_for_status()
     data = resp.json()
-    return [SearchIndexQueueItem.model_validate(item) for item in data.get("items", [])]
+    return QueuePage(
+        items=[SearchIndexQueueItem.model_validate(item) for item in data.get("items", [])],
+        total=int(data.get("total") or 0),
+        tracking_enabled=bool(data.get("tracking_enabled")),
+        reason=data.get("reason"),
+    )
 
 
 def ack_item(
@@ -239,6 +314,72 @@ def ack_item(
     if resp.status_code == 409:
         raise QueueItemChanged(f"Queue item {item_id} changed between poll and ack")
     resp.raise_for_status()
+    return resp.json()
+
+
+class AckRefused(SearchIndexSyncError):
+    """NADA answered an ack request with an error for all of it (not per item): ``code`` is NADA's message."""
+
+    def __init__(self, code: str, status: int) -> None:
+        super().__init__(f"NADA refused the acks: {code} (HTTP {status})")
+        self.code = code
+        self.status = status
+
+
+def ack_batch(settings: Settings, acks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ack up to 100 rows in one request: ``[{id, result, changed, error?}]`` -> one result per row, in order
+    (``{id, applied, result?|error?}``; ``QUEUE_CHANGED``/``QUEUE_NOT_FOUND`` are per-row results, not failures).
+
+    Raises :class:`AckRefused` when NADA refuses the request as a whole (not tracking for this nada-ai, another
+    index generation, access denied), and the gate's errors when NADA cannot be reached."""
+    body = {"items": [{**a, "error": (a.get("error") or "")[:2000] or None} for a in acks]}
+    with _client(settings) as client:
+        resp = client.post("/admin/search-index/queue/ack", json=body)
+    if resp.status_code >= 400:
+        try:
+            code = str(resp.json().get("message") or resp.status_code)
+        except ValueError:
+            code = str(resp.status_code)
+        raise AckRefused(code, resp.status_code)
+    return list(resp.json().get("results") or [])
+
+
+def fetch_studies_by_sids(
+    settings: Settings, sids: list[int], *, include_metadata: bool = False, include_resources: bool = False
+) -> dict[str, Any]:
+    """Extract records of these studies in one request: ``{studies, missing, errors}`` (see NADA's
+    ``GET search-metadata-extract/studies?sids=``). ``include_metadata=False`` sends core fields and filters only;
+    ``include_metadata`` with ``include_resources`` is the full record indexing reads."""
+    if not sids:
+        return {"studies": [], "missing": [], "errors": []}
+    extract_base = (settings.metadata_extract_base_url or catalog_extract.extract_base_url() or "").rstrip("/")
+    if not extract_base:
+        raise SearchIndexSyncError("No metadata-extract base URL configured")
+    with _client(settings) as client:
+        resp = client.get(
+            f"{extract_base}/studies",
+            params={
+                "sids": ",".join(str(i) for i in sids),
+                "include_metadata": "1" if include_metadata else "0",
+                "include_admin_metadata": "1" if include_metadata else "0",
+                "include_resources": "1" if include_resources else "0",
+            },
+        )
+        resp.raise_for_status()
+    data = resp.json()
+    return {
+        "studies": list(data.get("studies") or []),
+        "missing": [int(i) for i in data.get("missing") or []],
+        "errors": list(data.get("errors") or []),
+    }
+
+
+def trigger_sync(settings: Settings, *, object_type: str = "all", refresh_indexed: bool = False) -> dict[str, Any]:
+    """Ask NADA to queue what this index needs to match the catalog (``POST /admin/search-index/sync``)."""
+    params = {"object_type": object_type, "refresh_indexed": "1" if refresh_indexed else "0"}
+    with _client(settings) as client:
+        resp = client.post("/admin/search-index/sync", params=params)
+        resp.raise_for_status()
     return resp.json()
 
 
@@ -403,103 +544,98 @@ def _raise_if_not_indexed(idno: str, result: dict[str, Any]) -> None:
         raise SearchIndexSyncError(f"index reported no success for idno {idno!r}: {'; '.join(reasons)}")
 
 
-def _apply_options_in_place(settings: Settings, idno: str) -> bool:
-    """Apply an options change in place; False when the study is not in the index yet (index it in full)."""
-    from nada_ai.ingest.service import apply_study_options_op
+def metadata_type_for(settings: Settings, item: SearchIndexQueueItem) -> str | None:
+    """The nada_ai metadata_type of a study item: from the ``data_type`` NADA sends with it, looked up when absent."""
+    if item.data_type:
+        return _DATASET_TYPE_TO_METADATA_TYPE.get(item.data_type)
+    return lookup_metadata_type(settings, item.object_key)
 
-    return bool(apply_study_options_op(settings, idno)["updated"])
+
+def full_record(settings: Settings, sid: int) -> dict[str, Any]:
+    """One study's full extract record (metadata and resources), fetched by its id."""
+    batch = fetch_studies_by_sids(settings, [sid], include_metadata=True, include_resources=True)
+    if batch["errors"]:
+        raise SearchIndexSyncError(f"NADA could not build the extract of study {sid}: {batch['errors'][0].get('message')}")
+    if not batch["studies"]:
+        raise SearchIndexSyncError(f"Study {sid} is not in NADA's catalog")
+    return batch["studies"][0]
 
 
-def apply_and_ack_queue_item(
+def _index_in_full(
+    settings: Settings, item: SearchIndexQueueItem, embedding: Any | None, extract: dict[str, Any] | None = None
+) -> str:
+    """Index one study in full from its record fetched **by id**: the record is put where ai4data's loader reads it
+    (its metadata cache), so the loader never fetches by idno — NADA cannot resolve every idno in a URL (``:``,
+    ``/``, spaces). ``extract``: the record when the caller already fetched it with its metadata. Indexing does not
+    force a re-embed: chunks whose text did not change keep their vectors."""
+    metadata_type = metadata_type_for(settings, item)
+    if metadata_type is None:
+        raise SearchIndexSyncError(
+            f"No metadata_type mapping for idno {item.object_key!r} (dataset_type {item.data_type!r})"
+        )
+    record = extract if extract is not None and isinstance(extract.get("metadata"), dict) else full_record(
+        settings, item.object_id
+    )
+    catalog_extract.write_metadata_cache(
+        catalog_extract.study_to_catalog_metadata(record), item.object_key, metadata_type, include_resources=True
+    )
+    report = index_ids_op(
+        settings,
+        idnos=[item.object_key],
+        metadata_type=metadata_type,
+        force=False,
+        show_progress_bar=False,
+        embedding=embedding,
+    )
+    _raise_if_not_indexed(item.object_key, report)
+    return "indexed"
+
+
+def process_item(
     settings: Settings,
     item: SearchIndexQueueItem,
     *,
-    metadata_type: str | None = None,
+    extract: dict[str, Any] | None = None,
     embedding: Any | None = None,
-) -> dict[str, Any]:
-    """Apply one queue item (index or delete) and ack it back to NADA.
+) -> str:
+    """Apply one queue item to the index: ``indexed`` | ``deleted``. Does not ack it (the caller acks in batches).
 
-    Factored out of ``reconcile_once`` so both the batch CLI path and the
-    per-item job-registry-scheduled path (``app.reconcile_scheduler``) share
-    the exact same apply-then-ack logic — including the ack_conflict/failure
-    handling — rather than two copies drifting apart.
-
-    ``metadata_type``: pass a pre-resolved value when the caller already
-    looked it up (the scheduler needs it *before* calling this, to build a
-    job-registry key matching ``content_sync_job_key`` — see
-    ``app.reconcile_scheduler``) to avoid a redundant second lookup. Resolved
-    internally via :func:`lookup_metadata_type` when omitted (the CLI/batch
-    path via ``reconcile_once`` doesn't need it upfront).
-
-    The upsert branch's ``index_ids_op`` call also syncs this idno's
-    filters/facets — not via an extra call here, but because
-    ``ingest.pipeline.iter_langdoc_records`` (which both backend writers
-    route through) fetches and bakes in NADA's ``filters`` data as part of
-    building the document/point payload itself. So a queue-driven reindex keeps
-    both content and facets in sync from a single fetch, with no separate
-    filters-sync pass required.
-
-    Returns ``{"idno", "action": "indexed"|"deleted"|"failed", "ack_conflict": bool, "error": str|None}``.
+    ``extract``: the study's extract record when the caller already fetched it (a page of partial updates is fetched
+    in one request); fetched here otherwise. Raises for anything that went wrong — :class:`nada_gate.NadaTrouble`
+    when NADA could not serve a request, anything else when the item itself could not be applied.
     """
-    idno = item.object_key
-    result: Literal["indexed", "failed"]
-    error: str | None
-    try:
-        if item.object_type == "citation":
-            action = _apply_citation(settings, item)
-        elif item.is_delete:
-            delete_by_idno_op(settings, idno)
-            action = "deleted"
-        elif item.change_class == "variables":
-            # Only this study's variables changed (NADA's Dataset_microdata_model::index_variable_data() fired
-            # this after a DDI/data-dictionary re-import) — not its title, abstract, or anything else a full
-            # study reindex would touch. index_ids_op already syncs variables as part of a full index (see
-            # docs/variables-search-contract.md), so this is the narrower half of that: sync only, skip the
-            # study/chunk reindex entirely. Qdrant has no separate variable index to sync, so there's nothing to
-            # do there — the item is still acked as handled rather than left pending forever.
-            if settings.search_backend == "opensearch":
-                from nada_ai.ingest.variables_index import sync_survey_variables_op
+    if item.object_type == "citation":
+        return _apply_citation(settings, item)
+    if item.is_delete:
+        delete_by_idno_op(settings, item.object_key)
+        return "deleted"
+    if item.change_class == "variables":
+        # Only this study's variables changed (a DDI/data-dictionary re-import): sync them, nothing else. Qdrant has
+        # no variable index, so there is nothing to do there.
+        if settings.search_backend == "opensearch":
+            from nada_ai.ingest.variables_index import sync_survey_variables_op
 
-                _raise_on_write_errors(f"variables of {idno!r}", sync_survey_variables_op(settings, idno)["errors"])
-            action = "indexed"
-        elif (
-            item.change_class == "upsert_partial"
-            and settings.search_backend == "opensearch"
-            and _apply_options_in_place(settings, idno)
-        ):
-            # NADA sends upsert_partial for a change of the study's options (publish state, license, data class,
-            # links, DOI, featured, collections), not of its metadata (that is upsert_full): they are applied in
-            # place, with no metadata read and no embedding.
-            action = "indexed"
-        else:
-            resolved_type = metadata_type or lookup_metadata_type(settings, idno)
-            if resolved_type is None:
-                raise SearchIndexSyncError(
-                    f"No metadata_type mapping for idno {idno!r} — unsupported or unknown dataset_type"
-                )
-            report = index_ids_op(
-                settings,
-                idnos=[idno],
-                metadata_type=resolved_type,
-                force=True,
-                show_progress_bar=False,
-                embedding=embedding,
+            _raise_on_write_errors(
+                f"variables of {item.object_key!r}",
+                sync_survey_variables_op(settings, item.object_key, sid=item.object_id)["errors"],
             )
-            _raise_if_not_indexed(idno, report)
-            action = "indexed"
-    except Exception as e:  # noqa: BLE001 - reported back to NADA, not swallowed
-        logger.warning("search-index reconcile failed for idno=%s: %s", idno, e)
-        result, error, action = "failed", str(e), "failed"
-    else:
-        result, error = "indexed", None
+        return "indexed"
+    if item.change_class == "upsert_partial" and settings.search_backend == "opensearch":
+        # A change of the study's options (publish state, license, data class, links, DOI, featured, collections),
+        # not of its metadata: applied in place, with no metadata read and no embedding. A study not in the index
+        # yet is indexed in full.
+        from nada_ai.ingest.service import apply_study_options_from_extract, apply_study_options_op
 
-    ack_conflict = False
-    try:
-        ack_item(settings, item.id, result=result, changed=item.changed, error=error)
-    except QueueItemChanged:
-        ack_conflict = True
-
-    return {"idno": idno, "action": action, "ack_conflict": ack_conflict, "error": error}
+        if extract is not None:
+            core = extract.get("core_fields") or {}
+            result = apply_study_options_from_extract(
+                settings, item.object_key, int(core.get("catalog_id") or item.object_id), core, extract.get("filters") or {}
+            )
+        else:
+            result = apply_study_options_op(settings, item.object_key)
+        if result.get("updated"):
+            return "indexed"
+    return _index_in_full(settings, item, embedding, extract)
 
 
 def reconcile_once(
@@ -508,36 +644,35 @@ def reconcile_once(
     limit: int = 50,
     embedding: Any | None = None,
 ) -> dict[str, Any]:
-    """Poll one page of the pending queue and apply + ack each item.
+    """Process one page of the pending queue and ack it (the ``reconcile_search_index`` CLI command).
 
-    Studies and citations are both handled. Returns a summary dict; call again
-    (e.g. on a schedule) to keep draining the queue, since one call only
-    processes up to ``limit`` items.
-
-    This is the standalone, one-shot entrypoint (used by the
-    ``reconcile_search_index`` CLI command) — it does not go through the
-    FastAPI job registry, so concurrent runs alongside a webhook or admin
-    reindex for the same idno aren't coordinated. For a deployment that runs
-    the FastAPI app, prefer the in-process scheduler
-    (``app.reconcile_scheduler``, ``NADA_RECONCILE_SEARCH_INDEX_ENABLED``),
-    which submits each item through the same job registry — and the same
-    ``content:{metadata_type}:{idno}`` key — as webhooks and admin routes use,
-    so they properly single-flight against each other.
+    One pass, no pausing or retrying across items: the in-process scheduler (``app.reconcile_scheduler``) is what
+    works through the queue for a running deployment. Stops at the first item NADA could not serve.
     """
-    items = list_queue(settings, status="pending", limit=limit)
-    summary = {"polled": len(items), "indexed": 0, "deleted": 0, "failed": 0, "ack_conflicts": 0}
+    page = list_queue(settings, status="pending", limit=limit)
+    summary: dict[str, Any] = {"polled": len(page.items), "indexed": 0, "deleted": 0, "failed": 0, "not_processed": 0}
+    if not page.tracking_enabled:
+        summary["reason"] = page.reason
+        return summary
 
-    for item in items:
-        outcome = apply_and_ack_queue_item(settings, item, embedding=embedding)
-        if outcome["ack_conflict"]:
-            summary["ack_conflicts"] += 1
-        if outcome["action"] == "failed":
+    acks: list[dict[str, Any]] = []
+    for n, item in enumerate(page.items):
+        try:
+            action = process_item(settings, item, embedding=embedding)
+        except nada_gate.NadaTrouble as e:
+            logger.warning("search-index reconcile stopped: NADA could not serve a request: %s", e)
+            summary["not_processed"] = len(page.items) - n
+            break
+        except Exception as e:  # noqa: BLE001 - reported back to NADA, not swallowed
+            logger.warning("search-index reconcile failed for idno=%s: %s", item.object_key, e)
+            acks.append({"id": item.id, "result": "failed", "changed": item.changed, "error": str(e)})
             summary["failed"] += 1
-        elif outcome["action"] == "deleted":
-            summary["deleted"] += 1
-        else:
-            summary["indexed"] += 1
+            continue
+        acks.append({"id": item.id, "result": "indexed", "changed": item.changed})
+        summary[action] += 1
 
+    for start in range(0, len(acks), 100):
+        ack_batch(settings, acks[start : start + 100])
     return summary
 
 
@@ -562,6 +697,7 @@ def reconcile_diff_once(
     data_type: str | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     cancel_token: CancelToken | None = None,
+    remove_only: bool = False,
 ) -> dict[str, Any]:
     """Pull NADA's missing/stale diff for object_type and resolve all of it:
     index every missing idno, delete every stale one.
@@ -570,6 +706,10 @@ def reconcile_diff_once(
     value (microdata aka 'survey', geospatial, document, timeseries, ...) —
     for reconciling one data type at a time from the per-type breakdown
     instead of the whole object_type in one go.
+
+    ``remove_only`` (the dashboard's "Clean up") deletes the stale entries and
+    leaves the missing ones alone: the missing diff is not even fetched, so
+    ``missing_total`` is 0 and nothing is indexed or embedded.
 
     This is deliberately the *same* call whether it's the first run ever (on
     a fresh deployment "missing" is simply the whole catalog — this doubles as
@@ -614,7 +754,11 @@ def reconcile_diff_once(
     # instead of a missing-only total that jumps when stale work starts.
     # These first pages also seed the loops below — no extra HTTP vs. the
     # previous "fetch inside the loop" shape.
-    missing_page = list_diff_missing(settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type)
+    missing_page = (
+        DiffPage(items=[], total=0)
+        if remove_only
+        else list_diff_missing(settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type)
+    )
     stale_page = list_diff_stale(settings, object_type=object_type, limit=page_size, offset=0, data_type=data_type)
     summary["missing_total"] = missing_page.total
     summary["stale_total"] = stale_page.total
@@ -738,4 +882,110 @@ def reconcile_diff_once(
                 summary["cancelled"] = True
                 return summary
 
+    return summary
+
+
+def _scan(client: Any, index: str, fields: list[str], page_size: int = 1000):
+    """Every document's ``fields`` in ``index``, a page at a time (search_after on _id). Nothing when it does not exist."""
+    if not client.indices.exists(index=index):
+        return
+    after: list[Any] | None = None
+    while True:
+        body: dict[str, Any] = {"size": page_size, "_source": fields, "sort": [{"_id": "asc"}], "query": {"match_all": {}}}
+        if after is not None:
+            body["search_after"] = after
+        hits = client.search(index=index, body=body)["hits"]["hits"]
+        if not hits:
+            return
+        for hit in hits:
+            yield hit.get("_source") or {}
+        after = hits[-1]["sort"]
+
+
+def _sids_with_chunks(client: Any, index: str) -> set[int]:
+    """The sids that have at least one chunk (embedded text) in the chunk index."""
+    from nada_ai.search.backend.opensearch.mapping import metadata_field
+
+    if not client.indices.exists(index=index):
+        return set()
+    sids: set[int] = set()
+    after: dict[str, Any] | None = None
+    while True:
+        composite: dict[str, Any] = {"size": 1000, "sources": [{"sid": {"terms": {"field": metadata_field("sid")}}}]}
+        if after is not None:
+            composite["after"] = after
+        resp = client.search(index=index, body={"size": 0, "aggs": {"sids": {"composite": composite}}})
+        agg = resp["aggregations"]["sids"]
+        sids.update(int(b["key"]["sid"]) for b in agg["buckets"] if b["key"].get("sid") is not None)
+        after = agg.get("after_key")
+        if not agg["buckets"] or after is None:
+            return sids
+
+
+def import_index_state(
+    settings: Settings,
+    *,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_token: CancelToken | None = None,
+) -> dict[str, Any]:
+    """Tell NADA what this deployment's index already holds, then have it queue what is left to do.
+
+    For an index that existed before NADA tracked it (NADA cleared its tracking when its index engine changed): every
+    study in the study index that has chunks, and every citation in the citation index, is reported ``indexed`` by
+    sid / citation id — also the ones gone from NADA's catalog, so NADA's stale diff finds them. Studies without
+    chunks are not reported, so they count as missing and are indexed in full. NADA then queues (``refresh_indexed``)
+    a delete for what is gone, a partial update (published status, filters; no embedding) for what is indexed, and a
+    full index for what is missing.
+
+    Reads only document ids and keys from OpenSearch; embeds nothing.
+    """
+    from nada_ai.search.backend.opensearch.client import build_client
+
+    if settings.search_backend != "opensearch":
+        raise SearchIndexSyncError("Importing the index state needs the OpenSearch backend")
+
+    client = build_client(settings)
+    items: list[dict[str, Any]] = []
+    try:
+        with_chunks = _sids_with_chunks(client, settings.index_name)
+        studies = without_chunks = 0
+        for doc in _scan(client, settings.studies_index, ["sid", "idno"]):
+            sid, idno = doc.get("sid"), doc.get("idno")
+            if sid is None or not idno:
+                continue
+            if int(sid) not in with_chunks:
+                without_chunks += 1
+                continue
+            studies += 1
+            items.append({"object_type": "survey", "object_key": str(idno), "object_id": int(sid), "status": "indexed"})
+        citations = 0
+        for doc in _scan(client, settings.citations_index, ["citation_id", "uuid"]):
+            cid, uuid = doc.get("citation_id"), doc.get("uuid")
+            if cid is None or not uuid:
+                continue
+            citations += 1
+            items.append({"object_type": "citation", "object_key": str(uuid), "object_id": int(cid), "status": "indexed"})
+    finally:
+        client.close()
+
+    summary: dict[str, Any] = {
+        "studies": studies,
+        "studies_without_chunks": without_chunks,
+        "citations": citations,
+        "reported": 0,
+        "skipped": 0,
+    }
+    total = len(items)
+    for start in range(0, total, _STATE_BULK_CHUNK_SIZE):
+        if cancel_token is not None and cancel_token.is_set():
+            summary["cancelled"] = True
+            return summary
+        result = report_state_bulk(settings, items[start : start + _STATE_BULK_CHUNK_SIZE])
+        summary["reported"] += int(result.get("applied") or 0)
+        summary["skipped"] += sum(1 for r in result.get("results") or [] if not r.get("applied"))
+        if progress_cb is not None:
+            done = min(start + _STATE_BULK_CHUNK_SIZE, total)
+            progress_cb({"processed": done, "total": total, "percent": round(100 * done / total, 1) if total else 100.0})
+
+    summary["queued"] = trigger_sync(settings, object_type="all", refresh_indexed=True).get("queued")
     return summary

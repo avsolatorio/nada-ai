@@ -144,17 +144,27 @@ def backfill_variables(
 
 
 def reconcile_search_index(limit: int = 50) -> None:
-    """Poll NADA's ``search-index`` change queue and apply + ack up to ``limit`` items.
+    """Process one page (up to ``limit`` items) of NADA's ``search-index`` change queue and ack it.
 
-    Run this on a schedule (cron, systemd timer, etc.) to keep the index in
-    sync with catalog changes without a full re-ingest — it complements
-    ``POST /webhooks/catalog`` by giving a reliable catch-up path after any
-    downtime, since NADA (not this process) owns what's still pending.
+    For a deployment without the app running: the app's scheduler (``NADA_RECONCILE_SEARCH_INDEX_ENABLED``) is what
+    keeps the index in sync otherwise. Refuses to run while the scheduler holds its lock, so the two never send
+    requests to NADA at the same time.
     """
-    from nada_ai.ingest.search_index_sync import reconcile_once
+    import fcntl
+    from pathlib import Path
+
+    from nada_ai.ingest.search_index_sync import gated_transport, reconcile_once
 
     settings = Settings()
-    res = reconcile_once(settings, limit=limit)
+    lock_path = Path(settings.reconcile_search_index_lock_path or "config/search_index_scheduler.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise SystemExit(f"The search-index scheduler is running (lock {lock_path} held); use Process pending instead.") from None
+        gated_transport(settings)
+        res = reconcile_once(settings, limit=limit)
     print(res)
 
 

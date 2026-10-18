@@ -42,13 +42,10 @@ class CitationSearchJob:
 
 @dataclass(frozen=True)
 class CitationHit:
+    """A matching citation: its ids only — the caller (NADA) reads the citation itself from its database."""
+
     citation_id: int
     uuid: str | None
-    title: str | None
-    authors: str | None
-    ctype: str | None
-    pub_year: int | None
-    doi: str | None
     score: float | None
 
 
@@ -94,7 +91,7 @@ def search_body(job: CitationSearchJob) -> dict[str, Any]:
         "from": job.offset,
         "track_total_hits": True,
         "query": {"bool": {"must": [lexical_query(job.query)], "filter": filter_clauses(job.filters)}},
-        "_source": ["citation_id", "uuid", "title", "authors", "ctype", "pub_year", "doi"],
+        "_source": ["citation_id", "uuid"],
     }
     if job.sort_by != "relevance":
         sort_field = _SORT_FIELDS[job.sort_by]
@@ -104,16 +101,7 @@ def search_body(job: CitationSearchJob) -> dict[str, Any]:
 
 def _hit(raw: dict[str, Any]) -> CitationHit:
     source = raw["_source"]
-    return CitationHit(
-        citation_id=int(source["citation_id"]),
-        uuid=source.get("uuid"),
-        title=source.get("title"),
-        authors=source.get("authors"),
-        ctype=source.get("ctype"),
-        pub_year=source.get("pub_year"),
-        doi=source.get("doi"),
-        score=raw.get("_score"),
-    )
+    return CitationHit(citation_id=int(source["citation_id"]), uuid=source.get("uuid"), score=raw.get("_score"))
 
 
 async def search_citations(job: CitationSearchJob) -> CitationPage:

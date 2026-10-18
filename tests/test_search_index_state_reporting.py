@@ -685,44 +685,53 @@ def test_sync_variables_op_stops_when_cancelled():
 # ---------------------------------------------------------------------------
 
 
-def _publish_state(*, indexed: bool, published: str = "0"):
+def _publish_state(*, indexed: bool, published: str = "0", variables_published: int | None = 0):
     from unittest.mock import MagicMock
 
     import nada_ai.ingest.service as service_module
 
     client = MagicMock()
-    client.update_by_query.side_effect = [{"updated": 4}, {"updated": 9}]
+    client.update_by_query.return_value = {"updated": 4}
+    # what the variable index holds for the study's variables (None: it holds none)
+    hits = [] if variables_published is None else [{"_source": {"published": variables_published}}]
+    client.search.return_value = {"hits": {"hits": hits}}
     extract = (7, {"idno": "A", "title": "T"}, {"published": [published], "countries": ["1"]})
     with (
         patch("nada_ai.filters.metadata_extract.fetch_study_extract", return_value=extract),
         patch.object(service_module, "build_client", return_value=client),
         patch.object(service_module, "sids_for_idnos", return_value={"A": 7} if indexed else {}),
+        patch("nada_ai.ingest.variables_index.sync_survey_variables_op", return_value={"errors": []}) as sync,
     ):
         result = service_module.apply_study_options_op(_settings(search_backend="opensearch"), "A")
-    return result, client
+    return result, client, sync
 
 
-def test_apply_study_options_rewrites_the_flags_of_the_study_its_chunks_and_its_variables():
-    result, client = _publish_state(indexed=True, published="0")
+def test_apply_study_options_rewrites_the_study_and_its_chunks_in_place():
+    result, client, sync = _publish_state(indexed=True, published="0", variables_published=0)
 
-    assert result == {"idno": "A", "updated": True, "sid": 7, "chunks_updated": 4, "variables_updated": 9}
+    assert result == {"idno": "A", "updated": True, "sid": 7, "chunks_updated": 4, "variables_resynced": False}
     written = client.index.call_args.kwargs
     assert written["id"] == "7" and written["body"]["filter_facets"]["published"] == ["0"]
-    chunks, variables = (c.kwargs for c in client.update_by_query.call_args_list)
+    (chunks,) = (c.kwargs for c in client.update_by_query.call_args_list)  # the variable index is never updated in place
     assert chunks["body"]["script"]["params"]["facets"]["published"] == ["0"]
     assert chunks["body"]["query"] == {"term": {"metadata.sid": 7}}
-    assert variables["body"]["script"]["params"] == {"published": 0}
-    assert variables["body"]["query"] == {"term": {"sid": 7}}
+    sync.assert_not_called()  # the variables' published did not change
 
 
-def test_apply_study_options_publishes_variables_as_1():
-    _, client = _publish_state(indexed=True, published="1")
-    variables = client.update_by_query.call_args_list[1].kwargs
-    assert variables["body"]["script"]["params"] == {"published": 1}
+def test_apply_study_options_resyncs_the_variables_when_published_changed():
+    result, _, sync = _publish_state(indexed=True, published="1", variables_published=0)
+    sync.assert_called_once()
+    assert result["variables_resynced"] is True
+
+
+def test_apply_study_options_leaves_variables_alone_when_none_are_indexed():
+    result, _, sync = _publish_state(indexed=True, published="1", variables_published=None)
+    sync.assert_not_called()
+    assert result["variables_resynced"] is False
 
 
 def test_apply_study_options_leaves_a_study_that_is_not_indexed_alone():
-    result, client = _publish_state(indexed=False)
+    result, client, _ = _publish_state(indexed=False)
     assert result == {"idno": "A", "updated": False, "reason": "not_indexed"}
     client.index.assert_not_called()
     client.update_by_query.assert_not_called()

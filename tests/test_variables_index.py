@@ -39,17 +39,16 @@ class _Run:
         return len(actions), []
 
     def iterator(self, *_a, **kw):
-        page_size = kw.get("page_size", 1000)
         for page in self.pages:
             self.events.append("fetch")
             yield from page
-        assert page_size  # the caller passes the page size through
 
     def __enter__(self):
         self._patches = [
             patch.object(vi, "build_client", return_value=self.client),
             patch.object(vi, "bulk", side_effect=self.bulk),
-            patch.object(vi.catalog_extract, "iter_extract_survey_variables", side_effect=self.iterator),
+            patch.object(vi, "_iter_study_variables", side_effect=self.iterator),
+            patch.object(vi, "sids_for_idnos", return_value={"S-1": 7}),
             patch.object(vi.catalog_extract, "iter_extract_variables", side_effect=self.iterator),
         ]
         for p in self._patches:
@@ -68,6 +67,39 @@ def test_sync_writes_every_page_of_the_study() -> None:
     assert run.written == [[1, 2], [3]]  # one bulk write per page, never the whole study at once
 
 
+def test_sync_replaces_the_variables_of_the_study_by_its_id() -> None:
+    with _Run([[_variable(1)]]) as run:
+        vi.sync_survey_variables_op(_settings(), "S-1", sid=42)
+    assert run.client.delete_by_query.call_args.kwargs["body"] == {"query": {"term": {"sid": 42}}}
+
+
+def test_sync_looks_the_study_id_up_when_not_given() -> None:
+    with _Run([[_variable(1)]]) as run:
+        vi.sync_survey_variables_op(_settings(), "S-1")
+    assert run.client.delete_by_query.call_args.kwargs["body"] == {"query": {"term": {"sid": 7}}}
+
+
+def test_sync_of_a_study_not_in_the_study_index_fails_without_deleting() -> None:
+    run = _Run([[_variable(1)]])
+    with run, patch.object(vi, "sids_for_idnos", return_value={}):
+        with pytest.raises(vi.ExtractError, match="not in the study index"):
+            vi.sync_survey_variables_op(_settings(), "S-1")
+    run.client.delete_by_query.assert_not_called()
+
+
+def test_variables_are_fetched_by_study_id_page_by_page() -> None:
+    pages = [
+        {"variables": [_variable(1), _variable(2)], "has_more": True, "next_after_uid": 2},
+        {"variables": [_variable(3)], "has_more": False, "next_after_uid": None},
+    ]
+    with patch.object(vi.catalog_extract, "fetch_extract_survey_variables", side_effect=pages) as fetch:
+        got = list(vi._iter_study_variables(_settings(), 42, 2))
+    assert [v["core_fields"]["uid"] for v in got] == [1, 2, 3]
+    first, second = (c for c in fetch.call_args_list)
+    assert first.args == ("42",) and first.kwargs["params"] == {"limit": 2, "id_format": "id"}
+    assert second.kwargs["params"] == {"limit": 2, "id_format": "id", "after_uid": 2}
+
+
 def test_sync_reads_the_first_page_before_deleting_anything() -> None:
     """An unreadable study must leave its existing variables alone instead of emptying them."""
     with _Run([[_variable(1)]]) as run:
@@ -77,8 +109,18 @@ def test_sync_reads_the_first_page_before_deleting_anything() -> None:
 
 def test_sync_deletes_nothing_when_the_first_page_cannot_be_read() -> None:
     run = _Run([])
-    with run, patch.object(vi.catalog_extract, "iter_extract_survey_variables", side_effect=RuntimeError("nope")):
+    with run, patch.object(vi, "_iter_study_variables", side_effect=RuntimeError("nope")):
         with pytest.raises(vi.ExtractError, match="nope"):
+            vi.sync_survey_variables_op(_settings(), "S-1")
+    run.client.delete_by_query.assert_not_called()
+
+
+def test_sync_deletes_nothing_when_the_first_page_cannot_be_built() -> None:
+    """A page the extract sent without ``catalog_id`` must not empty the study before the build fails."""
+    broken = _variable(1)
+    del broken["core_fields"]["catalog_id"]
+    with _Run([[broken]]) as run:
+        with pytest.raises(vi.ExtractError, match="catalog_id"):
             vi.sync_survey_variables_op(_settings(), "S-1")
     run.client.delete_by_query.assert_not_called()
 

@@ -1017,22 +1017,82 @@ async def admin_ingest_reconcile(
     s: AppState = Depends(get_state),
     principal: Principal = Depends(require_role(Role.write)),
 ) -> ReconcileSearchIndexResponse:
-    """Poll one page of NADA's search-index change queue right now and submit
-    each pending item as its own job (same path as the background scheduler —
-    see ``app.reconcile_scheduler.poll_once``), rather than waiting for the
-    next ``NADA_RECONCILE_SEARCH_INDEX_INTERVAL_SECONDS`` tick.
+    """Process pending: have the scheduler start on NADA's change queue now instead of at its next check.
 
-    Submission-only: this returns as soon as items are queued as jobs, not
-    once they finish indexing — poll ``GET /jobs`` for their progress. Safe to
-    call even while the background scheduler is also running or a previous
-    call's jobs are still in flight: JobRegistry single-flights on the same
-    ``content:{metadata_type}:{idno}`` key webhooks and admin routes use.
+    Returns at once; the scheduler works through the queue one item at a time (``GET /admin/scheduler/status``).
+    Where the scheduler does not run in this process (turned off), one pass through the queue is started instead;
+    where another process runs it, nothing is started (``started: false``, ``state: running_elsewhere``).
     """
-    from nada_ai.app.reconcile_scheduler import poll_once
-
-    result = await poll_once(s)
+    result = s.scheduler.wake()
     await audit_log(s, principal, action="search_index.reconcile", target="-", status="submitted")
     return ReconcileSearchIndexResponse(**result)
+
+
+@admin_router.get("/admin/scheduler/status", dependencies=[Depends(require_role(Role.read))])
+async def admin_scheduler_status(s: AppState = Depends(get_state)) -> dict[str, Any]:
+    """What the search-index scheduler is doing: state (idle | processing | paused | not_tracking | disabled |
+    not_configured | crashed | stuck | running_elsewhere), the pause reason and when it tries again, the item being
+    processed, this pass's counts, unsent acks, the last error and the request gate's figures. Answered from memory
+    (or the running process's state file), without calling NADA."""
+    return s.scheduler.status()
+
+
+@admin_router.post("/admin/scheduler/pause")
+async def admin_scheduler_pause(
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> dict[str, Any]:
+    """Pause the scheduler: it finishes the item in hand (and its ack), then starts nothing until resumed — also
+    after a restart. Catalog changes keep queuing in NADA meanwhile."""
+    s.scheduler.pause()
+    await audit_log(s, principal, action="scheduler.pause", target="-")
+    return s.scheduler.status()
+
+
+@admin_router.post("/admin/scheduler/resume")
+async def admin_scheduler_resume(
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> dict[str, Any]:
+    """Resume a paused scheduler: it carries on from NADA's queue at once."""
+    s.scheduler.resume()
+    await audit_log(s, principal, action="scheduler.resume", target="-")
+    return s.scheduler.status()
+
+
+@admin_router.post("/admin/search-index/import")
+async def admin_search_index_import(
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.write)),
+) -> JSONResponse:
+    """Tell NADA what this index already holds, then have NADA queue the rest (``import_index_state``): for an index
+    that existed before NADA tracked it, so it is not rebuilt. Runs as a background job; embeds nothing."""
+    from nada_ai.ingest.search_index_sync import import_index_state
+
+    settings = s.settings
+    job_id = uuid.uuid4().hex
+    cancel_token = CancelToken()
+
+    async def factory() -> dict[str, Any]:
+        result = await asyncio.to_thread(
+            import_index_state,
+            settings,
+            progress_cb=functools.partial(s.jobs.set_progress, job_id),
+            cancel_token=cancel_token,
+        )
+        s.scheduler.wake()
+        return result
+
+    return await _submit_or_409(
+        s,
+        kind="search_index_import",
+        key="search_index_import",
+        factory=factory,
+        params={},
+        principal=principal,
+        job_id=job_id,
+        cancel_token=cancel_token,
+    )
 
 
 @admin_router.get(
@@ -1195,13 +1255,18 @@ async def admin_search_index_reconcile_diff(
         default=None,
         description="Narrow to one surveys.type value, e.g. 'geospatial' — omit to reconcile all of object_type.",
     ),
+    remove_only: bool = Query(
+        default=False,
+        description="Only delete what is indexed but no longer in NADA's catalog; index nothing (the dashboard's Clean up).",
+    ),
     s: AppState = Depends(get_state),
     principal: Principal = Depends(require_role(Role.write)),
 ) -> JSONResponse:
     """Resolve NADA's DB-vs-index diff for object_type (optionally narrowed to
     one data_type): index everything NADA's catalog has that isn't currently
     indexed, delete everything indexed that's no longer in NADA's catalog —
-    see ``ingest.search_index_sync.reconcile_diff_once``.
+    see ``ingest.search_index_sync.reconcile_diff_once``. With ``remove_only``,
+    only the deleting half runs, as its own job (key ``search_index_cleanup:…``).
 
     This is the same call whether it's a first-ever run against a fresh
     deployment (where "missing" is simply the whole catalog — this doubles as
@@ -1230,14 +1295,16 @@ async def admin_search_index_reconcile_diff(
             data_type=data_type,
             progress_cb=functools.partial(s.jobs.set_progress, job_id),
             cancel_token=cancel_token,
+            remove_only=remove_only,
         )
 
+    kind = "search_index_cleanup" if remove_only else "search_index_reconcile_diff"
     return await _submit_or_409(
         s,
-        kind="search_index_reconcile_diff",
-        key=f"search_index_reconcile_diff:{object_type}:{data_type or 'all'}",
+        kind=kind,
+        key=f"{kind}:{object_type}:{data_type or 'all'}",
         factory=factory,
-        params={"object_type": object_type, "data_type": data_type},
+        params={"object_type": object_type, "data_type": data_type, "remove_only": remove_only},
         principal=principal,
         job_id=job_id,
         cancel_token=cancel_token,
@@ -1270,6 +1337,7 @@ async def job_get(job_id: str, s: AppState = Depends(get_state)) -> JobResponse:
     return _job_to_response(job)
 
 
+@jobs_router.post("/jobs/{job_id}/cancel", response_model=JobResponse)
 @jobs_router.delete("/jobs/{job_id}", response_model=JobResponse)
 async def job_cancel(
     job_id: str,

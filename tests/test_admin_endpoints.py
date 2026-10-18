@@ -368,17 +368,26 @@ def test_ingest_from_catalog_all_rejects_resume_with_recreate(monkeypatch):
     create_index.assert_not_called()
 
 
-def test_ingest_reconcile_triggers_poll_once(monkeypatch):
+def test_ingest_reconcile_wakes_the_scheduler(monkeypatch):
     monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
-    mock_poll_once = AsyncMock(return_value={"polled": 3})
-    monkeypatch.setattr("nada_ai.app.reconcile_scheduler.poll_once", mock_poll_once)
-
     with TestClient(app) as client:
         _fresh_state()
+        monkeypatch.setattr(state.scheduler, "wake", lambda: {"started": True, "state": "processing"})
         r = client.post("/admin/ingest/reconcile")
     assert r.status_code == 200
-    assert r.json() == {"polled": 3}
-    mock_poll_once.assert_awaited_once()
+    assert r.json() == {"started": True, "state": "processing"}
+
+
+def test_scheduler_status_is_answered_without_calling_nada(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    with TestClient(app) as client:
+        _fresh_state()
+        r = client.get("/admin/scheduler/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["state"] == "disabled"  # tests run without the scheduler
+    assert body["running_here"] is False
+    assert "requests" in body
 
 
 def test_search_index_diff_missing_list_returns_items(monkeypatch):
@@ -610,6 +619,38 @@ def test_search_index_reconcile_diff_singleflights_per_data_type(monkeypatch):
         assert r3.status_code == 202
         assert r3.json()["id"] != r1.json()["id"]
         gate.set()
+
+
+def test_search_index_reconcile_diff_remove_only_is_its_own_cleanup_job(monkeypatch):
+    """Clean up runs beside an update of the same scope, and passes remove_only through."""
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    monkeypatch.setenv("NADA_REPORT_SEARCH_INDEX_STATE_ENABLED", "true")
+    gate = threading.Event()
+    seen: list[bool] = []
+
+    def slow(settings, **kw):
+        seen.append(kw.get("remove_only"))
+        gate.wait(timeout=5)
+        return {"missing_total": 0, "stale_total": 0, "indexed": 0, "deleted": 0, "failed": 0, "skipped": 0}
+
+    monkeypatch.setattr("nada_ai.ingest.search_index_sync.reconcile_diff_once", slow)
+
+    with TestClient(app) as client:
+        _fresh_state()
+        r1 = client.post("/admin/search-index/reconcile-diff?object_type=survey")
+        assert r1.status_code == 202
+        r2 = client.post("/admin/search-index/reconcile-diff?object_type=survey&remove_only=true")
+        assert r2.status_code == 202
+        assert r2.json()["kind"] == "search_index_cleanup"
+        assert r2.json()["key"] == "search_index_cleanup:survey:all"
+        r3 = client.post("/admin/search-index/reconcile-diff?object_type=survey&remove_only=true")
+        assert r3.status_code == 409
+        for _ in range(50):  # both workers start on their own threads
+            if len(seen) == 2:
+                break
+            time.sleep(0.1)
+        gate.set()
+    assert sorted(seen) == [False, True]
 
 
 def test_search_index_reconcile_diff_writes_progress_onto_the_job(monkeypatch):
@@ -1433,3 +1474,25 @@ def test_citations_stats_is_zero_not_an_error_before_the_first_sync(monkeypatch)
 def test_citations_stats_501_on_qdrant(monkeypatch):
     r, _ = _citations_call(monkeypatch, "GET", "/admin/citations/stats", backend="qdrant", client_mock=MagicMock())
     assert r.status_code == 501
+
+
+def test_scheduler_pause_and_resume(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    with TestClient(app) as client:
+        _fresh_state()
+        paused = client.post("/admin/scheduler/pause")
+        assert paused.status_code == 200
+        assert paused.json()["pause"]["reason"] == "manual"
+        assert client.post("/admin/ingest/reconcile").json() == {"started": False, "state": "paused"}
+
+        resumed = client.post("/admin/scheduler/resume")
+        assert resumed.status_code == 200
+        assert resumed.json()["state"] != "paused"
+
+
+def test_a_job_can_be_cancelled_with_post(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    with TestClient(app) as client:
+        _fresh_state()
+        r = client.post("/jobs/does-not-exist/cancel")
+    assert r.status_code == 404

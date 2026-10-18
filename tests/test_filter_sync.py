@@ -50,11 +50,12 @@ def test_sync_opensearch_updates_chunks_and_the_study_document(mock_build_client
     client.update_by_query.return_value = {"updated": 3}
 
     settings = Settings(search_backend="opensearch", index_name="chunks")
-    res = sync_filters_for_idno(settings, "DOC-1", {"countries": [181]})
+    with patch("nada_ai.ingest.service.apply_study_options_op") as rewrite_study:
+        res = sync_filters_for_idno(settings, "DOC-1", {"countries": [181]})
 
     assert res["found"] is True
     assert res["updated_points"] == 3
-    chunk_call, study_call = client.update_by_query.call_args_list
+    (chunk_call,) = client.update_by_query.call_args_list
     # chunks are matched by stored idno and by sid, and get the flat map, not nested rows
     assert chunk_call.kwargs["index"] == "chunks"
     should = chunk_call.kwargs["body"]["query"]["bool"]["should"]
@@ -62,10 +63,8 @@ def test_sync_opensearch_updates_chunks_and_the_study_document(mock_build_client
     assert {"terms": {"metadata.sid": [9]}} in should
     assert chunk_call.kwargs["body"]["script"]["params"] == {"facets": {"countries": ["181"]}}
     assert "filter_fields" not in chunk_call.kwargs["body"]["script"]["source"]
-    # the study document is matched by NADA idno
-    assert study_call.kwargs["index"] == "chunks-studies"
-    assert study_call.kwargs["body"]["query"] == {"term": {"idno": "DOC-1"}}
-    assert study_call.kwargs["body"]["script"]["params"] == {"facets": {"countries": ["181"]}}
+    # the study document is never updated in place (its index stores few fields): it is rewritten from NADA
+    rewrite_study.assert_called_once_with(settings, "DOC-1")
     client.transport.close.assert_called_once()
 
 

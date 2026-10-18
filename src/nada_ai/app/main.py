@@ -79,22 +79,19 @@ async def lifespan(app: FastAPI):
     state.audit_lock = asyncio.Lock()
     state.search_rate_limiter = RateLimiter(state.settings.rate_limit_search_per_minute)
     state.metrics = MetricsRegistry()
-    state.reconcile_scheduler_task = None
-    if state.settings.reconcile_search_index_enabled:
-        from nada_ai.app.reconcile_scheduler import reconcile_loop
+    from nada_ai.app.reconcile_scheduler import Scheduler
 
-        state.reconcile_scheduler_task = asyncio.create_task(
-            reconcile_loop(state), name="search-index-reconcile-scheduler"
-        )
+    state.scheduler = Scheduler(state)
+    if state.scheduler.nada_url_configured():
+        # every request to NADA from here on (ai4data's included) goes through the request gate
+        from nada_ai.ingest.search_index_sync import gated_transport
+
+        gated_transport(state.settings)
+    state.scheduler.start()
 
     async with mcp_app.router.lifespan_context(mcp_app):
         yield
-    if state.reconcile_scheduler_task is not None:
-        state.reconcile_scheduler_task.cancel()
-        try:
-            await state.reconcile_scheduler_task
-        except (asyncio.CancelledError, Exception):
-            pass
+    await state.scheduler.stop()
     try:
         await state.jobs.shutdown()
     except Exception:
@@ -207,8 +204,9 @@ async def demo_document_page_preview(
 
 @app.get("/health")
 async def health(s: AppState = Depends(get_state)) -> dict[str, Any]:
-    """One health shape for every engine: ``status``, ``backend``, ``collection``, ``collection_exists`` are always
-    present. Qdrant's own ``search.health()`` already returns exactly that; OpenSearch is made to match it here
+    """One health shape for every engine: ``status``, ``backend``, ``collection``, ``collection_exists`` and
+    ``scheduler`` (the search-index scheduler's state and heartbeat) are always present; ``status`` is ``degraded``
+    too when the scheduler is enabled but crashed, stuck or without NADA's URL. Qdrant's own ``search.health()`` already returns exactly that; OpenSearch is made to match it here
     rather than returning its own, differently-shaped payload (``cluster``/``index``, no ``backend`` or
     ``collection_exists`` at all) — a caller reading fixed field names got ``undefined`` under OpenSearch before,
     which rendered as a false "unhealthy" collection rather than a missing one. ``cluster`` is kept as an
@@ -216,22 +214,30 @@ async def health(s: AppState = Depends(get_state)) -> dict[str, Any]:
     """
     try:
         if s.settings.search_backend == "qdrant":
-            return await s.search.health()
-        assert s.client is not None
-        name = s.settings.index_name
-        cluster = await s.client.cluster.health()
-        exists = await s.client.indices.exists(index=name)
-        cluster_status = cluster.get("status")
-        return {
-            "status": "ok" if exists and cluster_status in ("green", "yellow") else "degraded",
-            "backend": s.settings.search_backend,
-            "collection": name,
-            "collection_exists": bool(exists),
-            "cluster": cluster_status,
-        }
+            result = await s.search.health()
+        else:
+            assert s.client is not None
+            name = s.settings.index_name
+            cluster = await s.client.cluster.health()
+            exists = await s.client.indices.exists(index=name)
+            cluster_status = cluster.get("status")
+            result = {
+                "status": "ok" if exists and cluster_status in ("green", "yellow") else "degraded",
+                "backend": s.settings.search_backend,
+                "collection": name,
+                "collection_exists": bool(exists),
+                "cluster": cluster_status,
+            }
     except Exception as e:
         logger.error("health check failed: %s", e)
         raise HTTPException(status_code=503, detail="backend unavailable") from e
+
+    # the search-index scheduler: degraded when it is meant to run and cannot
+    scheduler = s.scheduler.status()
+    result["scheduler"] = {"state": scheduler.get("state"), "heartbeat_at": scheduler.get("heartbeat_at")}
+    if scheduler.get("enabled") and scheduler.get("state") in ("crashed", "stuck", "not_configured"):
+        result["status"] = "degraded"
+    return result
 
 
 def _embedding_status_extras(s: AppState) -> dict[str, Any]:

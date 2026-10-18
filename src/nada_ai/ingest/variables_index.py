@@ -26,6 +26,7 @@ from nada_ai.ingest.progress import CancelToken
 from nada_ai.nada.admin_auth import scrub_admin_credentials
 from nada_ai.search.backend.opensearch.client import build_client
 from nada_ai.search.backend.opensearch.mapping import new_index_generation, variables_index_body
+from nada_ai.search.backend.opensearch.studies import sids_for_idnos
 from nada_ai.search.backend.opensearch.variables import variable_bulk_action
 from nada_ai.settings import Settings
 
@@ -58,28 +59,53 @@ def _bulk_actions(index: str, variables: list[dict[str, Any]]) -> list[dict[str,
 
 def _write_batch(client: Any, index: str, batch: list[dict[str, Any]]) -> tuple[int, list[Any]]:
     """Bulk-write one page of variable documents; ``(indexed, errors)``. Refreshes once at the end of a run, not here."""
-    actions = _bulk_actions(index, batch)
+    return _write_actions(client, _bulk_actions(index, batch))
+
+
+def _write_actions(client: Any, actions: list[dict[str, Any]]) -> tuple[int, list[Any]]:
+    """Bulk-write already-built variable documents; ``(indexed, errors)``."""
     if not actions:
         return 0, []
     success, errors = bulk(client, actions, raise_on_error=False, refresh=False)
     return int(success), list(errors) if isinstance(errors, list) else []
 
 
+def _iter_study_variables(settings: Settings, sid: int, page_size: int):
+    """Every variable of one study, fetched from NADA by the study's id (``id_format=id``) a page at a time — never by
+    idno, which NADA cannot resolve in a URL for every idno (``:``, ``/``, spaces)."""
+    kwargs = request_kwargs(settings)
+    after: int | None = None
+    while True:
+        params: dict[str, Any] = {"limit": page_size, "id_format": "id"}
+        if after is not None:
+            params["after_uid"] = after
+        data = catalog_extract.fetch_extract_survey_variables(str(sid), params=params, **kwargs)
+        batch = [v for v in data.get("variables") or [] if isinstance(v, dict)]
+        yield from batch
+        after = data.get("next_after_uid")
+        if not batch or not data.get("has_more") or after is None:
+            return
+
+
 def sync_survey_variables_op(
     settings: Settings,
     idno: str,
     *,
+    sid: int | None = None,
     page_size: int = 1000,
     cancel_token: CancelToken | None = None,
 ) -> dict[str, Any]:
-    """Replace one study's variables in the index (by its NADA idno): delete them, then write every page of them.
+    """Replace one study's variables in the index: delete them, then write every page of them. The study is
+    ``sid`` when the caller knows it, else the study index's sid for ``idno``; its variables are fetched and replaced
+    by that id.
 
     Best fit after that study's own document is (re)indexed, so a search never shows a variable of an unpublished or
     deleted study. The study's variables are fetched a page at a time (a study can have far more than fit in one
-    response), and the first page is fetched **before** anything is deleted: a study that cannot be read (unknown
-    idno, NADA unreachable) leaves its existing variables alone instead of emptying them. A failure after that first
-    page leaves the study partially indexed and raises; running the sync again repairs it, since each variable's
-    ``_id`` is its ``uid``.
+    response), and the first page is fetched and built into documents **before** anything is deleted: a study that
+    cannot be read (unknown idno, NADA unreachable) or whose first page cannot be built (a field the extract no
+    longer sends) leaves its existing variables alone instead of emptying them. A failure after that first page
+    leaves the study partially indexed and raises; running the sync again repairs it, since each variable's ``_id``
+    is its ``uid``.
 
     Returns ``{"idno", "indexed", "errors", "cancelled"}``; ``cancelled`` is true when ``cancel_token`` stopped the
     pages early.
@@ -87,29 +113,32 @@ def sync_survey_variables_op(
     client = build_client(settings)
     try:
         ensure_variables_index(client, settings)
+        if sid is None:
+            sid = sids_for_idnos(client, settings.studies_index, [idno]).get(idno)
+            if sid is None:
+                raise ExtractError(f"{idno!r} is not in the study index: its variables cannot be synced by study id")
 
         try:
-            pages = batched(
-                catalog_extract.iter_extract_survey_variables(idno, page_size=page_size, **request_kwargs(settings)),
-                page_size,
-            )
+            pages = batched(_iter_study_variables(settings, int(sid), page_size), page_size)
             first = next(pages, ())
+            first_actions = _bulk_actions(settings.variables_index, list(first))
         except Exception as e:
             raise ExtractError(scrub_admin_credentials(str(e))) from e
 
         if cancel_token is not None and cancel_token.is_set():
             return {"idno": idno, "indexed": 0, "errors": [], "cancelled": True}
-        client.delete_by_query(index=settings.variables_index, body={"query": {"term": {"idno": idno}}}, refresh=True)
+        client.delete_by_query(index=settings.variables_index, body={"query": {"term": {"sid": int(sid)}}}, refresh=True)
 
         indexed = 0
         errors: list[Any] = []
         cancelled = False
         try:
-            for batch in chain([first] if first else [], pages):
+            rest = (_bulk_actions(settings.variables_index, list(batch)) for batch in pages)
+            for actions in chain([first_actions] if first else [], rest):
                 if cancel_token is not None and cancel_token.is_set():
                     cancelled = True
                     break
-                written, batch_errors = _write_batch(client, settings.variables_index, list(batch))
+                written, batch_errors = _write_actions(client, actions)
                 indexed += written
                 errors.extend(batch_errors)
         except Exception as e:

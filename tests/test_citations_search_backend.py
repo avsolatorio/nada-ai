@@ -68,7 +68,7 @@ def test_paging_and_the_returned_fields() -> None:
     body = search_body(_job())
     assert body["size"] == 15 and body["from"] == 30 and body["track_total_hits"] is True
     assert "sort" not in body  # relevance
-    assert set(body["_source"]) == {"citation_id", "uuid", "title", "authors", "ctype", "pub_year", "doi"}
+    assert set(body["_source"]) == {"citation_id", "uuid"}  # ids only: the caller reads the rest from its database
 
 
 @pytest.mark.parametrize(
@@ -87,15 +87,15 @@ def test_the_executor_returns_hits_in_order_with_the_total() -> None:
         "hits": {
             "total": {"value": 2},
             "hits": [
-                {"_score": 3.0, "_source": {"citation_id": 5, "title": "A", "pub_year": 2001}},
-                {"_score": 1.0, "_source": {"citation_id": 2, "title": "B"}},
+                {"_score": 3.0, "_source": {"citation_id": 5, "uuid": "u-5"}},
+                {"_score": 1.0, "_source": {"citation_id": 2}},
             ],
         },
     }
     page = asyncio.run(search_citations(_job(client=client)))
     assert page.found == 2 and page.took_ms == 4
     assert [h.citation_id for h in page.hits] == [5, 2]
-    assert page.hits[0].pub_year == 2001 and page.hits[1].pub_year is None
+    assert page.hits[0].uuid == "u-5" and page.hits[1].uuid is None
 
 
 def test_a_missing_index_is_reported_as_not_ready() -> None:

@@ -143,6 +143,17 @@ STUDY_TEXT_FIELDS = (
 )
 
 
+#: The only fields kept in each index's ``_source``: what is read back from a hit. Everything else is indexed for
+#: search (and sorting/filtering) but not stored. NADA reads the records themselves from its own database by id
+#: (studies by ``sid``, variables by ``uid``, citations by ``citation_id``). Safe only because these indices are never
+#: updated in place (``update_by_query`` or partial ``_update`` rebuild a document from its ``_source``, which would drop
+#: every field not kept here): their documents are always rewritten whole. The chunk index is updated in place (its
+#: filters) and keeps its full ``_source``.
+STUDY_SOURCE_FIELDS = ["sid", "idno", "title", "filter_facets"]
+VARIABLE_SOURCE_FIELDS = ["uid", "sid", "published"]
+CITATION_SOURCE_FIELDS = ["citation_id", "uuid"]
+
+
 def studies_index_body() -> dict[str, Any]:
     """OpenSearch settings + mappings of the **study** index: one document per study, ``_id`` = ``sid``.
 
@@ -186,7 +197,12 @@ def studies_index_body() -> dict[str, Any]:
                 },
             }
         },
-        "mappings": {"dynamic": "strict", "dynamic_templates": templates, "properties": properties},
+        "mappings": {
+            "dynamic": "strict",
+            "_source": {"includes": STUDY_SOURCE_FIELDS},
+            "dynamic_templates": templates,
+            "properties": properties,
+        },
     }
 
 
@@ -221,6 +237,7 @@ def citations_index_body() -> dict[str, Any]:
         },
         "mappings": {
             "dynamic": "strict",
+            "_source": {"includes": CITATION_SOURCE_FIELDS},
             "properties": {
                 "citation_id": {"type": "integer"},
                 "uuid": {"type": "keyword"},
@@ -268,6 +285,7 @@ def variables_index_body() -> dict[str, Any]:
         },
         "mappings": {
             "dynamic": "strict",
+            "_source": {"includes": VARIABLE_SOURCE_FIELDS},
             "properties": {
                 "uid": {"type": "integer"},
                 "sid": {"type": "integer"},
