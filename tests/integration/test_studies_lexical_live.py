@@ -109,6 +109,7 @@ def _raw(sid: int, s: dict[str, Any]) -> dict[str, Any]:
         "_extract_core_fields": {
             "catalog_id": sid,
             "idno": s["idno"],
+            "all_text": [],
             "title": s["title"],
             "nation": s["nation"],
             "authoring_entity": s["authoring"],

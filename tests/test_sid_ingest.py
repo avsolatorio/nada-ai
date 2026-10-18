@@ -108,6 +108,15 @@ def test_study_extract_requires_filters() -> None:
         pipeline._study_extract(raw)
 
 
+def test_a_study_document_needs_all_text_a_record_cached_before_it_is_refused() -> None:
+    stale = {"_extract_core_fields": {"catalog_id": 9, "idno": "X"}, "_extract_filters": {}}
+    with pytest.raises(pipeline.StudyExtractError, match="metadata cache"):
+        pipeline._study_extract(stale, require_all_text=True)
+    assert pipeline._study_extract(stale).sid == 9  # no study document (Qdrant): all_text is not needed
+    current = {"_extract_core_fields": {"catalog_id": 9, "idno": "X", "all_text": []}, "_extract_filters": {}}
+    assert pipeline._study_extract(current, require_all_text=True).sid == 9
+
+
 def test_indexing_requires_extract_mode() -> None:
     with patch(EXTRACT_MODE, return_value=False), pytest.raises(MetadataExtractNotConfigured, match="internal id"):
         pipeline.require_extract_mode()

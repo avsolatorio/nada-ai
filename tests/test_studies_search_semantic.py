@@ -301,10 +301,10 @@ def _resort_response(rows: list[tuple[int, str]], found: int, counts: dict[str, 
 
 
 def _is_union(clauses: dict[str, Any]) -> bool:
-    """A keyword search that also takes in studies without the keyword (another sort): its match is a bare ``should``,
-    unlike the phrase-scored keyword match of a query of several words, which has a ``must``."""
+    """A keyword search that also takes in studies without the keyword (another sort): one of its alternatives is a
+    ``terms`` on ``sid``."""
     match = clauses["must"][0]
-    return "bool" in match and "must" not in match["bool"]
+    return any("terms" in alt and "sid" in alt["terms"] for alt in match.get("bool", {}).get("should", []))
 
 
 def _is_idno_probe(body: dict[str, Any]) -> bool:

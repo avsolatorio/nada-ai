@@ -143,6 +143,7 @@ def _raw(sid: int, s: dict[str, Any]) -> dict[str, Any]:
         "created": s["created"],
         "changed": s["created"] + 1,
         "total_views": s["views"],
+        "all_text": [],
     }
     filters = {
         "dataset_type": s["type"],

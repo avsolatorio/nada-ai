@@ -46,8 +46,6 @@ retrying forever or corrupting the index with a wrong type.
 from __future__ import annotations
 
 import logging
-import threading
-import time
 from collections.abc import Callable
 from typing import Any, Literal
 
@@ -66,6 +64,7 @@ from nada_ai.ingest.service import (
 )
 from nada_ai.nada import gate as nada_gate
 from nada_ai.nada.admin_auth import resolve_admin_cookies, resolve_admin_headers
+from nada_ai.search.backend.opensearch.generation import index_generation
 from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -189,42 +188,6 @@ def _base_url(settings: Settings) -> str:
     return f"{metadata_catalog.url.rstrip('/')}/api"
 
 
-#: The generation of this deployment's study index, sent to NADA with every search-index request (``X-Index-Generation``)
-#: so NADA can refuse a nada-ai whose index is not the one it tracks. Read from the index's mapping, kept for a minute.
-_generation_cache: dict[str, Any] = {"value": None, "at": float("-inf")}
-_generation_lock = threading.Lock()
-_GENERATION_TTL = 60.0
-
-
-def index_generation(settings: Settings) -> str | None:
-    """The study index's generation (``mappings._meta.generation``), or None when there is no study index."""
-    if settings.search_backend != "opensearch":
-        return None
-    with _generation_lock:
-        if time.monotonic() - _generation_cache["at"] < _GENERATION_TTL:
-            return _generation_cache["value"]
-        from nada_ai.search.backend.opensearch.client import build_client
-
-        client = build_client(settings)
-        try:
-            mapping = client.indices.get_mapping(index=settings.studies_index, ignore_unavailable=True)
-            meta = (next(iter(mapping.values()))["mappings"].get("_meta") or {}) if mapping else {}
-            value = meta.get("generation")
-        except Exception as e:  # noqa: BLE001 - the header is optional for NADA; OpenSearch being down must not stop NADA calls
-            logger.warning("could not read the study index generation: %s", e)
-            value = None
-        finally:
-            client.close()
-        _generation_cache.update(value=value, at=time.monotonic())
-        return value
-
-
-def forget_index_generation() -> None:
-    """Read the generation again on the next request (the index was just created or recreated)."""
-    with _generation_lock:
-        _generation_cache.update(value=None, at=float("-inf"))
-
-
 def gated_transport(settings: Settings) -> nada_gate.GatedTransport:
     """The process's transport to NADA, through the request gate (installed on first use)."""
     return nada_gate.install(settings, _base_url(settings))
@@ -239,7 +202,7 @@ def _client(settings: Settings) -> httpx.Client:
         base_url=_base_url(settings),
         headers=headers,
         cookies=resolve_admin_cookies(),
-        timeout=settings.nada_request_timeout_seconds,
+        timeout=settings.request_timeout_seconds,
         transport=gated_transport(settings),
     )
 

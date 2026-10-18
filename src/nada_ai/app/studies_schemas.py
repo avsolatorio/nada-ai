@@ -21,6 +21,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from nada_ai.search.query_heuristics import split_quoted
+
 # --------------------------------------------------------------------------------------
 # Contract constants
 # --------------------------------------------------------------------------------------
@@ -225,7 +227,10 @@ class StudySearchRequest(BaseModel):
     @model_validator(mode="after")
     def _normalise(self) -> StudySearchRequest:
         if self.query is not None:
-            self.query = self.query.strip() or None
+            query = self.query.strip()
+            parts = split_quoted(query)
+            # blank, or quotes with nothing in them: nothing is asked for, so it is a browse
+            self.query = query if parts.phrases or parts.rest else None
         return self
 
 

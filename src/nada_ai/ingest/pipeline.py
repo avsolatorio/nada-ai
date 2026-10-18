@@ -14,8 +14,10 @@ from nada_ai.filters.metadata_extract import MetadataExtractNotConfigured
 from nada_ai.ingest.progress import CancelToken, IngestProgressTracker
 from nada_ai.ingest.quality import QualityReport
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
+from nada_ai.search.backend.opensearch.generation import forget_index_generation
 from nada_ai.search.backend.opensearch.mapping import (
     EMBEDDING_FIELD,
+    STUDY_ALL_TEXT_FIELD,
     index_body,
     new_index_generation,
     studies_index_body,
@@ -79,14 +81,20 @@ def ensure_index(client, settings: Settings, embedding_dim: int | None) -> None:
     client.indices.create(index=name, body=body)
 
 
+def new_studies_index_body() -> dict[str, Any]:
+    """Settings + mappings for a new study index, stamped with a fresh generation."""
+    body = studies_index_body()
+    body["mappings"]["_meta"] = {"generation": new_index_generation()}
+    return body
+
+
 def ensure_studies_index(client, settings: Settings) -> None:
     """Create the study index if missing (stamped with a generation)."""
     name = settings.studies_index
     if client.indices.exists(index=name):
         return
-    body = studies_index_body()
-    body["mappings"]["_meta"] = {"generation": new_index_generation()}
-    client.indices.create(index=name, body=body)
+    client.indices.create(index=name, body=new_studies_index_body())
+    forget_index_generation()  # NADA must be sent the new generation from the next request on
 
 
 class StudyExtractError(ValueError):
@@ -117,10 +125,12 @@ class StudyExtract:
     chunks: int = 0
 
 
-def _study_extract(raw: dict[str, Any] | None) -> StudyExtract:
+def _study_extract(raw: dict[str, Any] | None, *, require_all_text: bool = False) -> StudyExtract:
     """The study's ``sid`` (NADA internal id, ``surveys.id``), ``core_fields`` and ``filters`` from the extract data.
 
     Raises :class:`StudyExtractError` when a required value is missing; such a study is not indexed.
+    ``require_all_text``: the study document is written too, and needs ``all_text``. NADA sends it with every full
+    record, so a record without it was cached before NADA did: it is not indexed incomplete, it is refused.
     """
     raw = raw if isinstance(raw, dict) else {}
     core = raw.get("_extract_core_fields")
@@ -135,6 +145,11 @@ def _study_extract(raw: dict[str, Any] | None) -> StudyExtract:
     filters = raw.get("_extract_filters")
     if not isinstance(filters, dict):
         raise StudyExtractError("metadata-extract data has no filters")
+    if require_all_text and STUDY_ALL_TEXT_FIELD not in core:
+        raise StudyExtractError(
+            "metadata-extract data has no core_fields.all_text: the record was cached before NADA sent it; delete its "
+            "file in the metadata cache (metadata_cache) and index it again"
+        )
     return StudyExtract(sid=sid, core_fields=core, filters=filters)
 
 
@@ -303,7 +318,7 @@ def iter_langdoc_records(
                 progress.mark(idno, ok=False, error=str(e))
             continue
         try:
-            study = _study_extract(raw)
+            study = _study_extract(raw, require_all_text=study_documents)
         except StudyExtractError as e:
             logger.warning("Skip %s %s: %s", metadata_type, idno, e)
             if load_errors is not None:

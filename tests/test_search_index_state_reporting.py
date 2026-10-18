@@ -685,7 +685,14 @@ def test_sync_variables_op_stops_when_cancelled():
 # ---------------------------------------------------------------------------
 
 
-def _publish_state(*, indexed: bool, published: str = "0", variables_published: int | None = 0):
+def _publish_state(
+    *,
+    indexed: bool,
+    published: str = "0",
+    variables_published: int | None = 0,
+    core: dict | None = None,
+    stored_all_text: list[str] | None = None,
+):
     from unittest.mock import MagicMock
 
     import nada_ai.ingest.service as service_module
@@ -695,7 +702,8 @@ def _publish_state(*, indexed: bool, published: str = "0", variables_published: 
     # what the variable index holds for the study's variables (None: it holds none)
     hits = [] if variables_published is None else [{"_source": {"published": variables_published}}]
     client.search.return_value = {"hits": {"hits": hits}}
-    extract = (7, {"idno": "A", "title": "T"}, {"published": [published], "countries": ["1"]})
+    client.get.return_value = {"fields": {"all_text": stored_all_text}} if stored_all_text else {}
+    extract = (7, core or {"idno": "A", "title": "T"}, {"published": [published], "countries": ["1"]})
     with (
         patch("nada_ai.filters.metadata_extract.fetch_study_extract", return_value=extract),
         patch.object(service_module, "build_client", return_value=client),
@@ -712,10 +720,36 @@ def test_apply_study_options_rewrites_the_study_and_its_chunks_in_place():
     assert result == {"idno": "A", "updated": True, "sid": 7, "chunks_updated": 4, "variables_resynced": False}
     written = client.index.call_args.kwargs
     assert written["id"] == "7" and written["body"]["filter_facets"]["published"] == ["0"]
-    (chunks,) = (c.kwargs for c in client.update_by_query.call_args_list)  # the variable index is never updated in place
+    (chunks,) = (
+        c.kwargs for c in client.update_by_query.call_args_list
+    )  # the variable index is never updated in place
     assert chunks["body"]["script"]["params"]["facets"]["published"] == ["0"]
     assert chunks["body"]["query"] == {"term": {"metadata.sid": 7}}
     sync.assert_not_called()  # the variables' published did not change
+
+
+def test_apply_study_options_keeps_the_all_text_nada_sends_only_with_full_updates():
+    """A partial record has no all_text: the stored one is written again, not dropped."""
+    _, client, _ = _publish_state(indexed=True, stored_all_text=["Women and men aged 15 to 49", "Kabul"])
+    assert client.get.call_args.kwargs == {
+        "index": _settings(search_backend="opensearch").studies_index,
+        "id": "7",
+        "stored_fields": "all_text",
+        "_source": False,
+    }
+    assert client.index.call_args.kwargs["body"]["all_text"] == ["Women and men aged 15 to 49", "Kabul"]
+
+
+def test_apply_study_options_writes_the_all_text_nada_sent_without_reading_the_stored_one():
+    core = {"idno": "A", "title": "T", "all_text": ["New notes"]}
+    _, client, _ = _publish_state(indexed=True, core=core, stored_all_text=["Old notes"])
+    client.get.assert_not_called()
+    assert client.index.call_args.kwargs["body"]["all_text"] == ["New notes"]
+
+
+def test_apply_study_options_writes_no_all_text_when_none_is_stored():
+    _, client, _ = _publish_state(indexed=True)
+    assert "all_text" not in client.index.call_args.kwargs["body"]
 
 
 def test_apply_study_options_resyncs_the_variables_when_published_changed():

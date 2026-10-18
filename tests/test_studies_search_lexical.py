@@ -22,8 +22,9 @@ from nada_ai.app.studies_schemas import (
     StudyFilters,
     StudySearchResponse,
 )
-from nada_ai.search.backend.opensearch.mapping import studies_index_body
+from nada_ai.search.backend.opensearch.mapping import STUDY_ALL_TEXT_FIELD, studies_index_body
 from nada_ai.search.backend.opensearch.studies_search import (
+    ALL_TEXT_BOOST,
     EXECUTORS,
     LEXICAL_FIELDS,
     PHRASE_BOOST,
@@ -81,8 +82,16 @@ def test_idno_is_searchable_as_text_and_still_an_exact_keyword() -> None:
     assert idno["fields"]["text"] == {"type": "text", "analyzer": "nada_text"}
 
 
+def _loose_and_everywhere(query: dict) -> tuple[dict, dict]:
+    """The loose match over the named fields and the strict one over ``all_text`` (one of the two must match)."""
+    words = query["bool"]
+    assert words["minimum_should_match"] == 1
+    loose, everywhere = words["should"]
+    return loose["multi_match"], everywhere["match"][STUDY_ALL_TEXT_FIELD]
+
+
 def test_query_uses_fuzzy_most_fields_with_minimum_should_match() -> None:
-    match = lexical_query("consumer")["multi_match"]
+    match, _ = _loose_and_everywhere(lexical_query("consumer"))
     assert match["query"] == "consumer"
     assert match["type"] == "most_fields"
     assert match["minimum_should_match"] == "2<75%"
@@ -91,17 +100,25 @@ def test_query_uses_fuzzy_most_fields_with_minimum_should_match() -> None:
     assert match["fields"] == list(LEXICAL_FIELDS)
 
 
+def test_all_text_matches_only_with_every_word_no_typos_and_the_least_weight() -> None:
+    """Loose matching on every metadata value would accept most studies for most queries."""
+    _, everywhere = _loose_and_everywhere(lexical_query("consumer prices")["bool"]["must"][0])
+    assert everywhere == {"query": "consumer prices", "operator": "and", "boost": ALL_TEXT_BOOST}
+    assert STUDY_ALL_TEXT_FIELD not in str(LEXICAL_FIELDS)
+    assert all(int(field.split("^")[1]) > ALL_TEXT_BOOST for field in LEXICAL_FIELDS if "^" in field)
+
+
 def test_query_text_is_data_not_syntax() -> None:
     """A multi_match never interprets operators, so user text cannot change the query structure."""
-    text = 'title:"x" OR (a AND NOT b) *'
+    text = "title:x OR (a AND NOT b) *"
     query = lexical_query(text)["bool"]
-    assert query["must"][0]["multi_match"]["query"] == text
+    match, everywhere = _loose_and_everywhere(query["must"][0])
+    assert match["query"] == text and everywhere["query"] == text
     assert query["should"][0]["multi_match"]["query"] == text
-    assert lexical_query("poverty")["multi_match"]["query"] == "poverty"
 
 
 def test_a_single_word_has_no_phrase_bonus() -> None:
-    assert list(lexical_query("poverty")) == ["multi_match"]
+    _loose_and_everywhere(lexical_query("poverty"))  # just the match: no phrase wrapped around it
 
 
 def test_two_or_more_words_also_score_as_a_phrase_without_changing_what_matches() -> None:
@@ -109,7 +126,8 @@ def test_two_or_more_words_also_score_as_a_phrase_without_changing_what_matches(
     assert list(query) == ["must", "should"]  # the phrase is optional: it adds to the score of studies already matched
     (match,) = query["must"]
     (phrase,) = query["should"]
-    assert match["multi_match"]["type"] == "most_fields" and match["multi_match"]["minimum_should_match"] == "2<75%"
+    loose, _ = _loose_and_everywhere(match)
+    assert loose["type"] == "most_fields" and loose["minimum_should_match"] == "2<75%"
     assert phrase["multi_match"] == {
         "query": "foreign direct investment",
         "type": "phrase",
@@ -118,6 +136,37 @@ def test_two_or_more_words_also_score_as_a_phrase_without_changing_what_matches(
         "boost": PHRASE_BOOST,
     }
     assert PHRASE_BOOST > 1
+
+
+def test_a_quoted_phrase_must_appear_word_for_word_in_any_field_or_all_text() -> None:
+    query = lexical_query('"women and men aged 15 to 49"')
+    (phrase,) = query["bool"]["must"]
+    assert phrase["multi_match"] == {
+        "query": "women and men aged 15 to 49",
+        "type": "phrase",
+        "slop": 0,
+        "fields": [*LEXICAL_FIELDS, f"{STUDY_ALL_TEXT_FIELD}^{ALL_TEXT_BOOST}"],
+    }
+    assert "should" not in query["bool"]
+
+
+def test_words_around_a_quoted_phrase_still_match_as_usual() -> None:
+    query = lexical_query('mics "aged 15 to 49" afghanistan')
+    first, words = query["bool"]["must"]
+    assert first["multi_match"]["query"] == "aged 15 to 49" and first["multi_match"]["slop"] == 0
+    loose, everywhere = _loose_and_everywhere(words["bool"]["must"][0])
+    assert loose["query"] == "mics afghanistan" and everywhere["query"] == "mics afghanistan"
+
+
+def test_every_quoted_phrase_is_required() -> None:
+    query = lexical_query('"child marriage" "female genital"')
+    assert [c["multi_match"]["query"] for c in query["bool"]["must"]] == ["child marriage", "female genital"]
+
+
+def test_typographic_quotes_count_and_an_unbalanced_quote_is_plain_text() -> None:
+    assert lexical_query("\u201cchild marriage\u201d")["bool"]["must"][0]["multi_match"]["slop"] == 0
+    loose, _ = _loose_and_everywhere(lexical_query('child "marriage')["bool"]["must"][0])
+    assert loose["query"] == "child marriage"
 
 
 def test_the_keyword_query_has_no_score_cutoff() -> None:
@@ -398,6 +447,21 @@ def test_no_match_is_none_not_an_empty_page() -> None:
 def test_a_multi_word_query_is_never_checked_as_an_idno() -> None:
     client = _client()  # no idno_match configured; a probe call would raise (queue is empty)
     assert asyncio.run(exact_idno_match(_job(client, query="poverty in rwanda"))) is None
+    client.search.assert_not_called()
+
+
+def test_a_single_token_in_quotes_is_checked_as_that_idno() -> None:
+    client = _client(idno_match=_idno_response([_idno_hit(234, "AGO_2020_HRPM_GEO_v01_M")]))
+    page = asyncio.run(exact_idno_match(_job(client, query='"AGO_2020_HRPM_GEO_v01_M"')))
+    assert page is not None and page.found == 1
+    probe = client.search.call_args.kwargs["body"]
+    assert probe["query"]["bool"]["filter"][-1] == {"term": {"idno": "AGO_2020_HRPM_GEO_v01_M"}}
+
+
+def test_a_quoted_phrase_or_quotes_with_other_words_are_never_checked_as_an_idno() -> None:
+    client = _client()
+    for query in ('"poverty rwanda"', '"AGO_2020_HRPM_GEO_v01_M" survey', '"AGO" "2020"'):
+        assert asyncio.run(exact_idno_match(_job(client, query=query))) is None
     client.search.assert_not_called()
 
 

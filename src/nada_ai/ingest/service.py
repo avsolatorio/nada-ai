@@ -339,8 +339,12 @@ def apply_study_options_from_extract(
     settings: Settings, idno: str, sid: int, core_fields: dict[str, Any], filters: dict[str, Any]
 ) -> dict[str, Any]:
     """:func:`apply_study_options_op` for an extract record already fetched (the scheduler fetches a page of them in
-    one request)."""
-    from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, metadata_field
+    one request).
+
+    NADA sends ``all_text`` (every metadata value) with full updates only, so the study document keeps the one it
+    has: it is read back from the stored field and written again unchanged.
+    """
+    from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, STUDY_ALL_TEXT_FIELD, metadata_field
     from nada_ai.search.backend.opensearch.studies import study_to_source
 
     client = build_client(settings)
@@ -349,6 +353,10 @@ def apply_study_options_from_extract(
             return {"idno": idno, "updated": False, "reason": "not_indexed"}
 
         source = study_to_source(sid, core_fields, filters)
+        if STUDY_ALL_TEXT_FIELD not in core_fields:
+            kept = _stored_all_text(client, settings.studies_index, sid)
+            if kept:
+                source[STUDY_ALL_TEXT_FIELD] = kept
         client.index(index=settings.studies_index, id=str(sid), body=source, refresh=True)
 
         chunks = client.update_by_query(
@@ -386,6 +394,14 @@ def apply_study_options_from_extract(
         }
     finally:
         _close_quiet(client)
+
+
+def _stored_all_text(client: Any, index: str, sid: int) -> list[str]:
+    """The ``all_text`` the study document holds (a stored field: it is not in ``_source``)."""
+    from nada_ai.search.backend.opensearch.mapping import STUDY_ALL_TEXT_FIELD
+
+    doc = client.get(index=index, id=str(sid), stored_fields=STUDY_ALL_TEXT_FIELD, _source=False)
+    return list((doc.get("fields") or {}).get(STUDY_ALL_TEXT_FIELD) or [])
 
 
 def _indexed_variables_published(client: Any, index: str, sid: int) -> int | None:

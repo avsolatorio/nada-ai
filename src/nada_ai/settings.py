@@ -177,19 +177,19 @@ class Settings(BaseSettings):
 
     #: The request gate in front of NADA (nada/gate.py): one request at a time, at least this many milliseconds from
     #: the end of one to the start of the next. Doubled for an hour after NADA (or a proxy) answers 429.
-    nada_request_min_interval_ms: int = Field(default=500, ge=0, le=60000)
+    request_min_interval_ms: int = Field(default=500, ge=0, le=60000)
     #: Retries of a request NADA could not serve (timeout, connection error, 408, 429, 5xx).
-    nada_request_max_retries: int = Field(default=3, ge=0, le=10)
+    request_max_retries: int = Field(default=3, ge=0, le=10)
     #: Wait before the first retry; each later one waits three times longer (5, 15, 45 s), unless NADA says Retry-After.
-    nada_request_retry_base_seconds: float = Field(default=5.0, ge=0.0, le=600.0)
-    #: Timeout of one search-index API request.
-    nada_request_timeout_seconds: float = Field(default=30.0, ge=1.0, le=600.0)
-    #: How long the scheduler pauses when a firewall in front of NADA blocks it (also the cap on Retry-After).
-    nada_firewall_pause_seconds: int = Field(default=1800, ge=60, le=86400)
+    request_retry_base_seconds: float = Field(default=5.0, ge=0.0, le=600.0)
+    #: Timeout of one request to NADA, unless the request sets its own (ai4data's metadata extract: 120 s).
+    request_timeout_seconds: float = Field(default=30.0, ge=1.0, le=600.0)
+    #: How long the scheduler pauses when a firewall in front of NADA blocks it.
+    firewall_pause_seconds: int = Field(default=1800, ge=60, le=86400)
     #: Longest pause while NADA is unavailable (pauses start at a minute and double).
-    nada_unavailable_backoff_max_seconds: int = Field(default=1800, ge=60, le=86400)
+    unavailable_backoff_max_seconds: int = Field(default=1800, ge=60, le=86400)
     #: Acks that fail in a row (NADA reachable, results not recorded) before the scheduler stops starting new work.
-    nada_ack_failure_limit: int = Field(default=10, ge=1, le=1000)
+    ack_failure_limit: int = Field(default=10, ge=1, le=1000)
 
     #: Report indexing/deletion outcomes back to NADA's search_index_state
     #: (POST {base}/admin/search-index/state/bulk) after index_ids_op,

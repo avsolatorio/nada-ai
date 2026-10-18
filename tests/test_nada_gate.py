@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import httpx
 import pytest
 
 from nada_ai.nada.gate import (
     GatedTransport,
+    NadaAskedToWait,
     NadaFirewallBlocked,
     NadaGate,
     NadaUnavailable,
@@ -34,7 +36,7 @@ def _gate(clock: _Clock, **kw) -> NadaGate:
         min_interval_seconds=kw.get("interval", 0.5),
         max_retries=kw.get("retries", 3),
         retry_base_seconds=kw.get("base", 5.0),
-        retry_after_cap_seconds=kw.get("cap", 1800),
+        retry_after_max_seconds=kw.get("retry_after_max", 60),
         sleep=clock.sleep,
         clock=clock,
     )
@@ -78,6 +80,17 @@ def test_retry_after_is_honoured():
     assert clock.sleeps == [42.0]
 
 
+def test_a_longer_retry_after_is_not_waited_out():
+    clock = _Clock()
+    gate = _gate(clock, interval=0, retry_after_max=60)
+    response = _send(gate, [httpx.Response(503, json={}, headers={"Retry-After": "3600"})])
+    assert response.status_code == 503
+    assert clock.sleeps == []
+    assert gate.last_trouble.kind == "unavailable"
+    assert "Retry-After 3600s" in gate.last_trouble.message
+    assert 3590 < gate.not_before - time.time() <= 3600  # the scheduler waits until then
+
+
 def test_after_the_last_retry_the_response_is_returned_and_recorded():
     clock = _Clock()
     gate = _gate(clock, interval=0, retries=2)
@@ -85,6 +98,18 @@ def test_after_the_last_retry_the_response_is_returned_and_recorded():
     assert response.status_code == 500
     assert gate.last_trouble.kind == "unavailable"
     assert gate.trouble_since(0) is not None
+
+
+def test_nothing_goes_out_before_the_time_nada_asked_for():
+    clock = _Clock()
+    gate = _gate(clock, interval=0, retry_after_max=60)
+    _send(gate, [httpx.Response(429, json={}, headers={"Retry-After": "900"})])
+    with pytest.raises(NadaAskedToWait) as refused:
+        _send(gate, [])  # the server is never called: there is no answer to give
+    assert 890 < refused.value.retry_at - time.time() <= 900
+
+    gate.not_before = time.time() - 1  # the time has come
+    assert _send(gate, [httpx.Response(200)]).status_code == 200
 
 
 def test_a_connection_error_that_keeps_failing_raises_nada_unavailable():
@@ -125,7 +150,7 @@ def test_a_429_slows_the_gate_down():
 
 
 def test_only_one_request_is_in_flight_at_a_time():
-    gate = NadaGate(min_interval_seconds=0, max_retries=0, retry_base_seconds=0, retry_after_cap_seconds=1)
+    gate = NadaGate(min_interval_seconds=0, max_retries=0, retry_base_seconds=0, retry_after_max_seconds=1)
     in_flight = 0
     most = 0
     lock = threading.Lock()
@@ -159,10 +184,63 @@ def test_the_transport_gates_nadas_host_only():
             sent.append(request.url.host)
             return httpx.Response(200)
 
-    gate = NadaGate(min_interval_seconds=0, max_retries=0, retry_base_seconds=0, retry_after_cap_seconds=1)
+    gate = NadaGate(min_interval_seconds=0, max_retries=0, retry_base_seconds=0, retry_after_max_seconds=1)
     transport = GatedTransport(gate, "nada.example", inner=Inner())
     with httpx.Client(transport=transport) as client:
         client.get("https://nada.example/api/x")
         client.get("https://elsewhere.example/doc.pdf")
     assert sent == ["nada.example", "elsewhere.example"]
     assert gate.requests_last_hour() == 1
+
+
+def test_closing_a_client_leaves_the_shared_transport_open():
+    closed: list[bool] = []
+
+    class Inner(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200)
+
+        def close(self) -> None:
+            closed.append(True)
+
+    gate = NadaGate(min_interval_seconds=0, max_retries=0, retry_base_seconds=0, retry_after_max_seconds=1)
+    transport = GatedTransport(gate, "nada.example", inner=Inner())
+    for _ in range(2):
+        with httpx.Client(transport=transport) as client:
+            client.get("https://nada.example/api/x")
+    assert closed == []
+
+
+def test_uninstall_closes_the_shared_connections_and_forgets_the_gate():
+    from ai4data.discovery import transport as ai4data_transport
+
+    from nada_ai.nada import gate as gate_module
+    from nada_ai.settings import Settings
+
+    closed: list[bool] = []
+
+    class Inner(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200)
+
+        def close(self) -> None:
+            closed.append(True)
+
+    transport = gate_module.install(Settings(), "https://nada.example/api")
+    transport.inner = Inner()
+    gate_module.uninstall()
+    assert closed == [True]
+    assert gate_module.get_gate() is None and ai4data_transport._client is None
+
+
+def test_the_app_closes_the_connections_to_nada_on_shutdown(monkeypatch):
+    from starlette.testclient import TestClient
+
+    from nada_ai.app.main import app
+    from nada_ai.nada import gate as gate_module
+
+    calls: list[bool] = []
+    monkeypatch.setattr(gate_module, "uninstall", lambda: calls.append(True))
+    with TestClient(app):
+        assert calls == []
+    assert calls == [True]

@@ -22,7 +22,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
-from opensearchpy.exceptions import NotFoundError
+from opensearchpy.exceptions import NotFoundError, RequestError
 
 from nada_ai.app._ingest import guarded_ingest
 from nada_ai.app.admin_schemas import (
@@ -54,6 +54,7 @@ from nada_ai.filters.service import (
     get_filters_op,
     sync_filters_op,
 )
+from nada_ai.ingest.pipeline import new_studies_index_body
 from nada_ai.ingest.progress import CancelToken
 from nada_ai.ingest.search_index_sync import SearchIndexStatus
 from nada_ai.ingest.service import (
@@ -65,6 +66,7 @@ from nada_ai.ingest.service import (
     sync_citations_op,
     sync_variables_op,
 )
+from nada_ai.search.backend.opensearch.generation import forget_index_generation
 from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, metadata_field
 from nada_ai.search.backend.opensearch.ml.setup import ingest_pipeline_definition
 
@@ -689,10 +691,11 @@ async def admin_index_delete(
     if s.settings.search_backend == "qdrant":
         coll = await _drop_qdrant_collection(s, principal, action="index.delete")
         return {"index": coll, "indexes": [coll], "deleted": True}
-    # The whole search store, not just the chunk index: the study index (what /studies/search reads) and the variable
-    # index are part of it, and dropping only the chunks left both serving results after "Drop collection".
+    # The whole search store, not just the chunk index: the study, variable and citation indexes are part of it (each is
+    # created again, with the current mapping, by the first write to it), and dropping only the chunks left them
+    # serving results after "Drop collection".
     name = s.settings.index_name
-    names = [name, s.settings.studies_index, s.settings.variables_index]
+    names = [name, s.settings.studies_index, s.settings.variables_index, s.settings.citations_index]
     try:
         raw: dict[str, Any] = {}
         for index in names:
@@ -701,6 +704,7 @@ async def admin_index_delete(
             except NotFoundError:
                 raw[index] = None
         deleted = any(v is not None for v in raw.values())
+        forget_index_generation()
         await audit_log(s, principal, action="index.delete", target=",".join(names), status="ok")
         if not deleted:
             return {"index": name, "indexes": names, "deleted": False, "detail": "index did not exist"}
@@ -709,6 +713,55 @@ async def admin_index_delete(
         logger.error("index delete failed: %s", e)
         await audit_log(s, principal, action="index.delete", target=name, status="error", detail=str(e))
         raise HTTPException(status_code=503, detail="backend unavailable") from e
+
+
+#: Delete-and-create rounds before a study index recreate gives up (each further round follows a write that created
+#: the index in between).
+_RECREATE_ATTEMPTS = 3
+
+
+@admin_router.post("/admin/index/studies/recreate")
+async def admin_studies_index_recreate(
+    confirm: bool = Query(default=False, description="Must be true to actually recreate the study index."),
+    s: AppState = Depends(get_state),
+    principal: Principal = Depends(require_role(Role.admin)),
+) -> dict[str, Any]:
+    """Drop the study index and create it empty with the current mapping and a new generation.
+
+    For a change to what the study index holds: the chunk index (and its embeddings) and the variable index are kept,
+    so indexing every study again reuses the stored vectors. NADA sees the new generation in ``GET /info``; it is meant
+    to queue every study right after (Semantic › Maintenance does both). Study search answers ``index_not_ready``
+    until the first studies are indexed again, and is incomplete until the queue is worked through.
+
+    A write that lands between the delete and the create creates the index itself (with a generation of its own), so
+    the create is refused as existing: the index is then deleted and created again.
+    """
+    if not confirm:
+        raise HTTPException(status_code=400, detail="add ?confirm=true to recreate the study index")
+    if s.settings.search_backend != "opensearch":
+        raise HTTPException(status_code=400, detail="only the OpenSearch backend has a study index")
+    name = s.settings.studies_index
+    body = new_studies_index_body()
+    try:
+        for attempt in range(_RECREATE_ATTEMPTS):
+            try:
+                await s.client.indices.delete(index=name)
+            except NotFoundError:
+                pass
+            try:
+                await s.client.indices.create(index=name, body=body)
+                break
+            except RequestError as e:
+                if e.error != "resource_already_exists_exception" or attempt == _RECREATE_ATTEMPTS - 1:
+                    raise
+    except Exception as e:
+        logger.error("study index recreate failed: %s", e)
+        await audit_log(s, principal, action="index.studies.recreate", target=name, status="error", detail=str(e))
+        raise HTTPException(status_code=503, detail="backend unavailable") from e
+    finally:
+        forget_index_generation()  # NADA must be sent the index's generation from the next request on
+    await audit_log(s, principal, action="index.studies.recreate", target=name, status="ok")
+    return {"index": name, "recreated": True, "generation": body["mappings"]["_meta"]["generation"]}
 
 
 async def _qdrant_docs(s: AppState, idno: str) -> dict[str, Any]:

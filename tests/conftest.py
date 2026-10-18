@@ -39,6 +39,6 @@ def _isolated_nada_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("NADA_REQUEST_RETRY_BASE_SECONDS", "0")
     monkeypatch.setenv("NADA_RECONCILE_SEARCH_INDEX_LOCK_PATH", str(tmp_path / "scheduler.lock"))
     monkeypatch.setattr(search_index_sync, "index_generation", lambda settings: None)
-    gate.reset_for_tests()
+    gate.uninstall()
     yield
-    gate.reset_for_tests()
+    gate.uninstall()

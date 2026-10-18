@@ -13,6 +13,7 @@ from nada_ai.search.backend.opensearch.mapping import (
     filter_facets_mapping,
     index_body,
     new_index_generation,
+    outdated_fields,
     studies_index_body,
 )
 from nada_ai.search.backend.opensearch.studies import study_bulk_action, study_to_source
@@ -69,6 +70,19 @@ def test_study_document_filters_are_one_flat_field_per_key() -> None:
 def test_study_document_needs_an_idno() -> None:
     with pytest.raises(ValueError, match="idno"):
         study_to_source(4, {"catalog_id": 4}, {})
+
+
+def test_study_document_all_text_is_one_value_per_metadata_value() -> None:
+    source = study_to_source(4, {**CORE, "all_text": ["  Kabul  ", "", None, "Aged 15 to 49"]}, FILTERS)
+    assert source["all_text"] == ["Kabul", "Aged 15 to 49"]
+    assert "all_text" not in study_to_source(4, CORE, FILTERS)  # partial records: NADA sends none
+
+
+def test_all_text_is_searchable_and_stored_but_not_in_source() -> None:
+    """Hits never carry it; a partial update reads the stored copy back to keep it."""
+    body = studies_index_body()
+    assert body["mappings"]["properties"]["all_text"] == {"type": "text", "analyzer": "nada_text", "store": True}
+    assert "all_text" not in body["mappings"]["_source"]["includes"]
 
 
 def test_study_bulk_action_id_is_the_sid() -> None:
@@ -205,10 +219,12 @@ def test_assert_dense_dim_matches_skips_the_check_when_disabled() -> None:
 def test_ensure_studies_index_creates_once() -> None:
     settings = Settings(index_name="chunks")
     client = _client()
-    pipeline.ensure_studies_index(client, settings)
+    with patch("nada_ai.ingest.pipeline.forget_index_generation") as forget:
+        pipeline.ensure_studies_index(client, settings)
     kwargs = client.indices.create.call_args.kwargs
     assert kwargs["index"] == "chunks-studies"
     assert kwargs["body"]["mappings"]["_meta"]["generation"]
+    forget.assert_called_once()  # the new generation is what NADA is sent next
 
     existing = _client({"chunks-studies"})
     pipeline.ensure_studies_index(existing, settings)
@@ -511,3 +527,31 @@ def test_stored_vectors_are_not_looked_up_for_a_server_side_embedding_backend():
     writer, client = _writer_and_client("m1")
     writer._settings = writer._settings.model_copy(update={"embedding_backend": "opensearch_ml"})
     assert writer._stored_vector_lookup(client, force=False, recreated=False) is None
+
+
+def test_a_current_mapping_has_no_outdated_fields() -> None:
+    properties = studies_index_body()["mappings"]["properties"]
+    # as OpenSearch returns them: object fields without ``type: object``, ``dynamic`` as a string
+    facets = {"dynamic": "true", "properties": properties["filter_facets"]["properties"]}
+    live = {**properties, "filter_facets": facets}
+    assert outdated_fields(live, properties) == []
+
+
+def test_a_field_whose_parameters_changed_is_outdated_multi_fields_included() -> None:
+    properties = studies_index_body()["mappings"]["properties"]
+    unstored = {k: v for k, v in properties["all_text"].items() if k != "store"}  # partial updates would lose it
+    idno_without_text = {k: v for k, v in properties["idno"].items() if k != "fields"}
+    live = {**properties, "all_text": unstored, "idno": idno_without_text}
+    assert outdated_fields(live, properties) == ["idno.text", "all_text"]
+
+
+def test_a_field_added_after_the_index_was_created_is_outdated() -> None:
+    properties = studies_index_body()["mappings"]["properties"]
+    live = {name: spec for name, spec in properties.items() if name != "all_text"}
+    assert outdated_fields(live, properties) == ["all_text"]
+
+
+def test_a_field_with_another_type_is_outdated_nested_ones_included() -> None:
+    expected = {"year_start": {"type": "integer"}, "filter_facets": {"properties": {"countries": {"type": "integer"}}}}
+    live = {"year_start": {"type": "keyword"}, "filter_facets": {"properties": {"countries": {"type": "keyword"}}}}
+    assert outdated_fields(live, expected) == ["year_start", "filter_facets.countries"]

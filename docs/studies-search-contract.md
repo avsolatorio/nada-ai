@@ -53,7 +53,7 @@ Examples: `request_minimal.json`, `request_query.json`, `request_browse_all_filt
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `query` | string \| null | null | Trimmed. Empty or blank means browse (filters and sort only). Max 500 characters. |
+| `query` | string \| null | null | Trimmed. Empty, blank or nothing but quotes (`""`) means browse (filters and sort only). Max 500 characters. Plain text, plus `"…"` for a phrase that must appear word for word (6.1). |
 | `mode` | `auto` \| `lexical` \| `semantic` \| `hybrid` | `auto` | `auto` uses the best combination the engine supports. |
 | `filters` | object | `{}` | See 5.2. |
 | `sort` | `{by, order}` \| null | null | See 5.3. |
@@ -161,9 +161,16 @@ studies (`page` is 1-based, `excerpt` is whitespace-normalised text); it replace
 - Choosing a tab (`types`) never changes which studies are in the result or their order. With a `types` filter, `found`
   equals the sum of `search_counts_by_type` over those types; without one, the counts add up to `found`.
 - A query matching nothing returns `found: 0`, empty hits and empty counts. It is not an error.
-- A single-token query is checked against every study's own idno (case- and accent-insensitively) before any scored
-  search runs, in every mode; a match is the whole result (`found` = the number of studies with that idno, normally
-  one). Nothing a scored search does is as precise as an exact idno match.
+- A single-token query (also one in quotes, `"ABC-2020"`) is checked against every study's own idno (case- and
+  accent-insensitively) before any scored search runs, in every mode; a match is the whole result (`found` = the
+  number of studies with that idno, normally one). Nothing a scored search does is as precise as an exact idno match.
+- **Quoted phrases.** Each `"…"` (typographic quotes count too) must appear word for word -- case and accents aside,
+  punctuation between words ignored -- in a study text field or in the study's other metadata values (`all_text`);
+  the other words of the query match as usual. A phrase never spans two metadata values. An unbalanced quote is plain
+  text. `auto` with a quoted phrase runs `lexical` (`applied.mode`): a semantic match cannot promise the phrase.
+- **Other metadata values.** Besides its named fields, a study is searched in `all_text`, every other text value of its
+  metadata (NADA sends it with full updates). A query matches there only with every word (no typo tolerance), and such
+  a match weighs least.
 - The relevance floor and cutoff of the semantic side, and the two windows, are server settings, not request parameters.
 
 ### 6.2 Mode handling
@@ -230,7 +237,7 @@ sibling contract, not part of this one: it does not add a study search mode, and
 | # | Topic | Status |
 |---|---|---|
 | 1 | Auth header (`Authorization: Bearer` as well as `X-NADA-Admin-Key`; `POST /search` currently has no authentication) | **Later** (reminder) |
-| 2 | Query syntax: plain text plus quoted phrases; `+must -exclude` and `field:value`. When a query uses quotes or `+`/`-`, decide whether it still runs semantic/hybrid or switches to lexical | **Later** (reminder) |
+| 2 | Query syntax: quoted phrases **done** (6.1; `auto` runs lexical). `+must -exclude` and `field:value` | **Later** (reminder) |
 | 3 | Cap of 100 for broad keyword queries | **Removed**: keyword matches are all returned and paged; only the semantic side is bounded (50). `truncated` now means `found` exceeds the paging depth |
 | 4 | Index field names for step 3: follow the NADA extract keys (`countries`, `formid`, `repositories`, `fq_<name>`, ...) | **Agreed** |
 | 5 | Tab counts field name `search_counts_by_type` | **Agreed** |

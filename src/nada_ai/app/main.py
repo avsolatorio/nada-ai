@@ -47,7 +47,13 @@ from nada_ai.app.studies_search import studies_router, studies_validation_handle
 from nada_ai.app.variables_search import variables_router
 from nada_ai.app.webhooks import webhooks_router
 from nada_ai.mcp_server import mcp
-from nada_ai.search.backend.opensearch.client import build_async_client
+from nada_ai.search.backend.opensearch.client import QUICK_REQUEST_TIMEOUT_SECONDS, build_async_client
+from nada_ai.search.backend.opensearch.mapping import (
+    citations_index_body,
+    outdated_fields,
+    studies_index_body,
+    variables_index_body,
+)
 from nada_ai.search.dynamic_filters import load_dynamic_facet_keys
 from nada_ai.search.factory import create_search_backend
 from nada_ai.search.ports import RecommendParams, SearchParams
@@ -69,6 +75,8 @@ async def lifespan(app: FastAPI):
     else:
         state.client = None
     state.search = create_search_backend(state.settings, state.client)
+    if state.client is not None:
+        await _log_outdated_indexes(state)
     state.embedding = None
     state.embedding_init_lock = asyncio.Lock()
     state.embedding_init_error = None
@@ -96,6 +104,10 @@ async def lifespan(app: FastAPI):
         await state.jobs.shutdown()
     except Exception:
         pass
+    # the connections to NADA, once the scheduler and the jobs no longer use them
+    from nada_ai.nada import gate as nada_gate
+
+    nada_gate.uninstall()
     try:
         if state.client is not None:
             await state.client.close()
@@ -202,11 +214,56 @@ async def demo_document_page_preview(
     )
 
 
+async def outdated_indexes(s: AppState) -> dict[str, list[str]]:
+    """The OpenSearch indices whose mapping lacks fields the code maps, or maps them differently: ``{index:
+    [field, ...]}`` (see :func:`~nada_ai.search.backend.opensearch.mapping.outdated_fields`). Each must be recreated
+    and indexed again. An index not created yet is not listed.
+
+    Each index is read on its own: a configured name may be an alias, whose mapping comes back under the name of the
+    index behind it."""
+    assert s.client is not None
+    expected = {
+        s.settings.studies_index: studies_index_body(),
+        s.settings.variables_index: variables_index_body(),
+        s.settings.citations_index: citations_index_body(),
+    }
+    outdated: dict[str, list[str]] = {}
+    for name, body in expected.items():
+        live = await s.client.indices.get_mapping(
+            index=name, ignore_unavailable=True, request_timeout=QUICK_REQUEST_TIMEOUT_SECONDS
+        )
+        fields: list[str] = []
+        for index in live.values():
+            for field in outdated_fields(index["mappings"].get("properties") or {}, body["mappings"]["properties"]):
+                if field not in fields:
+                    fields.append(field)
+        if fields:
+            outdated[name] = fields
+    return outdated
+
+
+async def _log_outdated_indexes(s: AppState) -> None:
+    try:
+        outdated = await outdated_indexes(s)
+    except Exception as e:  # noqa: BLE001 - OpenSearch may not be up yet; /health reports it once it is
+        logger.warning("could not compare the index mappings with the code's: %s", e)
+        return
+    for index, fields in outdated.items():
+        logger.error(
+            "index %s was created before a mapping change (missing or changed: %s); writes carrying these fields "
+            "fail until the index is recreated",
+            index,
+            ", ".join(fields),
+        )
+
+
 @app.get("/health")
 async def health(s: AppState = Depends(get_state)) -> dict[str, Any]:
-    """One health shape for every engine: ``status``, ``backend``, ``collection``, ``collection_exists`` and
-    ``scheduler`` (the search-index scheduler's state and heartbeat) are always present; ``status`` is ``degraded``
-    too when the scheduler is enabled but crashed, stuck or without NADA's URL. Qdrant's own ``search.health()`` already returns exactly that; OpenSearch is made to match it here
+    """One health shape for every engine: ``status``, ``backend``, ``collection``, ``collection_exists``,
+    ``outdated_indexes`` (see :func:`outdated_indexes`; always empty on Qdrant) and ``scheduler`` (the search-index
+    scheduler's state and heartbeat) are always present; ``status`` is ``degraded`` too when an index is outdated, or
+    when the scheduler is enabled but crashed, stuck or without NADA's URL. Qdrant's own ``search.health()`` already
+    returns exactly that; OpenSearch is made to match it here
     rather than returning its own, differently-shaped payload (``cluster``/``index``, no ``backend`` or
     ``collection_exists`` at all) — a caller reading fixed field names got ``undefined`` under OpenSearch before,
     which rendered as a false "unhealthy" collection rather than a missing one. ``cluster`` is kept as an
@@ -215,18 +272,21 @@ async def health(s: AppState = Depends(get_state)) -> dict[str, Any]:
     try:
         if s.settings.search_backend == "qdrant":
             result = await s.search.health()
+            result["outdated_indexes"] = {}
         else:
             assert s.client is not None
             name = s.settings.index_name
-            cluster = await s.client.cluster.health()
-            exists = await s.client.indices.exists(index=name)
+            cluster = await s.client.cluster.health(request_timeout=QUICK_REQUEST_TIMEOUT_SECONDS)
+            exists = await s.client.indices.exists(index=name, request_timeout=QUICK_REQUEST_TIMEOUT_SECONDS)
             cluster_status = cluster.get("status")
+            outdated = await outdated_indexes(s)
             result = {
-                "status": "ok" if exists and cluster_status in ("green", "yellow") else "degraded",
+                "status": "ok" if exists and cluster_status in ("green", "yellow") and not outdated else "degraded",
                 "backend": s.settings.search_backend,
                 "collection": name,
                 "collection_exists": bool(exists),
                 "cluster": cluster_status,
+                "outdated_indexes": outdated,
             }
     except Exception as e:
         logger.error("health check failed: %s", e)

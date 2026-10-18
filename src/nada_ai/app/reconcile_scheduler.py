@@ -13,11 +13,12 @@ backoff. What the gate could not fix decides what happens next:
 
 - an item failed while NADA answers its status: the item is the problem, it is acked ``failed`` and skipped;
 - NADA does not answer: nothing more is started, the rows stay pending, and the scheduler pauses (a minute, doubling
-  up to ``nada_unavailable_backoff_max_seconds``);
-- a firewall in front of NADA blocks the requests: pause for ``nada_firewall_pause_seconds``, without retrying;
+  up to ``unavailable_backoff_max_seconds``; longer when NADA's ``Retry-After`` asks for longer);
+- a firewall in front of NADA blocks the requests: pause for ``firewall_pause_seconds``, without retrying;
 - NADA does not track changes for this deployment (or tracks another nada-ai's index): pause, look again every
-  ``reconcile_search_index_not_tracking_interval_seconds``;
-- ``nada_ack_failure_limit`` acks in a row fail while NADA answers: results are not being recorded, so nothing more is
+  ``reconcile_search_index_not_tracking_interval_seconds`` (a first "another index" refusal: after a minute, since
+  both sides cache the generation that long after the study index is recreated);
+- ``ack_failure_limit`` acks in a row fail while NADA answers: results are not being recorded, so nothing more is
   started (the work would be redone forever); the unsent acks are kept and sent first when it resumes.
 
 It can be paused (``POST /admin/scheduler/pause``): it finishes the item in hand, then starts nothing until resumed.
@@ -41,6 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx
 from ai4data.discovery.config import metadata_catalog
 
 from nada_ai.app.state import AppState, ensure_embedding_initialized
@@ -54,6 +56,7 @@ from nada_ai.ingest.search_index_sync import (
     process_item,
 )
 from nada_ai.nada import gate as nada_gate
+from nada_ai.search.backend.opensearch.generation import forget_index_generation
 from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -68,6 +71,16 @@ STUCK_PROCESSING_SECONDS = 3600
 STUCK_GRACE_SECONDS = 300
 #: How often a paused scheduler looks at the control file again (a resume from another process).
 PAUSED_CHECK_SECONDS = 10
+#: After a first "another nada-ai's index" refusal, look again this soon: right after the study index is recreated,
+#: nada-ai and NADA each go on using the generation they cached (for up to a minute) before they agree again.
+GENERATION_RECHECK_SECONDS = 60
+#: Pause when NADA refuses NADA-AI's key: someone has to fix the key (Process pending tries again sooner).
+ACCESS_DENIED_PAUSE_SECONDS = 1800
+#: Pause when ``ack_failure_limit`` acks fail in a row; doubled each time it trips again, up to the maximum.
+ACK_FAILURE_PAUSE_SECONDS = 1800
+ACK_FAILURE_PAUSE_MAX_SECONDS = 4 * 3600
+#: The longest Retry-After the scheduler waits out (a far-off date in it must not park the scheduler for good).
+RETRY_AFTER_PAUSE_MAX_SECONDS = 24 * 3600
 _REFUSAL_REASONS = {
     "INDEX_ENGINE_NOT_NADA_AI": "not_tracking_for_nada_ai",
     "INDEX_GENERATION_MISMATCH": "other_nada_ai",
@@ -156,6 +169,7 @@ class Scheduler:
         self._lock_file: Any = None
         self._lock_path = Path(self.settings.reconcile_search_index_lock_path or "config/search_index_scheduler.lock")
         self._last_logged_pause: str | None = None
+        self._generation_rechecked = False
 
     # -- start / stop -----------------------------------------------------------------------------------------------
 
@@ -240,14 +254,16 @@ class Scheduler:
     # -- status -----------------------------------------------------------------------------------------------------
 
     def status(self) -> dict[str, Any]:
-        """This process's scheduler, or (when another process runs it) what that one last wrote."""
+        """This process's scheduler, or (when another process runs it) what that one last wrote, its request gate's
+        figures included: the gate is per process, and this one's sees none of the scheduler's requests."""
         if self.st.state == "running_elsewhere":
             try:
                 data = json.loads(self._state_path.read_text())
             except (OSError, ValueError):
                 data = self.st.snapshot()
+            data.setdefault("requests", None)
         else:
-            data = self.st.snapshot()
+            data = {**self.st.snapshot(), "requests": self._requests()}
         since = self.paused_since()
         if since is not None:
             # paused by hand: shown from the moment it is asked, while the item in hand is being finished too (a
@@ -257,20 +273,23 @@ class Scheduler:
                 data["state"] = "paused"
         data = with_health(data)
         data["running_here"] = self.st.running_here
+        return data
+
+    def _requests(self) -> dict[str, Any]:
+        """This process's request gate: its gap between requests, its requests of the last hour, its last failure."""
         gate = nada_gate.get_gate()
-        interval = gate.interval_seconds() if gate else self.settings.nada_request_min_interval_ms / 1000
-        data["requests"] = {
+        interval = gate.interval_seconds() if gate else self.settings.request_min_interval_ms / 1000
+        return {
             "min_interval_ms": int(interval * 1000),
             "last_hour": gate.requests_last_hour() if gate else 0,
             "last_trouble": gate.last_trouble.as_dict() if gate and gate.last_trouble else None,
         }
-        return data
 
     def _heartbeat(self) -> None:
         self.st.heartbeat_at = _now()
         if self.st.running_here:
             try:
-                self._state_path.write_text(json.dumps(self.st.snapshot()))
+                self._state_path.write_text(json.dumps({**self.st.snapshot(), "requests": self._requests()}))
             except OSError as e:
                 logger.debug("could not write the scheduler state file: %s", e)
 
@@ -314,18 +333,50 @@ class Scheduler:
     def _pause_unavailable(self, message: str) -> None:
         if self.st.pause is not None and self.st.pause["reason"] == "nada_unavailable":
             return  # already paused for it (the acks of the same page failing too): one pause, not a longer one
-        delay = min(60 * (2**self.st.unavailable_streak), self.settings.nada_unavailable_backoff_max_seconds)
+        delay = min(60 * (2**self.st.unavailable_streak), self.settings.unavailable_backoff_max_seconds)
         self.st.unavailable_streak += 1
+        gate = nada_gate.get_gate()
+        asked = min(gate.not_before - _now(), RETRY_AFTER_PAUSE_MAX_SECONDS) if gate is not None else 0
+        if asked > delay:
+            # NADA (or what is in front of it) said when to come back: not before then
+            delay = asked
+            message = f"{message} (NADA asked to wait {int(asked)}s)"
         self._pause("nada_unavailable", message, delay)
 
     def _pause_for(self, error: Exception) -> None:
         if isinstance(error, nada_gate.NadaFirewallBlocked):
             ray = f" (Ray ID {error.cf_ray})" if error.cf_ray else ""
-            self._pause("firewall", f"{error}{ray}", self.settings.nada_firewall_pause_seconds)
+            self._pause("firewall", f"{error}{ray}", self.settings.firewall_pause_seconds)
         else:
             self._pause_unavailable(str(error))
 
+    async def _stop_for(self, error: Exception, started: float) -> None:
+        """Pause after a request the scheduler cannot go on without (a queue page, a batch of records) failed:
+        for NADA's trouble (a firewall, or NADA not answering), for NADA refusing the key, or for an error of the
+        request itself (an answer it cannot read, a bug), which waiting out an outage would not fix."""
+        gate = nada_gate.get_gate()
+        trouble = isinstance(error, nada_gate.NadaTrouble) or (
+            gate is not None and gate.trouble_since(started) is not None
+        )
+        if isinstance(error, nada_gate.NadaFirewallBlocked) or (trouble and not await self._nada_answers()):
+            self._pause_for(error)
+        elif isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 403:
+            self._pause("access_denied", "NADA refuses NADA-AI's key (ACCESS_DENIED)", ACCESS_DENIED_PAUSE_SECONDS)
+        else:
+            logger.error("search-index scheduler request failed: %s", error, exc_info=error)
+            message = f"{type(error).__name__}: {error}"[:500]
+            self.st.last_error = {"at": int(_now()), "kind": "error", "message": message}
+            self._pause("error", message, self.settings.reconcile_search_index_interval_seconds)
+
     def _not_tracking(self, reason: str | None) -> None:
+        seconds = self.settings.reconcile_search_index_not_tracking_interval_seconds
+        if reason == "other_nada_ai":
+            # the generation sent may be a cached one from before the study index was recreated: read it again, and
+            # look again soon once (NADA may still be on its cached one too); refused again, it is another index
+            forget_index_generation()
+            if not self._generation_rechecked:
+                self._generation_rechecked = True
+                seconds = GENERATION_RECHECK_SECONDS
         texts = {
             "not_tracking_for_nada_ai": "NADA does not track changes for NADA-AI (its index kept in sync is not NADA-AI)",
             "other_nada_ai": "NADA tracks another NADA-AI index than this one",
@@ -333,7 +384,7 @@ class Scheduler:
         self._pause(
             "other_nada_ai" if reason == "other_nada_ai" else "not_tracking",
             texts.get(reason or "", "NADA does not track changes for this deployment"),
-            self.settings.reconcile_search_index_not_tracking_interval_seconds,
+            seconds,
             state="not_tracking",
         )
 
@@ -396,17 +447,19 @@ class Scheduler:
             self._heartbeat()
             if self.paused_since() is not None:
                 return
+            started = _now()
             try:
                 page = await asyncio.to_thread(
                     list_queue, self.settings, status="pending", limit=limit, exclude=sorted(exclude)
                 )
-            except Exception as e:  # noqa: BLE001 - NADA could not serve the page
-                self._pause_for(e)
+            except Exception as e:  # noqa: BLE001 - sorted out by _stop_for
+                await self._stop_for(e, started)
                 return
             self.st.last_poll_at = _now()
             if not page.tracking_enabled:
                 self._not_tracking(page.reason)
                 return
+            self._generation_rechecked = False
             if not page.items:
                 break
             self.st.state = "processing"
@@ -415,6 +468,7 @@ class Scheduler:
             self.st.unavailable_streak = 0
             if len(page.items) < limit:
                 break
+        self.st.unavailable_streak = 0  # caught up, the queue empty included: the next outage starts at a minute again
         self.st.last_pass = {**self.st.pass_, "finished_at": int(_now())}
 
     async def _process_page(self, items: list[SearchIndexQueueItem], exclude: set[int]) -> bool:
@@ -427,7 +481,9 @@ class Scheduler:
         partial = [
             i
             for i in items
-            if i.object_type == "survey" and i.change_class == "upsert_partial" and settings.search_backend == "opensearch"
+            if i.object_type == "survey"
+            and i.change_class == "upsert_partial"
+            and settings.search_backend == "opensearch"
         ]
         full = [i for i in items if i.object_type == "survey" and i.change_class == "upsert_full"]
         batches = [([i.object_id for i in partial], False)] if partial else []
@@ -436,12 +492,17 @@ class Scheduler:
             for start in range(0, len(full), FULL_RECORDS_PER_REQUEST)
         ]
         for sids, with_metadata in batches:
+            started = _now()
             try:
                 batch = await asyncio.to_thread(
-                    fetch_studies_by_sids, settings, sids, include_metadata=with_metadata, include_resources=with_metadata
+                    fetch_studies_by_sids,
+                    settings,
+                    sids,
+                    include_metadata=with_metadata,
+                    include_resources=with_metadata,
                 )
-            except Exception as e:  # noqa: BLE001 - NADA could not serve the batch
-                self._pause_for(e)
+            except Exception as e:  # noqa: BLE001 - sorted out by _stop_for
+                await self._stop_for(e, started)
                 return False
             for doc in batch["studies"]:
                 core = doc.get("core_fields") or {}
@@ -450,7 +511,9 @@ class Scheduler:
             for sid in batch["missing"]:
                 prefailed[sid] = "the study is not in NADA's catalog any more"
             for err in batch["errors"]:
-                prefailed[int(err.get("catalog_id") or 0)] = f"NADA could not build the study's extract: {err.get('message')}"
+                prefailed[int(err.get("catalog_id") or 0)] = (
+                    f"NADA could not build the study's extract: {err.get('message')}"
+                )
 
         needs_embedding = any(
             i.object_type == "survey" and not i.is_delete and i.change_class in ("upsert_full", "upsert_partial")
@@ -512,6 +575,7 @@ class Scheduler:
                     logger.warning("search-index item failed (%s %s): %s", item.change_class, item.object_key, e)
                     acks.append(self._failed(item, str(e)))
                 else:
+                    # a delete too: NADA takes indexed or failed only, and handles a delete row by its change class
                     acks.append({"id": item.id, "result": "indexed", "changed": item.changed})
                     self.st.pass_[action] = self.st.pass_.get(action, 0) + 1
             self.st.pass_["processed"] = self.st.pass_.get("processed", 0) + 1
@@ -544,12 +608,11 @@ class Scheduler:
                 if e.status == 403:
                     self.st.unsent_acks = acks[start:]
                     self._pause(
-                        "access_denied",
-                        "NADA refuses NADA-AI's key (ACCESS_DENIED)",
-                        self.settings.nada_firewall_pause_seconds,
+                        "access_denied", "NADA refuses NADA-AI's key (ACCESS_DENIED)", ACCESS_DENIED_PAUSE_SECONDS
                     )
                     return False
-                if e.status >= 500 and not await self._nada_answers():
+                # rate limited (429) or failing (5xx): NADA's trouble, not a refusal of these acks
+                if (e.status == 429 or e.status >= 500) and not await self._nada_answers():
                     self.st.unsent_acks = acks[start:]
                     self._pause_unavailable(str(e))
                     return False
@@ -588,8 +651,8 @@ class Scheduler:
         logger.error(
             "NADA did not record %d acks (%d in a row): %s", len(chunk), self.st.consecutive_ack_failures, message
         )
-        if self.st.consecutive_ack_failures >= self.settings.nada_ack_failure_limit:
-            delay = min(self.settings.nada_firewall_pause_seconds * (2**self.st.ack_pause_streak), 4 * 3600)
+        if self.st.consecutive_ack_failures >= self.settings.ack_failure_limit:
+            delay = min(ACK_FAILURE_PAUSE_SECONDS * (2**self.st.ack_pause_streak), ACK_FAILURE_PAUSE_MAX_SECONDS)
             self.st.ack_pause_streak += 1
             self._pause(
                 "acks_failing",

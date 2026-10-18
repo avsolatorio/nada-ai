@@ -11,10 +11,15 @@ The gate covers the search-index client (``ingest.search_index_sync``) and, thro
 is :class:`GatedTransport`. Only requests to NADA's host pass through the gate; nada-ai's MCP tools use their own client
 and stay outside it, so a chat user never waits behind indexing.
 
+The gate is per process: "one request at a time" holds for the whole deployment only with one app worker (the Docker
+image runs one). Another worker's requests, or a CLI run's, go through a gate of their own.
+
 Failure kinds:
 
 - temporary (timeouts, connection errors, 408, 429, 5xx): retried; after the last retry the response (or the error) is
-  handed back and the failure is recorded as ``unavailable`` (or ``rate_limited`` for 429).
+  handed back and the failure is recorded as ``unavailable`` (or ``rate_limited`` for 429). A ``Retry-After`` longer
+  than :data:`RETRY_AFTER_MAX_SECONDS` ends the retries at once: the gate does not hold every other request that long.
+  It is kept instead: until that time no request goes out, each raises :class:`NadaAskedToWait`.
 - firewall (403/503 that is not NADA's JSON, with Cloudflare's markers): not retried — repeating requests can turn a
   short block into a long one. Raises :class:`NadaFirewallBlocked`.
 - anything else (2xx, NADA's own JSON 4xx answers): returned as it is, for the caller to read.
@@ -39,6 +44,8 @@ logger = logging.getLogger(__name__)
 TEMPORARY_STATUSES = frozenset({408, 429, 500, 502, 503, 504, *range(520, 531)})
 #: After a 429, the gap between requests is doubled for this long.
 _RATE_LIMIT_SLOWDOWN_SECONDS = 3600
+#: The longest ``Retry-After`` the gate waits out itself (about its own longest backoff).
+RETRY_AFTER_MAX_SECONDS = 60
 
 
 class NadaTrouble(RuntimeError):
@@ -49,6 +56,16 @@ class NadaTrouble(RuntimeError):
 
 class NadaUnavailable(NadaTrouble):
     kind = "unavailable"
+
+
+class NadaAskedToWait(NadaTrouble):
+    """Not sent: NADA's ``Retry-After`` asked to wait until ``retry_at`` (``time.time()``)."""
+
+    kind = "asked_to_wait"
+
+    def __init__(self, message: str, *, retry_at: float) -> None:
+        super().__init__(message)
+        self.retry_at = retry_at
 
 
 class NadaFirewallBlocked(NadaTrouble):
@@ -93,8 +110,8 @@ def is_firewall_response(response: httpx.Response) -> bool:
     return b"cloudflare" in body or b"attention required" in body or b"challenge" in body
 
 
-def retry_after_seconds(response: httpx.Response, cap: float) -> float | None:
-    """``Retry-After`` (seconds or an HTTP date), at most ``cap``."""
+def retry_after_seconds(response: httpx.Response) -> float | None:
+    """``Retry-After`` (seconds or an HTTP date) in seconds from now."""
     value = response.headers.get("retry-after")
     if not value:
         return None
@@ -105,12 +122,14 @@ def retry_after_seconds(response: httpx.Response, cap: float) -> float | None:
         if parsed is None:
             return None
         seconds = parsed.timestamp() - time.time()
-    return max(0.0, min(seconds, cap))
+    return max(0.0, seconds)
 
 
 class NadaGate:
     """One request to NADA at a time, a minimum gap between requests, retries with backoff.
 
+    ``retry_after_max_seconds``: the longest ``Retry-After`` the gate waits out itself. It holds every other request
+    while it waits, so a longer one is not retried: the response is handed back and the scheduler pauses instead.
     ``sleep`` and ``clock`` are injectable for tests.
     """
 
@@ -120,14 +139,14 @@ class NadaGate:
         min_interval_seconds: float,
         max_retries: int,
         retry_base_seconds: float,
-        retry_after_cap_seconds: float,
+        retry_after_max_seconds: float,
         sleep=time.sleep,
         clock=time.monotonic,
     ) -> None:
         self.min_interval_seconds = min_interval_seconds
         self.max_retries = max_retries
         self.retry_base_seconds = retry_base_seconds
-        self.retry_after_cap_seconds = retry_after_cap_seconds
+        self.retry_after_max_seconds = retry_after_max_seconds
         self._sleep = sleep
         self._clock = clock
         self._lock = threading.Lock()
@@ -135,6 +154,9 @@ class NadaGate:
         self._slow_until = float("-inf")
         self._sent: deque[float] = deque()  # time.time() of each request sent, for the last hour
         self.last_trouble: Trouble | None = None
+        #: The earliest time (``time.time()``) NADA said to come back, from the ``Retry-After`` of a response the gate
+        #: gave up on: no request goes out before it (:class:`NadaAskedToWait`), and the scheduler pauses until then.
+        self.not_before = float("-inf")
 
     # -- what the scheduler reads ---------------------------------------------------------------------------------
 
@@ -164,17 +186,24 @@ class NadaGate:
         if wait > 0:
             self._sleep(wait)
 
-    def _backoff(self, attempt: int, response: httpx.Response | None) -> float:
+    def _backoff(self, attempt: int, response: httpx.Response | None) -> float | None:
+        """The wait before the next attempt; None when NADA asks for a longer one than the gate waits out."""
         if response is not None:
-            after = retry_after_seconds(response, self.retry_after_cap_seconds)
+            after = retry_after_seconds(response)
             if after is not None:
-                return after
+                return after if after <= self.retry_after_max_seconds else None
         base = self.retry_base_seconds * (3**attempt)
         return base + random.uniform(0, base / 4)
 
     def send(self, handle, request: httpx.Request) -> httpx.Response:
         """Send ``request`` with ``handle`` (a transport's ``handle_request``) under the gate's rules."""
         with self._lock:
+            if time.time() < self.not_before:
+                wait = int(self.not_before - time.time())
+                raise NadaAskedToWait(
+                    f"{request.method} {request.url.path} not sent: NADA asked to wait {wait}s more (Retry-After)",
+                    retry_at=self.not_before,
+                )
             response: httpx.Response | None = None
             for attempt in range(self.max_retries + 1):
                 self._pace()
@@ -183,7 +212,7 @@ class NadaGate:
                 try:
                     response = handle(request)
                     response.read()
-                except (httpx.TimeoutException, httpx.TransportError) as e:
+                except httpx.TransportError as e:  # timeouts included
                     error = e
                 finally:
                     self._last_end = self._clock()
@@ -202,13 +231,19 @@ class NadaGate:
 
                 if attempt == self.max_retries:
                     break
-                self._sleep(self._backoff(attempt, response))
+                wait = self._backoff(attempt, response)
+                if wait is None:
+                    break
+                self._sleep(wait)
 
             if response is not None:
                 kind = "rate_limited" if response.status_code == 429 else "unavailable"
-                self._record(
-                    kind, response.status_code, f"{request.method} {request.url.path}: HTTP {response.status_code}"
-                )
+                message = f"{request.method} {request.url.path}: HTTP {response.status_code}"
+                after = retry_after_seconds(response)
+                if after is not None:
+                    message += f" (Retry-After {int(after)}s)"
+                    self.not_before = max(self.not_before, time.time() + after)
+                self._record(kind, response.status_code, message)
                 return response
             assert error is not None
             self._record("unavailable", None, f"{request.method} {request.url.path}: {error}")
@@ -229,7 +264,9 @@ class GatedTransport(httpx.BaseTransport):
         return self.inner.handle_request(request)
 
     def close(self) -> None:
-        self.inner.close()
+        """Nothing: the process's one transport outlives every client built on it. httpx closes a client's transport
+        when the client is closed, which would drop the pool's connections (keep-alive, and a request another thread
+        has in flight)."""
 
 
 _gate: NadaGate | None = None
@@ -253,13 +290,14 @@ def install(settings: Any, base_url: str) -> GatedTransport:
         from ai4data.discovery import transport as ai4data_transport
 
         _gate = NadaGate(
-            min_interval_seconds=settings.nada_request_min_interval_ms / 1000.0,
-            max_retries=settings.nada_request_max_retries,
-            retry_base_seconds=settings.nada_request_retry_base_seconds,
-            retry_after_cap_seconds=settings.nada_firewall_pause_seconds,
+            min_interval_seconds=settings.request_min_interval_ms / 1000.0,
+            max_retries=settings.request_max_retries,
+            retry_base_seconds=settings.request_retry_base_seconds,
+            retry_after_max_seconds=RETRY_AFTER_MAX_SECONDS,
         )
         _transport = GatedTransport(_gate, nada_host(base_url))
-        ai4data_transport.set_http_client(httpx.Client(transport=_transport, timeout=120.0))
+        # the timeout of an ai4data request that sets none (its metadata extract and document downloads set their own)
+        ai4data_transport.set_http_client(httpx.Client(transport=_transport, timeout=settings.request_timeout_seconds))
         return _transport
 
 
@@ -268,12 +306,15 @@ def get_gate() -> NadaGate | None:
     return _gate
 
 
-def reset_for_tests() -> None:
-    """Forget the installed gate (tests install their own)."""
+def uninstall() -> None:
+    """Close the process's connections to NADA and forget the gate: at app shutdown (closing a client does not close
+    the shared transport, see :meth:`GatedTransport.close`), and between tests, which install their own."""
     global _gate, _transport
     from ai4data.discovery import transport as ai4data_transport
 
     with _install_lock:
+        if _transport is not None:
+            _transport.inner.close()
         _gate = None
         _transport = None
         ai4data_transport.set_http_client(None)

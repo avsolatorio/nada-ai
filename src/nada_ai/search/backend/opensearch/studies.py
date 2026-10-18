@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, STUDY_TEXT_FIELDS
+from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, STUDY_ALL_TEXT_FIELD, STUDY_TEXT_FIELDS
 from nada_ai.search.dynamic_filters import normalize_external_filters, normalized_to_facets_map
 
 _INT_FIELDS = ("year_start", "year_end", "created", "changed", "total_views", "total_downloads", "varcount")
@@ -17,11 +17,20 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
+def all_text_values(value: Any) -> list[str]:
+    """``all_text`` as NADA sends it (a list of metadata values), without empty ones."""
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    return [text for text in (str(v).strip() for v in values if v is not None) if text]
+
+
 def study_to_source(sid: int, core_fields: dict[str, Any], filters: dict[str, Any]) -> dict[str, Any]:
     """Study document from a study's extract ``core_fields`` and ``filters``.
 
     ``idno`` is NADA's own ``surveys.idno`` (not the record's schema idno, which can differ). ``filter_facets``
-    holds every filter key NADA emits, one flat field per key. Fields NADA leaves empty are omitted.
+    holds every filter key NADA emits, one flat field per key. Fields NADA leaves empty are omitted, ``all_text``
+    included (NADA sends it with full updates only; see :func:`nada_ai.ingest.service.apply_study_options_from_extract`).
     """
     idno = str(core_fields.get("idno") or "").strip()
     if not idno:
@@ -31,6 +40,9 @@ def study_to_source(sid: int, core_fields: dict[str, Any], filters: dict[str, An
         text = str(core_fields.get(field) or "").strip()
         if text:
             source[field] = text
+    all_text = all_text_values(core_fields.get(STUDY_ALL_TEXT_FIELD))
+    if all_text:
+        source[STUDY_ALL_TEXT_FIELD] = all_text
     if "title" in source:
         source["title_sort"] = source["title"]
     if "nation" in source:
@@ -66,6 +78,4 @@ def sids_for_idnos(client: Any, studies_index: str, idnos: list[str]) -> dict[st
         body={"size": len(idnos), "_source": ["sid", "idno"], "query": {"terms": {"idno": idnos}}},
         ignore_unavailable=True,
     )
-    return {
-        hit["_source"]["idno"]: int(hit["_source"]["sid"]) for hit in found.get("hits", {}).get("hits", [])
-    }
+    return {hit["_source"]["idno"]: int(hit["_source"]["sid"]) for hit in found.get("hits", {}).get("hits", [])}

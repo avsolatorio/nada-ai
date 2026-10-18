@@ -33,7 +33,7 @@ from nada_ai.app.studies_schemas import (
     SortOrder,
     StudyFilters,
 )
-from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, METADATA_OBJECT_KEY
+from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, METADATA_OBJECT_KEY, STUDY_ALL_TEXT_FIELD
 from nada_ai.search.backend.opensearch.studies_semantic import (
     Ranked,
     StudyPolicy,
@@ -42,6 +42,7 @@ from nada_ai.search.backend.opensearch.studies_semantic import (
     parse_semantic,
     rrf_fuse,
 )
+from nada_ai.search.query_heuristics import split_quoted
 
 #: Sort field -> the study-index field it orders by.
 SORT_FIELDS: dict[SortField, str] = {
@@ -293,9 +294,13 @@ LEXICAL_FIELDS = (
 PHRASE_SLOP = 2
 PHRASE_BOOST = 2
 
+#: Weight of a match in ``all_text``, below every named field: a study that says it in its title or abstract comes first.
+ALL_TEXT_BOOST = 1
 
-def lexical_query(text: str) -> dict[str, Any]:
-    """Keyword match over the study text fields, with a phrase bonus for queries of two or more words.
+
+def _words_query(text: str) -> dict[str, Any]:
+    """Loose keyword match over the study text fields, or every word somewhere in ``all_text``; a phrase bonus for
+    two or more words.
 
     ``minimum_should_match: 2<75%``: one or two terms must all match, otherwise at least 75% of them (per field, as in
     NADA's own search); the terms may be anywhere in the field. ``fuzziness: AUTO:5,9`` forgives one typo in words of
@@ -303,10 +308,10 @@ def lexical_query(text: str) -> dict[str, Any]:
     variable-label fields matched unrelated words); ``prefix_length: 2`` keeps the first two letters exact. Fields are
     scored separately and the scores add up (``most_fields``).
 
-    Every study this matches is a keyword match: there is no score cutoff. The best matches (title, idno) simply
-    score highest, and a study that mentions the word only in a low-weight field comes after them.
+    ``all_text`` (every other metadata value) is matched strictly -- all words, no typos -- and weighs least: loose
+    matching on a field that large would accept most studies for most queries.
     """
-    match: dict[str, Any] = {
+    loose: dict[str, Any] = {
         "multi_match": {
             "query": text,
             "fields": list(LEXICAL_FIELDS),
@@ -316,6 +321,8 @@ def lexical_query(text: str) -> dict[str, Any]:
             "prefix_length": 2,
         }
     }
+    everywhere = {"match": {STUDY_ALL_TEXT_FIELD: {"query": text, "operator": "and", "boost": ALL_TEXT_BOOST}}}
+    match: dict[str, Any] = {"bool": {"should": [loose, everywhere], "minimum_should_match": 1}}
     if len(text.split()) < 2:
         return match
     phrase = {
@@ -328,6 +335,34 @@ def lexical_query(text: str) -> dict[str, Any]:
         }
     }
     return {"bool": {"must": [match], "should": [phrase]}}
+
+
+def _exact_phrase_query(phrase: str) -> dict[str, Any]:
+    """``phrase`` word for word (case and accents aside), in any study text field or in ``all_text``."""
+    return {
+        "multi_match": {
+            "query": phrase,
+            "type": "phrase",
+            "slop": 0,
+            "fields": [*LEXICAL_FIELDS, f"{STUDY_ALL_TEXT_FIELD}^{ALL_TEXT_BOOST}"],
+        }
+    }
+
+
+def lexical_query(text: str) -> dict[str, Any]:
+    """Keyword match over the study's text: every ``"…"`` phrase must appear exactly, the other words match as in
+    :func:`_words_query`.
+
+    Every study this matches is a keyword match: there is no score cutoff. The best matches (title, idno) simply
+    score highest, and a study that mentions the words only in a low-weight field comes after them.
+    """
+    parts = split_quoted(text)
+    if not parts.phrases:
+        return _words_query(parts.rest or text)
+    must = [_exact_phrase_query(phrase) for phrase in parts.phrases]
+    if parts.rest:
+        must.append(_words_query(parts.rest))
+    return {"bool": {"must": must}}
 
 
 def relevance_sort(order: SortOrder) -> list[dict[str, Any]]:
@@ -422,7 +457,7 @@ def _dataset_type(hit: dict[str, Any]) -> str:
 async def exact_idno_match(job: SearchJob) -> StudyPage | None:
     """A study whose idno exactly matches the query (case- and accent-insensitively, via the ``idno`` field's
     normalizer), within the active filters -- or ``None`` when the query is not a single token, or no study
-    matches.
+    matches. A single token in quotes (``"ABC-2020"``) counts as that token.
 
     Checked before every relevance search: nothing a scored search does is as precise as this, and it is what the
     database's own idno/alias lookup already gives NADA on every other engine. ``idno`` matches are unique in NADA's
@@ -430,6 +465,11 @@ async def exact_idno_match(job: SearchJob) -> StudyPage | None:
     """
     assert job.query is not None
     token = job.query.strip()
+    parts = split_quoted(token)
+    if parts.phrases:
+        if parts.rest or len(parts.phrases) != 1:
+            return None
+        token = parts.phrases[0]
     if not token or len(token.split()) != 1:
         return None
 

@@ -94,6 +94,7 @@ def raw_for(sid: int, s: dict[str, Any]) -> dict[str, Any]:
         "_extract_core_fields": {
             "catalog_id": sid,
             "idno": f"NADA_{sid}",
+            "all_text": [],
             "title": s["title"],
             "nation": "Somewhere",
             "year_start": 2010 + sid,

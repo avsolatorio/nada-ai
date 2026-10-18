@@ -49,6 +49,7 @@ def _raw(sid: int, idno: str, countries: list[int], years: list[int]) -> dict[st
         "_extract_core_fields": {
             "catalog_id": sid,
             "idno": idno,
+            "all_text": [],
             "title": f"Study {idno}",
             "nation": "Somewhere",
             "abstract": "About things",
