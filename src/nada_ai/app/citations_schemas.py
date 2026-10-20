@@ -66,14 +66,11 @@ class CitationSearchRequest(BaseModel):
 
 
 class CitationHit(BaseModel):
+    """A matching citation by id; the caller reads the citation itself from its database (``citation_id``)."""
+
     rank: int
     citation_id: int
     uuid: str | None
-    title: str | None
-    authors: str | None
-    ctype: str | None
-    pub_year: int | None
-    doi: str | None
     score: float | None
 
 

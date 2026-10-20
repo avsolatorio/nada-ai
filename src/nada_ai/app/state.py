@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from nada_ai.app.jobs import JobRegistry
     from nada_ai.app.metrics import MetricsRegistry
     from nada_ai.app.rate_limit import RateLimiter
+    from nada_ai.app.reconcile_scheduler import Scheduler
     from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
     from nada_ai.search.ports import SearchBackendPort
 
@@ -43,9 +44,8 @@ class AppState:
     search_rate_limiter: RateLimiter
     #: Per-process HTTP request counters/latency histogram, exposed at GET /admin/metrics.
     metrics: MetricsRegistry
-    #: Background task running app.reconcile_scheduler.reconcile_loop, when
-    #: settings.reconcile_search_index_enabled is true. None otherwise.
-    reconcile_scheduler_task: asyncio.Task | None
+    #: The search-index scheduler (app/reconcile_scheduler.py): runs in this process only when it holds the lock.
+    scheduler: Scheduler
 
 
 state = AppState()

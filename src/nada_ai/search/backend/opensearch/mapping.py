@@ -36,6 +36,47 @@ def new_index_generation() -> str:
     return f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
 
 
+def _field_type(spec: dict[str, Any]) -> str | None:
+    # OpenSearch leaves ``type: object`` out of the mapping it returns
+    return spec.get("type", "object" if "properties" in spec else None)
+
+
+def _param(value: Any) -> Any:
+    # OpenSearch returns some booleans as strings (``dynamic: "true"``)
+    return str(value).lower() if isinstance(value, bool) else value
+
+
+def _same_field(live: dict[str, Any], expected: dict[str, Any]) -> bool:
+    """Whether ``live`` maps the field as ``expected`` does: same type, and every other parameter the code sets
+    (``store``, ``analyzer``, ``normalizer``, ...) set the same. Parameters the code leaves out are not compared."""
+    if _field_type(live) != _field_type(expected):
+        return False
+    return all(
+        _param(live.get(key)) == _param(value)
+        for key, value in expected.items()
+        if key not in ("type", "properties", "fields")
+    )
+
+
+def outdated_fields(live: dict[str, Any], expected: dict[str, Any], prefix: str = "") -> list[str]:
+    """The fields of the ``expected`` mapping properties that the ``live`` ones lack or map differently (see
+    :func:`_same_field`), multi-fields and object fields included, as dotted paths. An index is created with its
+    mapping and never updated in place, so a field added to or changed in the code's mapping after the index was
+    created stays missing or different (a strict index rejects every document carrying a missing one; a field that
+    is not stored loses what partial updates carry over) until the index is recreated."""
+    fields: list[str] = []
+    for name, spec in expected.items():
+        path = f"{prefix}{name}"
+        have = live.get(name)
+        if have is None or not _same_field(have, spec):
+            fields.append(path)
+            continue
+        for nested in ("properties", "fields"):
+            if nested in spec:
+                fields += outdated_fields(have.get(nested) or {}, spec[nested], f"{path}.")
+    return fields
+
+
 def filter_facets_mapping(prefix: str = "") -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Flat filter mapping shared by every index: ``(filter_facets object mapping, dynamic templates)``.
 
@@ -142,6 +183,24 @@ STUDY_TEXT_FIELDS = (
     "var_keywords",
 )
 
+#: Every other text value of the study's metadata, one array element per metadata value (NADA builds it, for full
+#: updates only). Searched strictly (all words, or an exact phrase), never loosely: a field this large holds most words
+#: of most queries somewhere. Array elements sit 100 positions apart (OpenSearch's default ``position_increment_gap``)
+#: and an exact phrase allows no slop, so a phrase never spans two metadata values. Kept as a stored field, not in ``_source``: a partial update (published, filters) does not get it
+#: from NADA and carries the stored value over into the rewritten document.
+STUDY_ALL_TEXT_FIELD = "all_text"
+
+
+#: The only fields kept in each index's ``_source``: what is read back from a hit. Everything else is indexed for
+#: search (and sorting/filtering) but not stored. NADA reads the records themselves from its own database by id
+#: (studies by ``sid``, variables by ``uid``, citations by ``citation_id``). Safe only because these indices are never
+#: updated in place (``update_by_query`` or partial ``_update`` rebuild a document from its ``_source``, which would drop
+#: every field not kept here): their documents are always rewritten whole. The chunk index is updated in place (its
+#: filters) and keeps its full ``_source``.
+STUDY_SOURCE_FIELDS = ["sid", "idno", "title", "filter_facets"]
+VARIABLE_SOURCE_FIELDS = ["uid", "sid", "published"]
+CITATION_SOURCE_FIELDS = ["citation_id", "uuid"]
+
 
 def studies_index_body() -> dict[str, Any]:
     """OpenSearch settings + mappings of the **study** index: one document per study, ``_id`` = ``sid``.
@@ -158,6 +217,7 @@ def studies_index_body() -> dict[str, Any]:
             "fields": {"text": {"type": "text", "analyzer": "nada_text"}},
         },
         **{field: {"type": "text", "analyzer": "nada_text"} for field in STUDY_TEXT_FIELDS},
+        STUDY_ALL_TEXT_FIELD: {"type": "text", "analyzer": "nada_text", "store": True},
         "title_sort": {"type": "keyword", "normalizer": "nada_sort"},
         "nation_sort": {"type": "keyword", "normalizer": "nada_sort"},
         "year_start": {"type": "integer"},
@@ -186,7 +246,12 @@ def studies_index_body() -> dict[str, Any]:
                 },
             }
         },
-        "mappings": {"dynamic": "strict", "dynamic_templates": templates, "properties": properties},
+        "mappings": {
+            "dynamic": "strict",
+            "_source": {"includes": STUDY_SOURCE_FIELDS},
+            "dynamic_templates": templates,
+            "properties": properties,
+        },
     }
 
 
@@ -221,6 +286,7 @@ def citations_index_body() -> dict[str, Any]:
         },
         "mappings": {
             "dynamic": "strict",
+            "_source": {"includes": CITATION_SOURCE_FIELDS},
             "properties": {
                 "citation_id": {"type": "integer"},
                 "uuid": {"type": "keyword"},
@@ -268,6 +334,7 @@ def variables_index_body() -> dict[str, Any]:
         },
         "mappings": {
             "dynamic": "strict",
+            "_source": {"includes": VARIABLE_SOURCE_FIELDS},
             "properties": {
                 "uid": {"type": "integer"},
                 "sid": {"type": "integer"},

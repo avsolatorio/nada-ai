@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -359,26 +360,33 @@ def test_ingest_from_catalog_all_rejects_resume_with_recreate(monkeypatch):
 
     with TestClient(app) as client:
         _fresh_state()
-        response = client.post(
-            "/admin/ingest/from-catalog/all", json={"resume": True, "recreate_index": True}
-        )
+        response = client.post("/admin/ingest/from-catalog/all", json={"resume": True, "recreate_index": True})
 
     assert response.status_code == 422
     assert "resume cannot be combined with recreate_index" in response.text
     create_index.assert_not_called()
 
 
-def test_ingest_reconcile_triggers_poll_once(monkeypatch):
+def test_ingest_reconcile_wakes_the_scheduler(monkeypatch):
     monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
-    mock_poll_once = AsyncMock(return_value={"polled": 3})
-    monkeypatch.setattr("nada_ai.app.reconcile_scheduler.poll_once", mock_poll_once)
-
     with TestClient(app) as client:
         _fresh_state()
+        monkeypatch.setattr(state.scheduler, "wake", lambda: {"started": True, "state": "processing"})
         r = client.post("/admin/ingest/reconcile")
     assert r.status_code == 200
-    assert r.json() == {"polled": 3}
-    mock_poll_once.assert_awaited_once()
+    assert r.json() == {"started": True, "state": "processing"}
+
+
+def test_scheduler_status_is_answered_without_calling_nada(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    with TestClient(app) as client:
+        _fresh_state()
+        r = client.get("/admin/scheduler/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["state"] == "disabled"  # tests run without the scheduler
+    assert body["running_here"] is False
+    assert "requests" in body
 
 
 def test_search_index_diff_missing_list_returns_items(monkeypatch):
@@ -612,6 +620,38 @@ def test_search_index_reconcile_diff_singleflights_per_data_type(monkeypatch):
         gate.set()
 
 
+def test_search_index_reconcile_diff_remove_only_is_its_own_cleanup_job(monkeypatch):
+    """Clean up runs beside an update of the same scope, and passes remove_only through."""
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    monkeypatch.setenv("NADA_REPORT_SEARCH_INDEX_STATE_ENABLED", "true")
+    gate = threading.Event()
+    seen: list[bool] = []
+
+    def slow(settings, **kw):
+        seen.append(kw.get("remove_only"))
+        gate.wait(timeout=5)
+        return {"missing_total": 0, "stale_total": 0, "indexed": 0, "deleted": 0, "failed": 0, "skipped": 0}
+
+    monkeypatch.setattr("nada_ai.ingest.search_index_sync.reconcile_diff_once", slow)
+
+    with TestClient(app) as client:
+        _fresh_state()
+        r1 = client.post("/admin/search-index/reconcile-diff?object_type=survey")
+        assert r1.status_code == 202
+        r2 = client.post("/admin/search-index/reconcile-diff?object_type=survey&remove_only=true")
+        assert r2.status_code == 202
+        assert r2.json()["kind"] == "search_index_cleanup"
+        assert r2.json()["key"] == "search_index_cleanup:survey:all"
+        r3 = client.post("/admin/search-index/reconcile-diff?object_type=survey&remove_only=true")
+        assert r3.status_code == 409
+        for _ in range(50):  # both workers start on their own threads
+            if len(seen) == 2:
+                break
+            time.sleep(0.1)
+        gate.set()
+    assert sorted(seen) == [False, True]
+
+
 def test_search_index_reconcile_diff_writes_progress_onto_the_job(monkeypatch):
     """The route must bind JobRegistry.set_progress to the submitted job id
     *before* the worker runs, same as index_from_catalog — otherwise Jobs
@@ -739,8 +779,9 @@ def test_qdrant_collection_endpoint_returns_info(monkeypatch):
     assert body["info"] == {"points_count": 5}
 
 
-def test_index_delete_drops_chunk_study_and_variable_indexes(monkeypatch):
-    """The whole search store: dropping only the chunk index left /studies/search and /variables/search serving."""
+def test_index_delete_drops_chunk_study_variable_and_citation_indexes(monkeypatch):
+    """The whole search store: dropping only the chunk index left /studies/search, /variables/search and
+    /citations/search serving."""
     monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
@@ -756,8 +797,60 @@ def test_index_delete_drops_chunk_study_and_variable_indexes(monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["deleted"] is True
-    assert body["indexes"] == ["idx", "idx-studies", "idx-variables"]
+    assert body["indexes"] == ["idx", "idx-studies", "idx-variables", "idx-citations"]
     assert [c.kwargs["index"] for c in mock.indices.delete.call_args_list] == body["indexes"]
+
+
+def _recreate_studies(mock, settings=None):
+    with TestClient(app) as client:
+        _fresh_state()
+        prev_settings, prev_client = state.settings, state.client
+        state.settings = settings or Settings(search_backend="opensearch", index_name="idx")
+        state.client = mock
+        try:
+            return client.post("/admin/index/studies/recreate?confirm=true")
+        finally:
+            state.settings, state.client = prev_settings, prev_client
+
+
+def test_recreate_studies_index_drops_and_creates_only_the_study_index(monkeypatch):
+    """The chunk index (embeddings) and the variable index stay: indexing every study again reuses the vectors."""
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    forget = MagicMock()
+    monkeypatch.setattr(admin_module, "forget_index_generation", forget)
+    mock = MagicMock()
+    mock.indices.delete = AsyncMock(return_value={"acknowledged": True})
+    mock.indices.create = AsyncMock(return_value={"acknowledged": True})
+    r = _recreate_studies(mock)
+    assert r.status_code == 200
+    forget.assert_called_once()  # the next request to NADA carries the new generation, not a cached one
+    body = r.json()
+    assert body["index"] == "idx-studies" and body["recreated"] is True and body["generation"]
+    assert [c.kwargs["index"] for c in mock.indices.delete.call_args_list] == ["idx-studies"]
+    created = mock.indices.create.call_args.kwargs
+    assert created["index"] == "idx-studies"
+    assert created["body"]["mappings"]["_meta"]["generation"] == body["generation"]
+    assert "all_text" in created["body"]["mappings"]["properties"]
+
+
+def test_recreate_studies_index_creates_it_when_missing(monkeypatch):
+    from opensearchpy.exceptions import NotFoundError
+
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    mock = MagicMock()
+    mock.indices.delete = AsyncMock(side_effect=NotFoundError(404, "index_not_found_exception", {}))
+    mock.indices.create = AsyncMock(return_value={"acknowledged": True})
+    assert _recreate_studies(mock).status_code == 200
+    mock.indices.create.assert_awaited_once()
+
+
+def test_recreate_studies_index_requires_confirm_and_opensearch(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    with TestClient(app) as client:
+        assert client.post("/admin/index/studies/recreate").status_code == 400
+    mock = MagicMock()
+    r = _recreate_studies(mock, Settings(search_backend="qdrant", index_name="idx"))
+    assert r.status_code == 400
 
 
 def test_index_delete_tolerates_an_index_that_never_existed(monkeypatch):
@@ -1433,3 +1526,78 @@ def test_citations_stats_is_zero_not_an_error_before_the_first_sync(monkeypatch)
 def test_citations_stats_501_on_qdrant(monkeypatch):
     r, _ = _citations_call(monkeypatch, "GET", "/admin/citations/stats", backend="qdrant", client_mock=MagicMock())
     assert r.status_code == 501
+
+
+def test_scheduler_pause_and_resume(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    with TestClient(app) as client:
+        _fresh_state()
+        paused = client.post("/admin/scheduler/pause")
+        assert paused.status_code == 200
+        assert paused.json()["pause"]["reason"] == "manual"
+        assert client.post("/admin/ingest/reconcile").json() == {"started": False, "state": "paused"}
+
+        resumed = client.post("/admin/scheduler/resume")
+        assert resumed.status_code == 200
+        assert resumed.json()["state"] != "paused"
+
+
+def test_a_job_can_be_cancelled_with_post(monkeypatch):
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    with TestClient(app) as client:
+        _fresh_state()
+        r = client.post("/jobs/does-not-exist/cancel")
+    assert r.status_code == 404
+
+
+def _recreate_studies_index(monkeypatch, create_effects: list) -> tuple[Any, MagicMock, list[int]]:
+    """POST the study index recreate against a mock client whose ``create`` answers ``create_effects`` in order."""
+    from opensearchpy.exceptions import NotFoundError
+
+    monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
+    forgotten: list[int] = []
+    monkeypatch.setattr(admin_module, "forget_index_generation", lambda: forgotten.append(1))
+    with TestClient(app) as client:
+        _fresh_state()
+        prev_settings, prev_client = state.settings, state.client
+        state.settings = Settings(search_backend="opensearch", index_name="idx")
+        mock = MagicMock()
+        mock.indices.delete = AsyncMock(side_effect=[NotFoundError(404, "index_not_found_exception", {})] + [{}] * 5)
+        mock.indices.create = AsyncMock(side_effect=create_effects)
+        state.client = mock
+        try:
+            r = client.post("/admin/index/studies/recreate?confirm=true")
+        finally:
+            state.settings, state.client = prev_settings, prev_client
+    return r, mock, forgotten
+
+
+def test_study_index_recreate_creates_it_with_a_new_generation(monkeypatch):
+    r, mock, forgotten = _recreate_studies_index(monkeypatch, [{"acknowledged": True}])
+    assert r.status_code == 200
+    body = r.json()
+    assert body["recreated"] is True and body["index"] == "idx-studies"
+    created = mock.indices.create.call_args.kwargs
+    assert created["body"]["mappings"]["_meta"]["generation"] == body["generation"]
+    assert forgotten == [1]
+
+
+def test_study_index_recreate_deletes_again_when_a_write_created_it_in_between(monkeypatch):
+    from opensearchpy.exceptions import RequestError
+
+    exists = RequestError(400, "resource_already_exists_exception", {})
+    r, mock, forgotten = _recreate_studies_index(monkeypatch, [exists, {"acknowledged": True}])
+    assert r.status_code == 200
+    assert mock.indices.delete.await_count == 2
+    assert mock.indices.create.await_count == 2
+    assert forgotten == [1]
+
+
+def test_study_index_recreate_fails_at_once_on_any_other_error(monkeypatch):
+    from opensearchpy.exceptions import RequestError
+
+    bad = RequestError(400, "mapper_parsing_exception", {})
+    r, mock, forgotten = _recreate_studies_index(monkeypatch, [bad, {"acknowledged": True}])
+    assert r.status_code == 503
+    assert mock.indices.create.await_count == 1
+    assert forgotten == [1]

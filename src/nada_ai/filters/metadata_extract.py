@@ -127,11 +127,11 @@ def fetch_study_extract(settings: Settings, idno: str) -> tuple[int, dict[str, A
     core = study.get("core_fields")
     filters = study.get("filters")
     try:
-        sid = int(core["survey_uid"])
+        sid = int(core["catalog_id"])
     except (KeyError, TypeError, ValueError):
         sid = 0
     if sid <= 0 or not isinstance(filters, dict):
-        raise MetadataExtractError(f"Extract record for {idno!r} lacks core_fields.survey_uid or filters")
+        raise MetadataExtractError(f"Extract record for {idno!r} lacks core_fields.catalog_id or filters")
     return sid, core, filters
 
 

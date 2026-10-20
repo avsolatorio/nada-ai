@@ -47,8 +47,9 @@ def _chunk(idno: str, qfield: str) -> Document:
 def _raw(sid: int, idno: str, countries: list[int], years: list[int]) -> dict[str, Any]:
     return {
         "_extract_core_fields": {
-            "survey_uid": sid,
+            "catalog_id": sid,
             "idno": idno,
+            "all_text": [],
             "title": f"Study {idno}",
             "nation": "Somewhere",
             "abstract": "About things",

@@ -7,6 +7,10 @@ from opensearchpy import AsyncOpenSearch, OpenSearch, RequestsHttpConnection
 
 from nada_ai.settings import Settings
 
+#: ``request_timeout`` of a read that must not hold anything up when OpenSearch hangs (health probes, the index mapping
+#: check, the study index generation read before every request to NADA). The clients' own timeout is for bulk work.
+QUICK_REQUEST_TIMEOUT_SECONDS = 5
+
 
 def _parse_url(settings: Settings) -> tuple[str, int, str, bool]:
     parsed = urlparse(settings.opensearch_url)

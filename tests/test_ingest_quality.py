@@ -96,7 +96,7 @@ class _FakeLoader:
     def __init__(self, idno: str, metadata_type: str, force: bool = False, include_resources: bool = True) -> None:
         self.idno = idno
         self.metadata_type = metadata_type
-        self.metadata = {"_extract_filters": {}, "_extract_core_fields": {"survey_uid": 1, "idno": idno}}
+        self.metadata = {"_extract_filters": {}, "_extract_core_fields": {"catalog_id": 1, "idno": idno}}
 
     def get_metadata_handler(self) -> _FakeHandler:
         return _FakeHandler(self._by_idno.get(self.idno, []))

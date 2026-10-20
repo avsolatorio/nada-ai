@@ -140,11 +140,6 @@ async def citations_search(
                 rank=body.offset + i + 1,
                 citation_id=hit.citation_id,
                 uuid=hit.uuid,
-                title=hit.title,
-                authors=hit.authors,
-                ctype=hit.ctype,
-                pub_year=hit.pub_year,
-                doi=hit.doi,
                 score=hit.score,
             )
             for i, hit in enumerate(page.hits)

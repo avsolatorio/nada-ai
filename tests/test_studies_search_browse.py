@@ -147,6 +147,17 @@ def test_browse_needs_the_browse_capability() -> None:
     assert raised.value.details == {"capability": "browse", "engine": "opensearch"}
 
 
+def test_auto_with_a_quoted_phrase_is_keyword_search() -> None:
+    """A semantic match cannot promise the phrase word for word."""
+    modes = frozenset({"browse", "lexical", "semantic", "hybrid"})
+    assert resolve_mode(_request(query='"aged 15 to 49"'), Engine.opensearch, modes) is EffectiveMode.lexical
+    assert resolve_mode(_request(query="mics \u201caged 15\u201d"), Engine.opensearch, modes) is EffectiveMode.lexical
+    assert resolve_mode(_request(query="aged 15 to 49"), Engine.opensearch, modes) is EffectiveMode.hybrid
+    assert resolve_mode(_request(query='aged "15'), Engine.opensearch, modes) is EffectiveMode.hybrid  # unbalanced
+    explicit = _request(query='"aged 15 to 49"', mode="hybrid")
+    assert resolve_mode(explicit, Engine.opensearch, modes) is EffectiveMode.hybrid  # an explicit mode runs as asked
+
+
 def test_a_query_is_refused_while_no_query_mode_exists() -> None:
     with pytest.raises(StudiesApiError) as raised:
         resolve_mode(_request(query="poverty"), Engine.opensearch, BROWSE)
@@ -483,3 +494,12 @@ def test_access_errors_come_before_validation_errors(monkeypatch: pytest.MonkeyP
     assert response.status_code == 401
     assert _error(response)[0] == "unauthorized"
     assert ok.status_code == 200
+
+
+@pytest.mark.parametrize("query", ['""', '" "', '"', "\u201c\u201d", "   "])
+def test_blank_or_quotes_with_nothing_in_them_are_a_browse(query: str) -> None:
+    assert StudySearchRequest(query=query).query is None
+
+
+def test_a_quoted_phrase_is_kept_as_typed() -> None:
+    assert StudySearchRequest(query='  "child labour" ').query == '"child labour"'

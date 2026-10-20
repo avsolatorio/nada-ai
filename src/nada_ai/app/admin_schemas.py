@@ -68,7 +68,8 @@ class IndexFromCatalogRequest(BaseModel):
 
 
 class ReconcileSearchIndexResponse(BaseModel):
-    polled: int = Field(description="Pending queue items seen this poll; each was submitted as its own job.")
+    started: bool = Field(description="Whether the scheduler (or a one-off pass) is now working through the queue.")
+    state: str = Field(description="The scheduler's state, or running_elsewhere when another process runs it.")
 
 
 class IndexFromCatalogAllRequest(BaseModel):

@@ -18,6 +18,7 @@ def test_health_returns_ok(monkeypatch):
         mock = MagicMock()
         mock.cluster.health = AsyncMock(return_value={"status": "green", "cluster_name": "test"})
         mock.indices.exists = AsyncMock(return_value=True)
+        mock.indices.get_mapping = AsyncMock(return_value={})
         prev_client, prev_search = state.client, state.search
         state.client = mock
         state.search = create_search_backend(state.settings, mock)
@@ -32,6 +33,36 @@ def test_health_returns_ok(monkeypatch):
     assert body["backend"] == "opensearch"
     assert body["collection_exists"] is True
     assert body["cluster"] == "green"
+    assert body["outdated_indexes"] == {}
+
+
+def test_health_is_degraded_when_an_index_predates_a_mapping_change(monkeypatch):
+    from nada_ai.search.backend.opensearch.mapping import studies_index_body
+
+    monkeypatch.setenv("NADA_SEARCH_BACKEND", "opensearch")
+    with TestClient(app) as client:
+        properties = {k: v for k, v in studies_index_body()["mappings"]["properties"].items() if k != "all_text"}
+        mock = MagicMock()
+        mock.cluster.health = AsyncMock(return_value={"status": "green"})
+        mock.indices.exists = AsyncMock(return_value=True)
+        studies = state.settings.studies_index
+
+        async def get_mapping(index, **kw):
+            # the study index name is an alias here: the mapping comes back under the index behind it
+            return {"nada-studies-v2": {"mappings": {"properties": properties}}} if index == studies else {}
+
+        mock.indices.get_mapping = get_mapping
+        prev_client, prev_search = state.client, state.search
+        state.client = mock
+        state.search = create_search_backend(state.settings, mock)
+        try:
+            r = client.get("/health")
+        finally:
+            state.client = prev_client
+            state.search = prev_search
+    body = r.json()
+    assert body["status"] == "degraded"
+    assert body["outdated_indexes"] == {state.settings.studies_index: ["all_text"]}
 
 
 def test_search_falls_back_to_real_search_when_idno_fast_path_misses():

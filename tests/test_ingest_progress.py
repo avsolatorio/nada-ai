@@ -249,7 +249,10 @@ class _FakeLoader:
         self.idno = idno
         self.metadata_type = metadata_type
         sid = _FAKE_SIDS.setdefault(idno, len(_FAKE_SIDS) + 1)  # a study's own id, as in NADA
-        self.metadata = {"_extract_filters": {}, "_extract_core_fields": {"survey_uid": sid, "idno": idno}}
+        self.metadata = {
+            "_extract_filters": {},
+            "_extract_core_fields": {"catalog_id": sid, "idno": idno, "all_text": []},
+        }
 
     def get_metadata_handler(self) -> _FakeHandler:
         return _FakeHandler(self._by_idno.get(self.idno, []))

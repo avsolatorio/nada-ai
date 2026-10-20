@@ -36,8 +36,9 @@ Only **published** citations are ever searched; that is not a filter. Unknown fi
 ## 2. Response
 
 `{engine, found, limit, offset, truncated, hits, applied, timing_ms}`; each hit is
-`{rank, citation_id, uuid, title, authors, ctype, pub_year, doi, score}`. `authors` is the flattened name list
-(`"Jane Doe; Ann B Smith"`). `citation_id` is NADA's `citations.id`.
+`{rank, citation_id, uuid, score}` — ids only: `citation_id` is NADA's `citations.id`, and NADA reads the citation
+itself from its database. The citation index stores only `citation_id` and `uuid` in `_source`; the other fields
+are indexed for search, sorting and filtering, not stored.
 
 `GET /info` reports `capabilities.citations_search: true` on OpenSearch.
 

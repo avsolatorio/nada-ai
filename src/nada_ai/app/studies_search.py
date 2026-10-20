@@ -52,6 +52,7 @@ from nada_ai.search.backend.opensearch.studies_search import (
     exact_idno_match,
 )
 from nada_ai.search.backend.opensearch.studies_semantic import StudyPolicy
+from nada_ai.search.query_heuristics import has_quoted_phrase
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +76,21 @@ def _unsupported(capability: str, engine: Engine, message: str) -> StudiesApiErr
 
 
 def resolve_mode(request: StudySearchRequest, engine: Engine, implemented: frozenset[str]) -> EffectiveMode:
-    """The mode that will run: browse without a query, otherwise the best requested mode the engine serves."""
+    """The mode that will run: browse without a query, otherwise the best requested mode the engine serves.
+
+    ``auto`` with a quoted phrase is keyword search: the phrase must appear word for word, which a semantic match
+    cannot promise. An explicit mode is run as asked.
+    """
     if request.query is None:
         if EffectiveMode.browse.value not in implemented:
             raise _unsupported("browse", engine, f"The {engine.value} engine does not implement browse")
         return EffectiveMode.browse
+    if (
+        request.mode is SearchMode.auto
+        and EffectiveMode.lexical.value in implemented
+        and has_quoted_phrase(request.query)
+    ):
+        return EffectiveMode.lexical
     for mode in _MODE_PREFERENCE[request.mode]:
         if mode.value in implemented:
             return mode

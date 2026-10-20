@@ -94,17 +94,7 @@ def test_search_variables_parses_hits_and_total() -> None:
             "hits": [
                 {
                     "_score": 5.1,
-                    "_source": {
-                        "uid": 1,
-                        "sid": 10,
-                        "idno": "IDNO-1",
-                        "name": "hhid",
-                        "label": "Household id",
-                        "question": None,
-                        "title": "Study one",
-                        "nation": "Kenya",
-                        "dataset_type": "survey",
-                    },
+                    "_source": {"uid": 1, "sid": 10},
                 }
             ],
         },
@@ -114,14 +104,7 @@ def test_search_variables_parses_hits_and_total() -> None:
     assert page.took_ms == 4
     assert len(page.hits) == 1
     hit = page.hits[0]
-    assert (hit.uid, hit.sid, hit.idno, hit.name, hit.label, hit.score) == (
-        1,
-        10,
-        "IDNO-1",
-        "hhid",
-        "Household id",
-        5.1,
-    )
+    assert (hit.uid, hit.sid, hit.score) == (1, 10, 5.1)
 
 
 def test_search_variables_raises_index_not_ready_when_the_index_is_missing() -> None:

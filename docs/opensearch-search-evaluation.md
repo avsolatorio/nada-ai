@@ -177,6 +177,10 @@ and nothing rewarded a phrase.
 A query of two or more words also scores the words as a phrase (up to 2 words apart, any field, boost 2). The phrase clause is
 optional, so it never changes which studies match, only their order.
 
+Added later: `all_text` (every other metadata value, built by NADA), weight 1, matched only with every word and no
+typos; a `"quoted phrase"` must appear word for word in any field or in `all_text`. Not measured on the golden queries
+yet.
+
 **Measured on the 67 golden queries** (the result sizes do not change because matching does not):
 
 | variant | keyword-only nDCG@10 | hybrid nDCG@10 | study 288 in the survey tab |

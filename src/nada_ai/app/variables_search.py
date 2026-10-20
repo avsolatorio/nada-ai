@@ -138,17 +138,6 @@ async def variables_search(
                 rank=body.offset + i + 1,
                 uid=hit.uid,
                 sid=hit.sid,
-                idno=hit.idno,
-                fid=hit.fid,
-                vid=hit.vid,
-                name=hit.name,
-                label=hit.label,
-                question=hit.question,
-                title=hit.title,
-                nation=hit.nation,
-                dataset_type=hit.dataset_type,
-                year_start=hit.year_start,
-                year_end=hit.year_end,
                 score=hit.score,
             )
             for i, hit in enumerate(page.hits)

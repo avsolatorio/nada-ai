@@ -61,20 +61,11 @@ class VariableSearchRequest(BaseModel):
 
 
 class VariableHit(BaseModel):
+    """A matching variable by id; the caller reads the variable itself from its database (``uid``)."""
+
     rank: int
     uid: int
     sid: int
-    idno: str | None
-    fid: str | None
-    vid: str | None
-    name: str | None
-    label: str | None
-    question: str | None
-    title: str | None
-    nation: str | None
-    dataset_type: str | None
-    year_start: int | None
-    year_end: int | None
     score: float | None
 
 

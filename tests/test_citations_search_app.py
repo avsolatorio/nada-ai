@@ -42,15 +42,7 @@ def _client(result: dict[str, Any] | None = None, *, side_effect: Exception | No
 def test_a_query_is_run_and_the_response_matches_the_contract_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     hit = {
         "_score": 7.5,
-        "_source": {
-            "citation_id": 12,
-            "uuid": "u-12",
-            "title": "Poverty and health",
-            "authors": "Jane Doe",
-            "ctype": "book",
-            "pub_year": 2019,
-            "doi": "10.1/abc",
-        },
+        "_source": {"citation_id": 12, "uuid": "u-12"},
     }
     client = _client({"took": 2, "hits": {"total": {"value": 1}, "hits": [hit]}})
     with _running(monkeypatch, "opensearch", client=client) as c:
@@ -59,19 +51,8 @@ def test_a_query_is_run_and_the_response_matches_the_contract_shape(monkeypatch:
     assert response.status_code == 200
     body = response.json()
     assert body["engine"] == "opensearch" and body["found"] == 1 and body["truncated"] is False
-    assert body["hits"] == [
-        {
-            "rank": 11,
-            "citation_id": 12,
-            "uuid": "u-12",
-            "title": "Poverty and health",
-            "authors": "Jane Doe",
-            "ctype": "book",
-            "pub_year": 2019,
-            "doi": "10.1/abc",
-            "score": 7.5,
-        }
-    ]
+    # ids only: the caller reads the citation itself from its database
+    assert body["hits"] == [{"rank": 11, "citation_id": 12, "uuid": "u-12", "score": 7.5}]
     assert body["applied"] == {
         "query": "poverty",
         "filters": {},

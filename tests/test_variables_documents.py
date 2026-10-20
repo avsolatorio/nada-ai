@@ -12,7 +12,7 @@ def test_variable_to_source_has_the_core_fields() -> None:
         142785,
         {
             "uid": 142785,
-            "sid": 305,
+            "catalog_id": 305,
             "fid": "F1234",
             "vid": "V1989",
             "name": "h12d_6",
@@ -46,30 +46,30 @@ def test_variable_to_source_has_the_core_fields() -> None:
     }
 
 
-def test_a_missing_sid_is_rejected() -> None:
-    with pytest.raises(ValueError, match="sid"):
+def test_a_missing_catalog_id_is_rejected() -> None:
+    with pytest.raises(ValueError, match="catalog_id"):
         variable_to_source(1, {"name": "hhid"}, {})
 
 
 def test_empty_text_fields_are_omitted_not_stored_blank() -> None:
-    source = variable_to_source(1, {"uid": 1, "sid": 2, "name": "hhid", "question": "", "categories": None}, {})
+    source = variable_to_source(1, {"uid": 1, "catalog_id": 2, "name": "hhid", "question": "", "categories": None}, {})
     assert "question" not in source
     assert "categories" not in source
     assert source["published"] == 0
 
 
 def test_countries_drops_values_that_are_not_integers() -> None:
-    source = variable_to_source(1, {"uid": 1, "sid": 2, "name": "hhid"}, {"countries": [1, "x", None, 2]})
+    source = variable_to_source(1, {"uid": 1, "catalog_id": 2, "name": "hhid"}, {"countries": [1, "x", None, 2]})
     assert source["countries"] == [1, 2]
 
 
 def test_no_countries_key_when_the_list_is_empty() -> None:
-    source = variable_to_source(1, {"uid": 1, "sid": 2, "name": "hhid"}, {"countries": []})
+    source = variable_to_source(1, {"uid": 1, "catalog_id": 2, "name": "hhid"}, {"countries": []})
     assert "countries" not in source
 
 
 def test_bulk_action_indexes_by_uid() -> None:
-    action = variable_bulk_action("nada-ai-variables", 142785, {"uid": 142785, "sid": 305, "name": "hhid"}, {})
+    action = variable_bulk_action("nada-ai-variables", 142785, {"uid": 142785, "catalog_id": 305, "name": "hhid"}, {})
     assert action["_op_type"] == "index"
     assert action["_index"] == "nada-ai-variables"
     assert action["_id"] == "142785"

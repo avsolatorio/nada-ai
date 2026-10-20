@@ -160,18 +160,36 @@ class Settings(BaseSettings):
     #: above, and the same shared ``AI4DATA_METADATA_CATALOG_*`` credentials.
     search_index_base_url: str | None = Field(default=None)
 
-    #: Run the search-index queue reconciliation as an in-process periodic
-    #: loop inside the FastAPI app (see app/reconcile_scheduler.py), instead
-    #: of only via the manual `reconcile_search_index` CLI command. Off by
-    #: default — enabling it requires an admin credential for the target NADA
-    #: instance (see metadata_extract_* above) and NADA's own search-index
-    #: tracking configured for this deployment (search_engine set,
-    #: tracking_enabled true — check with `search_index_status` first).
-    reconcile_search_index_enabled: bool = Field(default=False)
-    #: Seconds between reconciliation polls when enabled.
+    #: Work through NADA's search-index change queue inside the FastAPI app (see app/reconcile_scheduler.py): one item
+    #: at a time until the queue is empty, then a check every ``reconcile_search_index_interval_seconds``. On by
+    #: default; it does nothing (and polls rarely) while NADA does not track changes for this deployment, and does not
+    #: start at all without a NADA URL. Only one process may run it: the first to take
+    #: ``reconcile_search_index_lock_path`` does, the others report it as running elsewhere.
+    reconcile_search_index_enabled: bool = Field(default=True)
+    #: Seconds between checks for new queue items once the queue is empty (it is worked through without pausing).
     reconcile_search_index_interval_seconds: int = Field(default=300, ge=30, le=3600)
-    #: Max queue items to submit as jobs per poll (mirrors list_queue's own cap).
+    #: Seconds between checks while NADA does not track changes for this deployment.
+    reconcile_search_index_not_tracking_interval_seconds: int = Field(default=600, ge=60, le=86400)
+    #: Queue items fetched per page (NADA caps a page at 100).
     reconcile_search_index_batch_limit: int = Field(default=50, ge=1, le=100)
+    #: Lock (and state) file of the one scheduler; ``config/search_index_scheduler.lock`` when unset.
+    reconcile_search_index_lock_path: str | None = Field(default=None)
+
+    #: The request gate in front of NADA (nada/gate.py): one request at a time, at least this many milliseconds from
+    #: the end of one to the start of the next. Doubled for an hour after NADA (or a proxy) answers 429.
+    request_min_interval_ms: int = Field(default=500, ge=0, le=60000)
+    #: Retries of a request NADA could not serve (timeout, connection error, 408, 429, 5xx).
+    request_max_retries: int = Field(default=3, ge=0, le=10)
+    #: Wait before the first retry; each later one waits three times longer (5, 15, 45 s), unless NADA says Retry-After.
+    request_retry_base_seconds: float = Field(default=5.0, ge=0.0, le=600.0)
+    #: Timeout of one request to NADA, unless the request sets its own (ai4data's metadata extract: 120 s).
+    request_timeout_seconds: float = Field(default=30.0, ge=1.0, le=600.0)
+    #: How long the scheduler pauses when a firewall in front of NADA blocks it.
+    firewall_pause_seconds: int = Field(default=1800, ge=60, le=86400)
+    #: Longest pause while NADA is unavailable (pauses start at a minute and double).
+    unavailable_backoff_max_seconds: int = Field(default=1800, ge=60, le=86400)
+    #: Acks that fail in a row (NADA reachable, results not recorded) before the scheduler stops starting new work.
+    ack_failure_limit: int = Field(default=10, ge=1, le=1000)
 
     #: Report indexing/deletion outcomes back to NADA's search_index_state
     #: (POST {base}/admin/search-index/state/bulk) after index_ids_op,

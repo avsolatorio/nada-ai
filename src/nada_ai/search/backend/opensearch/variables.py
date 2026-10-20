@@ -24,12 +24,12 @@ def _as_int(value: Any) -> int | None:
 def variable_to_source(uid: int, core_fields: dict[str, Any], filters: dict[str, Any]) -> dict[str, Any]:
     """Variable document from one variable's extract ``core_fields`` and ``filters``.
 
-    ``sid`` is NADA's own ``surveys.id`` (the study index's ``_id``), so a variable hit resolves to its study without
-    another lookup. Fields NADA leaves empty are omitted.
+    ``sid`` is ``core_fields.catalog_id``, NADA's own ``surveys.id`` (the study index's ``_id``), so a variable hit
+    resolves to its study without another lookup. Fields NADA leaves empty are omitted.
     """
-    sid = _as_int(core_fields.get("sid"))
+    sid = _as_int(core_fields.get("catalog_id"))
     if sid is None:
-        raise ValueError("core_fields has no sid")
+        raise ValueError("core_fields has no catalog_id")
     source: dict[str, Any] = {"uid": int(uid), "sid": sid}
     for field in VARIABLE_TEXT_FIELDS:
         text = str(core_fields.get(field) or "").strip()

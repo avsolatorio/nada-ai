@@ -153,7 +153,7 @@ def test_iter_langdoc_records_bakes_in_cached_extract_filters(tmp_path):
     _FakeLoader._raw_by_idno = {
         "DOC-1": {
             "_extract_filters": {"brand_new_facet_key": ["x"]},
-            "_extract_core_fields": {"survey_uid": 5, "idno": "DOC-1"},
+            "_extract_core_fields": {"catalog_id": 5, "idno": "DOC-1"},
         }
     }
 
@@ -187,7 +187,7 @@ def test_iter_langdoc_records_includes_qdrant_facets(tmp_path):
         "DOC-1": [_FakeDoc("a perfectly fine and long enough description", {"idno": "DOC-1", "type": "document"})],
     }
     _FakeLoader._raw_by_idno = {
-        "DOC-1": {"_extract_filters": {"tags": ["health"]}, "_extract_core_fields": {"survey_uid": 5, "idno": "DOC-1"}}
+        "DOC-1": {"_extract_filters": {"tags": ["health"]}, "_extract_core_fields": {"catalog_id": 5, "idno": "DOC-1"}}
     }
 
     with (
@@ -215,7 +215,7 @@ def test_iter_langdoc_records_needs_no_embedding_service_when_disabled(tmp_path)
         "DOC-1": [_FakeDoc("a perfectly fine and long enough description", {"idno": "DOC-1", "type": "document"})],
     }
     _FakeLoader._raw_by_idno = {
-        "DOC-1": {"_extract_filters": {}, "_extract_core_fields": {"survey_uid": 5, "idno": "DOC-1"}}
+        "DOC-1": {"_extract_filters": {}, "_extract_core_fields": {"catalog_id": 5, "idno": "DOC-1"}}
     }
 
     with (
@@ -242,7 +242,7 @@ def test_iter_bulk_actions_attaches_no_pipeline_when_embeddings_are_disabled(tmp
         "DOC-1": [_FakeDoc("a perfectly fine and long enough description", {"idno": "DOC-1", "type": "document"})],
     }
     _FakeLoader._raw_by_idno = {
-        "DOC-1": {"_extract_filters": {}, "_extract_core_fields": {"survey_uid": 5, "idno": "DOC-1"}}
+        "DOC-1": {"_extract_filters": {}, "_extract_core_fields": {"catalog_id": 5, "idno": "DOC-1"}}
     }
 
     with (
@@ -310,7 +310,7 @@ def _two_chunk_study() -> None:
         ]
     }
     _FakeLoader._raw_by_idno = {
-        "DOC-1": {"_extract_filters": {}, "_extract_core_fields": {"survey_uid": 5, "idno": "DOC-1"}}
+        "DOC-1": {"_extract_filters": {}, "_extract_core_fields": {"catalog_id": 5, "idno": "DOC-1"}}
     }
 
 

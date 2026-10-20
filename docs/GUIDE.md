@@ -170,13 +170,13 @@ uv run python -m nada_ai.mcp_server --port 8025
 ```
 
 Prefer OpenSearch instead of Qdrant (the default)? Same shape, different compose file
-and one setting:
+(it sets `NADA_SEARCH_BACKEND=opensearch` itself, and needs `NADA_ADMIN_API_KEY` in `.env`):
 
 ```bash
 docker compose -f docker-compose.opensearch.yml -f docker-compose.dev.yml up --build -d
 ```
 
-with `NADA_SEARCH_BACKEND=opensearch` in `.env`.
+See [Compose files](#compose-files) for running it next to the Qdrant stack.
 
 ---
 
@@ -482,72 +482,82 @@ either reverting the model or re-ingesting with `recreate_index=True`/`recreate_
 
 ### Search-index queue reconciliation
 
-Beyond the push-based `/webhooks/catalog` and manual admin/CLI reindex commands, nada-ai
-can also *pull* changes from NADA's own `search-index` change queue (see
-[Connecting to NADA](#connecting-to-nada) for the underlying API) — useful as a
-catch-up path after downtime, or as the only sync mechanism when the target NADA
-instance can't call out via webhook.
+NADA records every catalog change (and everything a sync queues) as a row of its `search-index` change queue (see
+[Connecting to NADA](#connecting-to-nada) for the API). nada-ai's **scheduler** (`app/reconcile_scheduler.py`) is the
+only worker of that queue: it runs inside the FastAPI app, works through the queue one item at a time until it is
+empty, then checks again every `NADA_RECONCILE_SEARCH_INDEX_INTERVAL_SECONDS`.
 
-**One-shot / CLI** (`nada_ai.ingest.search_index_sync`):
-
-```bash
-uv run python -m nada_ai.ingest.cli search_index_status        # queue/state counts, tracking_enabled
-uv run python -m nada_ai.ingest.cli reconcile_search_index --limit=50
-```
-
-This is a bare, `Settings`-only function with no access to the FastAPI job registry —
-concurrent runs (e.g. cron alongside a live webhook) aren't coordinated with other
-write paths for the same idno.
-
-**In-process scheduler** (recommended when running the FastAPI app): set
-`NADA_RECONCILE_SEARCH_INDEX_ENABLED=true` to run reconciliation as a periodic
-background loop inside the app itself (`app/reconcile_scheduler.py`), started in the
-app's lifespan and cancelled cleanly on shutdown. Each queue item is submitted as its
-own job through the **same** `JobRegistry` and the **same** `content:{metadata_type}:{idno}`
-key that `/webhooks/catalog` and the admin index/reindex routes use — so a
-queue-driven reindex and a webhook-triggered one for the same idno now properly
-single-flight against each other instead of racing with no coordination.
+- **One process runs it**: the first to lock `NADA_RECONCILE_SEARCH_INDEX_LOCK_PATH`. Its state is written next to the
+  lock, so any process can report it.
+- **Records are fetched by study id**, a page at a time (options only for a partial update, the full record for a full
+  one); acks are sent in batches. An item that fails while NADA answers is acked `failed` and skipped.
+- **Every request to NADA goes through one gate** (`nada/gate.py`, ai4data's requests included): one request at a
+  time, a minimum gap, retries with backoff for timeouts, 429 and 5xx. A `Retry-After` longer than a minute is not
+  waited out by the gate. The gate is per process, so run the app with **one worker** (the Docker image does): with
+  more, each worker's admin requests to NADA (status, sync, diff) go through a gate of its own and are not spaced
+  against the scheduler's.
+- **It pauses instead of hammering NADA**: when NADA does not answer (a minute, doubling up to
+  `NADA_UNAVAILABLE_BACKOFF_MAX_SECONDS`, or as long as NADA's `Retry-After` asks: until then no request at all
+  goes to NADA), when a firewall in front of NADA blocks it (`NADA_FIREWALL_PAUSE_SECONDS`), when NADA does not
+  track changes for this deployment or tracks another nada-ai's index, and when acks keep failing
+  (`NADA_ACK_FAILURE_LIMIT` in a row).
+- **A crash restarts the loop** after a growing wait; a heartbeat that stops moving shows as `stuck`, and `/health` is
+  `degraded` while the scheduler is crashed, stuck, or has no NADA URL.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NADA_RECONCILE_SEARCH_INDEX_ENABLED` | `false` | Run the in-process reconciliation scheduler |
-| `NADA_RECONCILE_SEARCH_INDEX_INTERVAL_SECONDS` | `300` | Seconds between polls |
-| `NADA_RECONCILE_SEARCH_INDEX_BATCH_LIMIT` | `50` | Max queue items submitted as jobs per poll |
+| `NADA_RECONCILE_SEARCH_INDEX_ENABLED` | `true` | Run the scheduler (it does not start without a NADA URL) |
+| `NADA_RECONCILE_SEARCH_INDEX_INTERVAL_SECONDS` | `300` | Seconds between checks once the queue is empty |
+| `NADA_RECONCILE_SEARCH_INDEX_NOT_TRACKING_INTERVAL_SECONDS` | `600` | Seconds between checks while NADA does not track changes for this deployment |
+| `NADA_RECONCILE_SEARCH_INDEX_BATCH_LIMIT` | `50` | Queue items per page (NADA caps a page at 100) |
+| `NADA_RECONCILE_SEARCH_INDEX_LOCK_PATH` | `config/search_index_scheduler.lock` | Lock and state file of the one scheduler |
+| `NADA_REQUEST_MIN_INTERVAL_MS` | `500` | Gap between requests to NADA (doubled for an hour after a 429) |
+| `NADA_REQUEST_MAX_RETRIES` | `3` | Retries of a request NADA could not serve |
+| `NADA_REQUEST_RETRY_BASE_SECONDS` | `5` | Wait before the first retry; each later one waits three times longer |
+| `NADA_REQUEST_TIMEOUT_SECONDS` | `30` | Timeout of one request to NADA, unless the request sets its own (ai4data's metadata extract: 120 s) |
 
-**Trigger a poll on demand over HTTP** (role: write) — runs the same logic as one
-scheduler tick right now, instead of waiting for the next interval:
-
-```bash
-curl -X POST localhost:8020/admin/ingest/reconcile \
-  -H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY"
-# => {"polled": 3}
-```
-
-This submits each pending queue item as its own job (same `JobRegistry` path as the
-scheduler) and returns immediately — it does not wait for those jobs to finish.
-Poll `GET /jobs` to watch them complete. Safe to call whether or not the background
-scheduler is enabled; single-flight on `content:{metadata_type}:{idno}` keeps it from
-racing a concurrent scheduler tick, webhook, or admin reindex for the same idno.
-
-**Check queue/tracking status over HTTP** (role: read) — the same data the
-`search_index_status` CLI command prints, for a dashboard that can't shell out:
+**Over HTTP** (`X-NADA-Admin-Key`; read role for status, write role for the rest). NADA's Semantic pages use these:
 
 ```bash
-curl -s localhost:8020/admin/search-index/status \
-  -H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY"
-# => {"status": "ok", "search_engine": "nada_ai", "tracking_enabled": true,
-#     "queue": {"pending": 2, "failed": 0}, "state": {"indexed": 100}}
+curl -s localhost:8020/admin/scheduler/status -H "X-NADA-Admin-Key: $KEY"   # state, pause, current item, gate figures
+curl -X POST localhost:8020/admin/ingest/reconcile -H "X-NADA-Admin-Key: $KEY"   # Process pending: start now
+# => {"started": true, "state": "processing"}
+curl -X POST localhost:8020/admin/scheduler/pause -H "X-NADA-Admin-Key: $KEY"    # finish the item in hand, then wait
+curl -X POST localhost:8020/admin/scheduler/resume -H "X-NADA-Admin-Key: $KEY"
+curl -s localhost:8020/admin/search-index/status -H "X-NADA-Admin-Key: $KEY"   # NADA's queue and state counts
 ```
 
-Returns `400` if no search-index base URL is configured (`NADA_SEARCH_INDEX_BASE_URL`
-or `AI4DATA_METADATA_CATALOG_URL`), `503` if NADA's status endpoint is unreachable.
+The pause is a control file next to the lock: it survives a restart, and any process can set or clear it. Process
+pending started where the scheduler is turned off runs one pass through the queue; where another process runs the
+scheduler, it starts nothing (`state: running_elsewhere`).
 
-Enabling the scheduler needs two things configured on NADA's side, not just here:
-an admin-capable credential (`AI4DATA_METADATA_CATALOG_X_API_KEY` — the same one
-everything else uses), and NADA's own `search_engine`/tracking configuration
-actually pointed at this deployment — check with `search_index_status` first. If
-`tracking_enabled` is `false`, the queue stays empty and the scheduler logs a warning
-each poll rather than failing silently.
+**CLI**, for a deployment without the app running:
+
+```bash
+uv run python -m nada_ai.ingest.cli search_index_status        # queue/state counts, tracking_enabled
+uv run python -m nada_ai.ingest.cli reconcile_search_index --limit=50   # one page, then exit
+```
+
+`reconcile_search_index` refuses to run while the scheduler holds its lock, so the two never work the queue at the
+same time.
+
+The scheduler needs two things on NADA's side: an admin-capable credential (`AI4DATA_METADATA_CATALOG_X_API_KEY`, the
+same one everything else uses), and NADA's search-index tracking pointed at this deployment (check with
+`search_index_status`). While `tracking_enabled` is `false`, the scheduler reports `not_tracking` and checks again
+every `NADA_RECONCILE_SEARCH_INDEX_NOT_TRACKING_INTERVAL_SECONDS`.
+
+### Index mapping changes
+
+An index keeps the mapping it was created with. The study, variable and citation indices are strict, so after a
+deploy that adds or changes a field in their mapping, every write carrying that field fails until the index is
+recreated: in NADA's Semantic › Maintenance, *Rebuild the study index* for the study index (it queues every study
+again and reuses the stored embeddings), *Delete and rebuild* for the variable or citation index. nada-ai reports
+such an index at startup (an error log) and in `GET /health` (`outdated_indexes`, `status: degraded`).
+
+The same goes for ai4data's metadata cache (`$AI4DATA_DISCOVERY_DATA_PATH/metadata_cache`), which admin and CLI
+indexing read from before asking NADA: a record cached before NADA sent a field lacks it. A study record without
+`all_text` is refused (`metadata_cache` is named in the error); clear the folder once after such a deploy. Records are
+fetched again from NADA as needed, and the stored embeddings are still reused (only `force` re-embeds).
 
 ---
 
@@ -862,11 +872,16 @@ process that serves *only* MCP.
 
 | File | What it starts |
 |---|---|
-| `docker-compose.opensearch.yml` | `nada-ai-api` (port `8020`) + `opensearch-nada` (OpenSearch 3.6.0, single-node, security plugin disabled — **dev only**, port `9200`) |
-| `docker-compose.qdrant.yml` | `nada-ai-api` (port `8020`) + `qdrant-nada` (Qdrant v1.18.0, ports `6333`/HTTP, `6334`/gRPC) |
-| `docker-compose.dev.yml` | Overlay: bind-mounts `./src`, sets `PYTHONPATH`, runs uvicorn with `--reload` |
+| `docker-compose.opensearch.yml` | Project `nada-ai-opensearch`: `nada-ai-api` (`127.0.0.1:${NADA_AI_PORT:-8020}`) + `opensearch-nada` (OpenSearch 3.6.0, single-node, security plugin disabled — **dev only**, `127.0.0.1:${OPENSEARCH_PORT:-9200}`). Needs `NADA_ADMIN_API_KEY` in `.env`. |
+| `docker-compose.qdrant.yml` | Project `nada-ai`: `nada-ai-api` (port `8020`) + `qdrant-nada` (Qdrant v1.18.0, ports `6333`/HTTP, `6334`/gRPC) |
+| `docker-compose.dev.yml` | Overlay for either file: bind-mounts `./src`, sets `PYTHONPATH`, runs uvicorn with `--reload` |
 
-The two backend compose files are parallel, not complementary — pick one:
+Each backend compose file is one engine: the API runs the engine its file sets (`NADA_SEARCH_BACKEND` in its
+`environment:` block, which `.env` cannot override). The two are separate Compose projects with their own containers,
+images and volumes, so starting one never replaces the other; to run both at once, give the OpenSearch stack another
+API port (`NADA_AI_PORT`). Their API settings (embedding, query prompt, model cache) are kept the same on purpose —
+change both files together. Each engine has its own index: index the catalog after switching to an engine that has
+not been indexed, and set NADA's search engine to match (NADA refuses a nada-ai that runs another engine).
 
 ```bash
 # OpenSearch backend, hot-reload dev
@@ -928,7 +943,7 @@ Unit tests (`tests/`) cover, by subsystem:
 | Search backends & queries | `test_queries.py`, `test_qdrant_filters.py`, `test_qdrant_sparse_and_collapse.py`, `test_index_template.py`, `test_facets_and_collapse.py`, `test_embedding_dim_guard.py` (dimension-mismatch guard, both writers) |
 | Dynamic filters/facets | `test_dynamic_filters_normalize.py`, `test_dynamic_filters_opensearch.py`, `test_dynamic_filters_qdrant.py`, `test_dynamic_facets.py`, `test_explain_dynamic_filters.py`, `test_explain_filters.py`, `test_filter_backfill.py`, `test_filter_sync.py`, `test_metadata_extract.py`, `test_facet_auto_registration.py` (auto-registration + exclusion list), `test_pipeline_filters.py` (filters baked into content ingest) |
 | Ingest | `test_ingest_quality.py`, `test_microdata_enrich.py`, `test_jobs_registry.py` |
-| Search-index reconciliation | `test_search_index_sync.py` (queue client, `reconcile_once`), `test_reconcile_scheduler.py` (in-process scheduler, job-registry single-flight dedup) |
+| Search-index reconciliation | `test_search_index_sync.py` (queue client, `reconcile_once`), `test_reconcile_scheduler.py` (the scheduler: pausing, acks, lock, status), `test_nada_gate.py` (the request gate) |
 | NADA admin credentials | `test_nada_admin_auth.py` (the one consolidated `AI4DATA_METADATA_CATALOG_*` credential source) |
 | Catalog client / NADA API | `test_catalog_search.py`, `test_timeseries_api.py`, `test_timeseries_models.py`, `test_idno_heuristic.py` |
 | MCP server | `test_analytics.py`, `test_analytics_apps.py`, `test_analytics_tools.py`, `test_mcp_resources_and_prompts.py`, `test_mcp_tool_config.py` |
@@ -965,7 +980,7 @@ src/nada_ai/
 │   ├── jobs.py                single-flight background job registry
 │   ├── _ingest.py              guarded_ingest() + content_sync_job_key() — the one canonical
 │   │                            job-registry key every content-write entry point shares
-│   ├── reconcile_scheduler.py  in-process periodic search-index queue reconciliation loop
+│   ├── reconcile_scheduler.py  the search-index scheduler (works through NADA's change queue)
 │   ├── metrics.py / metrics_admin.py   Prometheus-format metrics
 │   ├── rate_limit.py          in-memory fixed-window limiter
 │   ├── request_context.py     request-ID correlation

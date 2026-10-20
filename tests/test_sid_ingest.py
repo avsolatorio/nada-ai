@@ -1,6 +1,6 @@
 """Step 2 of the OpenSearch plan: the NADA internal study id (``sid``) on every indexed document.
 
-``sid`` comes from NADA's metadata-extract API (``core_fields.survey_uid``), which ai4data attaches to the
+``sid`` comes from NADA's metadata-extract API (``core_fields.catalog_id``), which ai4data attaches to the
 loaded metadata as ``_extract_core_fields``. Ingest requires it: a study without one is not indexed.
 """
 
@@ -40,7 +40,7 @@ def _raw(sid: Any = 11, filters: Any = None) -> dict[str, Any]:
     """Metadata as ai4data returns it in extract mode."""
     raw: dict[str, Any] = {"_extract_filters": {"countries": [1]} if filters is None else filters}
     if sid is not None:
-        raw["_extract_core_fields"] = {"idno": "X", "survey_uid": sid}
+        raw["_extract_core_fields"] = {"idno": "X", "catalog_id": sid}
     return raw
 
 
@@ -77,7 +77,7 @@ def test_mapping_and_qdrant_index_know_sid() -> None:
 
 def test_study_extract_returns_sid_core_fields_and_filters() -> None:
     study = pipeline._study_extract(_raw(sid=9))
-    assert study == pipeline.StudyExtract(sid=9, core_fields={"idno": "X", "survey_uid": 9}, filters={"countries": [1]})
+    assert study == pipeline.StudyExtract(sid=9, core_fields={"idno": "X", "catalog_id": 9}, filters={"countries": [1]})
 
 
 def test_study_extract_accepts_a_numeric_string_sid() -> None:
@@ -86,7 +86,7 @@ def test_study_extract_accepts_a_numeric_string_sid() -> None:
 
 @pytest.mark.parametrize("sid", [None, 0, -3, "abc", ""])
 def test_study_extract_requires_a_valid_sid(sid: Any) -> None:
-    with pytest.raises(pipeline.StudyExtractError, match="survey_uid"):
+    with pytest.raises(pipeline.StudyExtractError, match="catalog_id"):
         pipeline._study_extract(_raw(sid=sid))
 
 
@@ -97,15 +97,24 @@ def test_study_extract_requires_core_fields(raw: Any) -> None:
 
 
 def test_study_extract_requires_an_idno() -> None:
-    raw = {"_extract_core_fields": {"survey_uid": 9}, "_extract_filters": {}}
+    raw = {"_extract_core_fields": {"catalog_id": 9}, "_extract_filters": {}}
     with pytest.raises(pipeline.StudyExtractError, match="idno"):
         pipeline._study_extract(raw)
 
 
 def test_study_extract_requires_filters() -> None:
-    raw = {"_extract_core_fields": {"survey_uid": 9, "idno": "X"}}
+    raw = {"_extract_core_fields": {"catalog_id": 9, "idno": "X"}}
     with pytest.raises(pipeline.StudyExtractError, match="filters"):
         pipeline._study_extract(raw)
+
+
+def test_a_study_document_needs_all_text_a_record_cached_before_it_is_refused() -> None:
+    stale = {"_extract_core_fields": {"catalog_id": 9, "idno": "X"}, "_extract_filters": {}}
+    with pytest.raises(pipeline.StudyExtractError, match="metadata cache"):
+        pipeline._study_extract(stale, require_all_text=True)
+    assert pipeline._study_extract(stale).sid == 9  # no study document (Qdrant): all_text is not needed
+    current = {"_extract_core_fields": {"catalog_id": 9, "idno": "X", "all_text": []}, "_extract_filters": {}}
+    assert pipeline._study_extract(current, require_all_text=True).sid == 9
 
 
 def test_indexing_requires_extract_mode() -> None:
@@ -179,7 +188,7 @@ def test_every_document_of_a_study_carries_its_sid_and_a_study_without_one_is_no
     assert len(load_errors) == 1
     assert load_errors[0]["idno"] == "C"
     assert load_errors[0]["stage"] == "extract"
-    assert "survey_uid" in load_errors[0]["error"]
+    assert "catalog_id" in load_errors[0]["error"]
     progress.mark.assert_any_call("C", ok=False, error=load_errors[0]["error"])
     # A has documents: announced for the writer to confirm, not marked done by the pipeline itself
     progress.expect.assert_any_call("A", 11, 2)
