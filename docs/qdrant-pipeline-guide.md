@@ -1,5 +1,9 @@
 # Qdrant pipeline guide
 
+> **Qdrant is the alternative backend.** The default is OpenSearch, and NADA's catalog search (`/studies/search`,
+> `/variables/search`, `/citations/search`) runs only on OpenSearch. See the
+> [OpenSearch setup guide](./opensearch-setup-guide.md).
+
 End-to-end instructions for ingesting NADA catalog metadata into **Qdrant** and searching via the **nada-ai** API. Covers both **running ingest on the host** (Qdrant in Docker) and **running everything in Docker**.
 
 This guide includes the optional **metadata-extract** catalog backend (`search-metadata-extract/studies`), which fetches full metadata in one paginated pass instead of catalog search + per-idno JSON.

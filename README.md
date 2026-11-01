@@ -9,7 +9,7 @@ Python package for **NADA AI**: ingest [NADA / Data Compass–style](https://dat
 - Python **3.11+**
 - [**uv**](https://docs.astral.sh/uv/) recommended
 - **`ai4data[discovery]`** is pinned to a git revision in **`[tool.uv.sources]`** for reproducible installs and support for the catalog types used by this package. Update the revision in `pyproject.toml` and run **`uv lock`** to upgrade it. To develop against a local checkout, temporarily override the source with a path dependency.
-- **Docker** (for a local Qdrant or OpenSearch instance) — on macOS with Docker Desktop, the `docker` CLI lives at `~/.docker/bin/docker` and is only on `PATH` in a **login shell**; a plain non-login shell (some editor/CI task runners) may need `export PATH="$HOME/.docker/bin:$PATH"` first.
+- **Docker** (for a local OpenSearch or Qdrant instance; optional, see the [host setup](docs/opensearch-host-setup.md)) — on macOS with Docker Desktop, the `docker` CLI lives at `~/.docker/bin/docker` and is only on `PATH` in a **login shell**; a plain non-login shell (some editor/CI task runners) may need `export PATH="$HOME/.docker/bin:$PATH"` first.
 
 ## Install
 
@@ -22,26 +22,24 @@ uv sync --all-groups
 uv sync --extra local
 ```
 
-For **Qdrant** vector search (the default backend — recommended local stack):
+For **OpenSearch** (the default backend) nothing more is needed: `opensearch-py` is a core dependency.
+
+For **Qdrant** (the alternative backend):
 
 ```bash
 uv sync --extra local --extra qdrant
 ```
 
-For **Amazon OpenSearch / IAM SigV4**:
-
-```bash
-uv sync --extra aws
-```
-
-Then **[jump to the developer guide's Quickstart](docs/GUIDE.md#quickstart)** for `.env` setup, bringing up the stack, and your first ingest + search.
+Then follow the **[OpenSearch setup guide](docs/opensearch-setup-guide.md)** for `.env`, bringing up the stack, indexing and connecting NADA, or the [developer guide's Quickstart](docs/GUIDE.md#quickstart) for a shorter tour.
 
 ## Guides
 
 | Guide | Description |
 |-------|-------------|
 | **[Developer guide](docs/GUIDE.md)** | Full reference: architecture, semantic search, ingestion, the MCP server (tools/apps/resources/prompts), NADA connectivity, every config variable, deployment, observability |
-| **[Qdrant pipeline guide](docs/qdrant-pipeline-guide.md)** | End-to-end catalog ingest and search with Qdrant — **host ingest** and **full Docker** setups, metadata-extract catalog, verification, troubleshooting |
+| **[OpenSearch setup guide](docs/opensearch-setup-guide.md)** | Install, configure and index with OpenSearch (default backend): local Docker stack, self-hosted production cluster, embedding options, connecting NADA, troubleshooting |
+| [OpenSearch host setup](docs/opensearch-host-setup.md) | OpenSearch and the API as system services on Linux, without Docker |
+| [Qdrant pipeline guide](docs/qdrant-pipeline-guide.md) | End-to-end catalog ingest and search with Qdrant (alternative backend): host ingest and full Docker setups |
 | [Dynamic filters](docs/dynamic-filters.md) | Sync catalog filters from a NADA instance's metadata-extract API into the index and search by facet keys |
 
 ## Configuration

@@ -106,13 +106,14 @@ flowchart LR
 ## Quickstart
 
 **Requirements**: Python 3.11+, [uv](https://docs.astral.sh/uv/), Docker (for the
-vector store), and network access to a NADA catalog (defaults to the public Data
+search engine; or install it natively, see the [host setup](opensearch-host-setup.md)),
+and network access to a NADA catalog (defaults to the public Data
 Compass instance if you don't set one — see below).
 
 ```bash
 git clone <this repo> && cd nada-ai
 cp .env.example .env
-uv sync --extra local --extra qdrant
+uv sync --extra local
 ```
 
 > **macOS + Docker Desktop**: the `docker` CLI lives at `~/.docker/bin/docker` and is
@@ -136,15 +137,17 @@ necessarily the catalog you actually want.
 > available? Comment out `AI4DATA_METADATA_CATALOG_EXTRACT_PATH` in `.env` and nada-ai
 > falls back to the classic per-idno flow automatically — no other change needed.
 
-Bring up a local Qdrant + API stack (recommended local path — see the
-[Qdrant pipeline guide](qdrant-pipeline-guide.md) for the fully worked walkthrough,
-including a host-only ingest path that skips Docker for the API):
+Set `NADA_ADMIN_API_KEY` in `.env` (the OpenSearch compose file refuses to start without it), then bring up a
+local OpenSearch + API stack. The [OpenSearch setup guide](opensearch-setup-guide.md) is the fully worked
+walkthrough, including production clusters, and the [host setup](opensearch-host-setup.md) covers running without
+Docker:
 
 ```bash
-docker compose -f docker-compose.qdrant.yml -f docker-compose.dev.yml up --build -d
+docker compose -f docker-compose.opensearch.yml -f docker-compose.dev.yml up --build -d
 ```
 
-Create the index/collection and pull the catalog in:
+Create the indexes and pull the catalog in (`index_from_catalog` indexes one catalog type per run, `timeseries` by
+default; pass `--catalog_type=survey` and so on for the others):
 
 ```bash
 uv run python -m nada_ai.ingest.cli create_index
@@ -169,14 +172,16 @@ standalone MCP server:
 uv run python -m nada_ai.mcp_server --port 8025
 ```
 
-Prefer OpenSearch instead of Qdrant (the default)? Same shape, different compose file
-(it sets `NADA_SEARCH_BACKEND=opensearch` itself, and needs `NADA_ADMIN_API_KEY` in `.env`):
+Prefer Qdrant instead of OpenSearch (the default)? Same shape, different compose file
+(it sets `NADA_SEARCH_BACKEND=qdrant` itself; install the `qdrant` extra with
+`uv sync --extra local --extra qdrant` for host-side CLI use):
 
 ```bash
-docker compose -f docker-compose.opensearch.yml -f docker-compose.dev.yml up --build -d
+docker compose -f docker-compose.qdrant.yml -f docker-compose.dev.yml up --build -d
 ```
 
-See [Compose files](#compose-files) for running it next to the Qdrant stack.
+See the [Qdrant pipeline guide](qdrant-pipeline-guide.md), and [Compose files](#compose-files) for running both
+stacks side by side.
 
 ---
 
@@ -240,15 +245,17 @@ MCP search tool, the ingest pipeline) is written against a single backend-agnost
 contract (`src/nada_ai/search/ports.py::SearchBackendPort`) so the choice is purely
 operational.
 
-| | Qdrant (default) | OpenSearch |
+| | OpenSearch (default) | Qdrant |
 |---|---|---|
-| Vector search | native HNSW | k-NN plugin |
-| Keyword leg | FastEmbed BM25 sparse vectors (`NADA_QDRANT_SPARSE_LEXICAL`) | BM25 (native) |
-| Hybrid fusion | RRF (reciprocal rank fusion) with collapse-group prefetch | weighted score combination |
-| Server-side embeddings | not supported — always client-side | optional, via ML Commons (`opensearch_ml` backend) |
-| Best for | simpler local dev loop, native sparse+dense hybrid | teams already standardized on OpenSearch/Elasticsearch tooling |
+| NADA catalog search (`/studies/search`, `/variables/search`, `/citations/search`) | supported | not supported (`unsupported_capability`) |
+| Vector search | k-NN plugin (FAISS HNSW) | native HNSW |
+| Keyword leg | BM25 (native) | FastEmbed BM25 sparse vectors (`NADA_QDRANT_SPARSE_LEXICAL`) |
+| Hybrid fusion | weighted score combination | RRF (reciprocal rank fusion) with collapse-group prefetch |
+| Server-side embeddings | optional, via ML Commons (`opensearch_ml` backend) | not supported — always client-side |
+| Best for | NADA deployments, development and production | `/search` and MCP-only setups, native sparse+dense hybrid |
 
-Both are covered end-to-end, including Docker Compose setups, in the
+Setup: [OpenSearch setup guide](opensearch-setup-guide.md) (Docker, production, embedding options),
+[OpenSearch host setup](opensearch-host-setup.md) (no Docker), and the
 [Qdrant pipeline guide](qdrant-pipeline-guide.md).
 
 ### Embeddings
@@ -713,7 +720,7 @@ in `src/nada_ai/settings.py` unless noted.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NADA_SEARCH_BACKEND` | `qdrant` | `qdrant` or `opensearch` |
+| `NADA_SEARCH_BACKEND` | `opensearch` | `opensearch` or `qdrant` |
 | `NADA_INDEX_NAME` | `nada-metadata` | Index name (OpenSearch) / collection name (Qdrant, unless overridden) |
 
 ### OpenSearch
@@ -887,7 +894,9 @@ docker compose -f docker-compose.qdrant.yml -f docker-compose.dev.yml up --build
 ```
 
 For a production-like run, drop the `docker-compose.dev.yml` overlay and let the
-image serve its own baked-in source instead of the bind mount.
+image serve its own baked-in source instead of the bind mount. The OpenSearch compose file
+still runs OpenSearch without security; for production clusters see
+[OpenSearch setup guide: Production](opensearch-setup-guide.md#10-production).
 
 ### TLS / corporate proxies
 
@@ -1020,7 +1029,8 @@ src/nada_ai/
 
 ---
 
-For the fully worked Qdrant setup (host-only ingest and full-Docker variants,
-metadata-extract catalog configuration, verification steps, and troubleshooting), see
+For the fully worked OpenSearch setup (local Docker stack, production clusters, embedding
+options, connecting NADA), see the [OpenSearch setup guide](opensearch-setup-guide.md) and,
+without Docker, the [OpenSearch host setup](opensearch-host-setup.md). For Qdrant, see
 the [Qdrant pipeline guide](qdrant-pipeline-guide.md). For the facet-filter sync
 story, see [Dynamic filters](dynamic-filters.md).
