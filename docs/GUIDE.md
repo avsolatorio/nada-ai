@@ -721,13 +721,9 @@ in `src/nada_ai/settings.py` unless noted.
 | Variable | Default | Purpose |
 |---|---|---|
 | `NADA_OPENSEARCH_URL` | `http://localhost:9200` | Cluster URL |
-| `NADA_OPENSEARCH_AUTH_MODE` | `basic` | `basic` or `aws_sigv4` |
 | `NADA_OPENSEARCH_USER` / `NADA_OPENSEARCH_PASSWORD` | unset | Basic auth |
 | `NADA_OPENSEARCH_CA_CERTS` | unset | Custom CA bundle path |
 | `NADA_OPENSEARCH_VERIFY_CERTS` | `true` | TLS verification |
-| `NADA_AWS_REGION` | unset | Required for SigV4 if not implicit from boto3 |
-| `NADA_AWS_SERVICE` | `es` | `es` (managed domain) or `aoss` (OpenSearch Serverless) |
-| `NADA_AWS_PROFILE` | unset | Named boto3 profile |
 | `NADA_OPENSEARCH_PUT_COMPOSABLE_INDEX_TEMPLATE` | `true` | Apply knn_vector composable template pre-create/ingest |
 | `NADA_OPENSEARCH_INDEX_TEMPLATE_PRIORITY` | `500` | Template priority |
 | `NADA_OPENSEARCH_CLUSTER_AUTO_CREATE_INDEX` | unset | Cluster-level `action.auto_create_index` override |

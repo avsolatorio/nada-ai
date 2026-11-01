@@ -24,15 +24,6 @@ class Settings(BaseSettings):
     opensearch_password: str | None = Field(default=None)
     opensearch_ca_certs: str | None = Field(default=None)
     opensearch_verify_certs: bool = Field(default=True)
-    opensearch_auth_mode: Literal["basic", "aws_sigv4"] = Field(
-        default="basic",
-        description="basic: user/password; aws_sigv4: IAM (install optional extra `aws` for boto3).",
-    )
-    aws_region: str | None = Field(default=None, description="AWS region for SigV4; defaults from boto3 session")
-    aws_service: str = Field(
-        default="es", description="AWS SigV4 service name (es for OpenSearch domain; aoss for Serverless)"
-    )
-    aws_profile: str | None = Field(default=None, description="Optional boto3 profile name")
 
     index_name: str = Field(default="nada-metadata")
     #: OpenSearch study index (one document per study, ``_id`` = ``sid``). Defaults to ``<index_name>-studies``;
