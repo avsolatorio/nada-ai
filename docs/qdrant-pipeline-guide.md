@@ -396,7 +396,8 @@ curl -s "${H[@]}" -X POST http://localhost:8020/admin/ingest/from-catalog \
 curl -s http://localhost:8020/jobs/<job_id>
 ```
 
-See the main [README](../README.md#admin--ingest-endpoints-http) for the full admin API table.
+See [Admin API](GUIDE.md#admin-api-auth-rbac-audit-rate-limiting) in the developer guide for auth and roles, and the
+OpenAPI page at `/docs` on a running API for every admin route.
 
 ### B8. Stop / reset
 
