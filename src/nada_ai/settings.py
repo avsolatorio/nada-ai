@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     opensearch_cluster_auto_create_index: str | None = Field(default=None)
 
     #: Active vector / keyword search engine.
-    search_backend: SearchBackendKind = Field(default="qdrant")
+    search_backend: SearchBackendKind = Field(default="opensearch")
 
     #: Qdrant HTTP API (``host:port`` or full URL per ``qdrant-client``).
     qdrant_url: str = Field(default="http://localhost:6333")
