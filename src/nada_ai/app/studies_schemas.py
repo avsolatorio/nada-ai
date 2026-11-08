@@ -340,6 +340,7 @@ class Passage(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    resource_id: int = Field(ge=1, description="NADA resource id of the PDF the page is in")
     page: int = Field(ge=1, description="1-based page number")
     total_pages: int | None = Field(default=None, ge=1)
     score: float | None = None

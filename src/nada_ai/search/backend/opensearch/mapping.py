@@ -146,6 +146,8 @@ def index_body(embedding_dimension: int | None) -> dict[str, Any]:
                 "date_created": {"type": "date", "ignore_malformed": True},
                 "authors": {"type": "keyword"},
                 "doc_meta": {"type": "object", "enabled": True},
+                # the NADA resource (PDF) a document's page chunk was read from
+                "resource_id": {"type": "keyword"},
                 FILTER_FACETS_KEY: facets_mapping,
             },
         },

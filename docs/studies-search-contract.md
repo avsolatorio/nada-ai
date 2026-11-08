@@ -138,7 +138,9 @@ comparable only within one response). It is null in browse, in `hybrid` (the fus
 are ordered by different rules, so their scores could not be compared) and when the results are ordered by another sort.
 `matched_by` is `["lexical"]`, `["semantic"]` or both, or `["idno"]` alone for an exact idno match (6.1); empty
 in browse. `passages` lists matching pages for document
-studies (`page` is 1-based, `excerpt` is whitespace-normalised text); it replaces parsing raw engine hits.
+studies (`resource_id` is the NADA resource of the PDF the page is in, `page` is 1-based, `excerpt` is
+whitespace-normalised text); a document can have several PDFs, so the same page number can appear once per PDF. It
+replaces parsing raw engine hits.
 
 ### 6.1 What `found` means
 
