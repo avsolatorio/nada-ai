@@ -129,12 +129,14 @@ Extract studies expose downloadable files on `study.resources` (sibling to `meta
 Cached PDFs are written to:
 
 ```text
-{AI4DATA_DISCOVERY_DATA_PATH}/document_cache/document/document_{idno}--{resource_id}.pdf
+{AI4DATA_DISCOVERY_DATA_PATH}/document_cache/document/document_{idno}--{resource_id}--{filesize}.pdf
 ```
 
-Example: `document_RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1--772.pdf`.
+Example: `document_RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1--772--3667934.pdf`. The size (bytes, as NADA reports the stored
+file) names the version of the file: a PDF replaced under the same resource is downloaded again, and the resource's
+older cached copies are removed.
 
-Ensure catalog auth (`AI4DATA_METADATA_CATALOG_X_API_KEY` and/or cookies) covers the catalog host so admin download URLs succeed. After upgrading to this naming scheme, re-run ingest with `--force` or remove stale `document_{idno}.pdf` files from the cache.
+Ensure catalog auth (`AI4DATA_METADATA_CATALOG_X_API_KEY` and/or cookies) covers the catalog host so admin download URLs succeed.
 
 ### URL reference (host vs Docker)
 

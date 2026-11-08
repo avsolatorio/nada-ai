@@ -5,42 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 
 import pymupdf
-
-from ai4data.discovery.paths import get_document_cache_path
-
-def _document_cache_root() -> Path:
-    """Return the cache root directory (two levels above any document cache path)."""
-    return get_document_cache_path("__probe__", "document").parent.parent
+from ai4data.discovery.paths import get_document_cache_versions
 
 
-def _assert_within_cache(path: Path) -> None:
-    """Raise ValueError if *path* escapes the document cache directory."""
-    try:
-        path.resolve().relative_to(_document_cache_root().resolve())
-    except ValueError:
-        raise ValueError("path is outside the document cache directory")
+def resolve_document_pdf_path(idno: str, resource_id: int) -> Path | None:
+    """The cached PDF of one resource of a document (its newest version), or ``None`` when it is not cached.
 
-
-def resolve_document_pdf_path(idno: str, resource_id: str | None = None) -> Path:
-    """Return cached PDF path for a document idno (does not check existence)."""
-    idno = idno.strip()
-    if resource_id is not None:
-        path = get_document_cache_path(idno, "document", resource_id=resource_id.strip())
-        _assert_within_cache(path)
-        return path
-
-    legacy = get_document_cache_path(idno, "document")
-    _assert_within_cache(legacy)
-    if legacy.exists():
-        return legacy
-
-    doc_dir = legacy.parent
-    pattern = f"document_{idno}--*.pdf"
-    matches = sorted(doc_dir.glob(pattern))
-    if matches:
-        return matches[0]
-
-    return legacy
+    A document can have several PDFs, so the resource is required. Only files of the cache directory are listed, so
+    neither value can reach outside it.
+    """
+    versions = get_document_cache_versions(idno.strip(), "document", str(int(resource_id)))
+    if not versions:
+        return None
+    return max(versions, key=lambda path: path.stat().st_mtime)
 
 
 def render_pdf_page_png(pdf_path: Path, page_index: int, *, dpi: int = 120) -> bytes:
