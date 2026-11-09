@@ -127,6 +127,16 @@ def test_chunk_index_has_flat_filter_facets_and_no_filter_fields() -> None:
     assert facets["ts_databases"] == {"type": "keyword", "eager_global_ordinals": True}
 
 
+def test_chunk_index_maps_only_page_fields_of_pdf_metadata() -> None:
+    # PDF metadata varies per file (moddate "D:20160715143457" vs ISO); a dynamic guess would reject later PDFs
+    metadata = index_body(4)["mappings"]["properties"]["metadata"]["properties"]
+    assert metadata["doc_meta"] == {
+        "type": "object",
+        "dynamic": False,
+        "properties": {"page": {"type": "integer"}, "total_pages": {"type": "integer"}},
+    }
+
+
 def test_study_index_is_strict_and_typed() -> None:
     body = studies_index_body()
     mappings = body["mappings"]

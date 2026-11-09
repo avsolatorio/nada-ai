@@ -18,8 +18,8 @@ resolution-markers = [
 
 [[package]]
 name = "ai4data"
-version = "0.1.dev48+g3ed47c500"
-source = { git = "https://github.com/mah0001/ai4data.git?rev=3ed47c500ef4ae11ac6bc933eb4c8f20da7b3019#3ed47c500ef4ae11ac6bc933eb4c8f20da7b3019" }
+version = "0.1.dev50+g7deed8ebf"
+source = { git = "https://github.com/mah0001/ai4data.git?rev=7deed8ebfad1d233c1d944511a81f12ba3227006#7deed8ebfad1d233c1d944511a81f12ba3227006" }
 dependencies = [
     { name = "fastapi" },
     { name = "fire" },
@@ -2128,7 +2128,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ai4data", extras = ["discovery"], git = "https://github.com/mah0001/ai4data.git?rev=3ed47c500ef4ae11ac6bc933eb4c8f20da7b3019" },
+    { name = "ai4data", extras = ["discovery"], git = "https://github.com/mah0001/ai4data.git?rev=7deed8ebfad1d233c1d944511a81f12ba3227006" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "fastembed", marker = "extra == 'qdrant'", specifier = ">=0.4.0,<0.7" },
     { name = "fastmcp", extras = ["apps"], specifier = ">=3.4.2" },

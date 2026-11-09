@@ -52,7 +52,7 @@ packages = ["src/nada_ai"]
 
 # Pin the discovery package to a reproducible revision with the extract fields and catalog types used here.
 [tool.uv.sources]
-ai4data = { git = "https://github.com/mah0001/ai4data.git", rev = "3ed47c500ef4ae11ac6bc933eb4c8f20da7b3019" }
+ai4data = { git = "https://github.com/mah0001/ai4data.git", rev = "7deed8ebfad1d233c1d944511a81f12ba3227006" }
 
 [tool.ruff]
 line-length = 120

@@ -145,7 +145,17 @@ def index_body(embedding_dimension: int | None) -> dict[str, Any]:
                 "date_published": {"type": "date", "ignore_malformed": True},
                 "date_created": {"type": "date", "ignore_malformed": True},
                 "authors": {"type": "keyword"},
-                "doc_meta": {"type": "object", "enabled": True},
+                # the PDF loader's per-page metadata, kept whole in _source. Only page / total_pages are read, and
+                # the rest is whatever the PDF carries (moddate as "D:20160715143457" in one file and ISO in the
+                # next), so it is not mapped: a dynamic guess from one PDF would reject the chunks of the next.
+                "doc_meta": {
+                    "type": "object",
+                    "dynamic": False,
+                    "properties": {
+                        "page": {"type": "integer"},
+                        "total_pages": {"type": "integer"},
+                    },
+                },
                 # the NADA resource (PDF) a document's page chunk was read from
                 "resource_id": {"type": "keyword"},
                 FILTER_FACETS_KEY: facets_mapping,
