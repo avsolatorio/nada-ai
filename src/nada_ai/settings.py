@@ -108,6 +108,11 @@ class Settings(BaseSettings):
     embedding_model_kwargs_json: str | None = Field(default='{"dtype": "auto"}')
     embedding_device: str | None = Field(default=None)
     embedding_batch_size: int = Field(default=32)
+    #: Longest input, in tokens, a text is embedded with; longer texts are cut off for the vector only (the stored
+    #: text and keyword search keep all of it). A batch is padded to its longest text, and some models accept tens of
+    #: thousands of tokens (harrier: 32,768), so one very long text could take the memory of a whole batch at that
+    #: length and get the process killed. Applied when the model loads; a model's own lower limit is kept.
+    embedding_max_seq_length: int = Field(default=512, ge=16)
     #: Caps ``torch.set_num_threads`` for the local SentenceTransformers backend.
     #: Unset (default) leaves PyTorch's own default, which is every visible CPU
     #: core — on a shared/local machine this is what turns "index the catalog"
