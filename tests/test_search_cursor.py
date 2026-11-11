@@ -7,14 +7,19 @@ import json
 
 import pytest
 
+from nada_ai.search.backend.opensearch.citations import citation_to_source
+from nada_ai.search.backend.opensearch.studies import study_to_source
+from nada_ai.search.backend.opensearch.variables import variable_to_source
 from nada_ai.search.cursor import (
     MAX_CURSOR_LENGTH,
+    MAX_SORT_KEY_CHARS,
     Cursor,
     CursorError,
     Direction,
     SortValueKind,
     decode,
     encode,
+    sort_key,
 )
 
 RELEVANCE = (SortValueKind.score, SortValueKind.id)
@@ -68,3 +73,34 @@ def test_an_overlong_cursor_is_rejected_before_it_is_decoded() -> None:
 def test_an_overlong_text_value_is_rejected() -> None:
     with pytest.raises(CursorError):
         decode(_token([1, "a", ["x" * 600, None, 1], 0, 0, False]), TITLE)
+
+
+LONG_TITLES = [
+    "x" * 2000,  # far past the sort key length
+    "统计调查" * 400,  # 3-byte UTF-8
+    "𝔄" * 1000,  # 4-byte UTF-8
+    "Straße " * 300,  # ASCII folding lengthens it (ß -> ss)
+]
+
+
+@pytest.mark.parametrize("title", LONG_TITLES)
+def test_cursors_over_the_longest_indexed_sort_keys_round_trip(title: str) -> None:
+    # the variable title sort carries two text keys (study title, then variable name); the normalizer may fold
+    # each into more characters than were indexed, up to twice as many
+    key = sort_key(title)
+    folded = key.replace("ß", "ss")
+    cursor = Cursor(Direction.after, (folded, folded, 123456789), 10_000, 2_000_000, True)
+    token = encode(cursor)
+    assert len(token) <= MAX_CURSOR_LENGTH
+    assert decode(token, TITLE) == cursor
+
+
+def test_documents_index_capped_text_sort_keys() -> None:
+    title = "统计调查" * 400
+    expected = title[:MAX_SORT_KEY_CHARS]
+    study = study_to_source(1, {"idno": "S1", "title": title, "nation": title}, {})
+    assert study["title"] == title  # the searchable and returned title is whole
+    assert study["title_sort"] == expected
+    assert study["nation_sort"] == expected
+    assert variable_to_source(1, {"catalog_id": 1, "name": "v1", "title": title})["title"] == expected
+    assert citation_to_source({"citation_id": 1, "title": title}, {}, {})["title_sort"] == expected

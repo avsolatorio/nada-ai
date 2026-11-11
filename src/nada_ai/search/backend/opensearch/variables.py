@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from nada_ai.search.backend.opensearch.mapping import VARIABLE_TEXT_FIELDS
+from nada_ai.search.cursor import sort_key
 
 
 def _as_int(value: Any) -> int | None:
@@ -30,10 +31,13 @@ def variable_to_source(uid: int, core_fields: dict[str, Any]) -> dict[str, Any]:
     if sid is None:
         raise ValueError("core_fields has no catalog_id")
     source: dict[str, Any] = {"uid": int(uid), "sid": sid}
-    for field in (*VARIABLE_TEXT_FIELDS, "title"):
+    for field in VARIABLE_TEXT_FIELDS:
         text = str(core_fields.get(field) or "").strip()
         if text:
             source[field] = text
+    title = str(core_fields.get("title") or "").strip()
+    if title:
+        source["title"] = sort_key(title)  # the study title is only sorted on, never returned
     return source
 
 

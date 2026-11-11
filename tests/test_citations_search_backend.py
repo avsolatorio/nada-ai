@@ -199,6 +199,14 @@ def test_no_matches_in_a_populated_index_is_an_empty_page() -> None:
     assert page.found == 0 and page.hits == []
 
 
+def test_the_empty_index_check_is_bounded_by_the_search_timeout() -> None:
+    client = AsyncMock()
+    _no_hits(client, indexed=3)
+    job = _job(client=client)
+    asyncio.run(search_citations(job))
+    assert client.count.call_args.kwargs["request_timeout"] == job.timeout_seconds
+
+
 def test_index_deleted_between_search_and_count_is_not_ready() -> None:
     client = AsyncMock()
     client.search.return_value = {"took": 1, "hits": {"total": {"value": 0}, "hits": []}}

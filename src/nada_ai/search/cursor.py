@@ -28,11 +28,22 @@ from typing import Any
 
 CURSOR_VERSION = 1
 
-#: Longest cursor accepted, checked before decoding anything.
-MAX_CURSOR_LENGTH = 1024
+#: Longest text sort key written to an index (titles, countries): documents store ``sort_key(text)``, so every
+#: string sort value a cursor carries is bounded, whatever the length of the title.
+MAX_SORT_KEY_CHARS = 256
 
-#: Longest string sort value accepted (a name or a title: the sort keywords stop indexing at 256 characters).
-MAX_STRING_SORT_VALUE = 512
+#: Longest string sort value accepted. Above ``MAX_SORT_KEY_CHARS`` because the sort normalizer's ASCII folding can
+#: lengthen a key (``ß`` -> ``ss``).
+MAX_STRING_SORT_VALUE = 2 * MAX_SORT_KEY_CHARS
+
+#: Longest cursor accepted, checked before decoding anything. Fits two maximal multibyte text keys (the variable
+#: title sort) plus the rest of the payload, base64-encoded.
+MAX_CURSOR_LENGTH = 4096
+
+
+def sort_key(text: str) -> str:
+    """The value to index in a text sort field for ``text``: its first ``MAX_SORT_KEY_CHARS`` characters."""
+    return text[:MAX_SORT_KEY_CHARS]
 
 
 class Direction(StrEnum):

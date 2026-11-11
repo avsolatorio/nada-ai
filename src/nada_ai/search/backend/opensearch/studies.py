@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, STUDY_ALL_TEXT_FIELD, STUDY_TEXT_FIELDS
+from nada_ai.search.cursor import sort_key
 from nada_ai.search.dynamic_filters import normalize_external_filters, normalized_to_facets_map
 
 _INT_FIELDS = ("year_start", "year_end", "created", "changed", "total_views", "total_downloads", "varcount")
@@ -44,9 +45,9 @@ def study_to_source(sid: int, core_fields: dict[str, Any], filters: dict[str, An
     if all_text:
         source[STUDY_ALL_TEXT_FIELD] = all_text
     if "title" in source:
-        source["title_sort"] = source["title"]
+        source["title_sort"] = sort_key(source["title"])
     if "nation" in source:
-        source["nation_sort"] = source["nation"]
+        source["nation_sort"] = sort_key(source["nation"])
     for field in _INT_FIELDS:
         number = _as_int(core_fields.get(field))
         if number is not None:

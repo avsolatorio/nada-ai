@@ -181,7 +181,10 @@ async def search_citations(job: CitationSearchJob) -> CitationPage:
             found = int(hits["total"]["value"] if isinstance(hits["total"], dict) else hits["total"])
             # Zero results is either "nothing matches" or "nothing is indexed" (e.g. a backfill that stopped before
             # its first write); only the second is an error.
-            if found == 0 and int((await job.client.count(index=job.index))["count"]) == 0:
+            if (
+                found == 0
+                and int((await job.client.count(index=job.index, request_timeout=job.timeout_seconds))["count"]) == 0
+            ):
                 raise IndexNotReady(job.index)
     except NotFoundError as e:
         raise IndexNotReady(job.index) from e

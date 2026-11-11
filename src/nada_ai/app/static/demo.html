@@ -1750,9 +1750,11 @@
 
         function addPassage(v) {
           if (!isPassageVariant(v)) return;
-          const prev = byPage.get(v.page);
+          // a document can have several PDFs: the same page number in two of them is two passages
+          const key = (v.resource_id == null ? "" : v.resource_id) + "|" + v.page;
+          const prev = byPage.get(key);
           if (!prev || (v.score != null && (prev.score == null || v.score > prev.score))) {
-            byPage.set(v.page, v);
+            byPage.set(key, v);
           }
         }
 
@@ -1862,6 +1864,7 @@
 
         const idno = carousel.dataset.idno || "";
         const page = slide.dataset.page;
+        const resourceId = slide.dataset.resourceId || "";
         const labelEl = $("doc-carousel-lightbox-label");
         const img = lb.querySelector(".doc-carousel-lightbox__img");
         const excerptEl = $("doc-carousel-lightbox-excerpt");
@@ -1879,7 +1882,7 @@
             pdfPage +
             (scoreTxt ? " · score " + scoreTxt : "");
         }
-        if (img && idno && page != null) {
+        if (img && idno && resourceId && page != null) {
           img.alt = "PDF page " + pdfPage;
           img.classList.remove("doc-carousel__img--failed");
           img.onload = function () {
@@ -1891,6 +1894,8 @@
           img.src =
             "/demo/documents/" +
             encodeURIComponent(idno) +
+            "/resources/" +
+            encodeURIComponent(resourceId) +
             "/pages/" +
             encodeURIComponent(page) +
             ".png?dpi=" +
@@ -2025,6 +2030,8 @@
               idx +
               '" data-page="' +
               v.page +
+              '" data-resource-id="' +
+              escapeHtml(v.resource_id == null ? "" : v.resource_id) +
               '" data-active="' +
               active +
               '">' +
