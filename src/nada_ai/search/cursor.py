@@ -41,6 +41,13 @@ MAX_STRING_SORT_VALUE = 2 * MAX_SORT_KEY_CHARS
 MAX_CURSOR_LENGTH = 4096
 
 
+#: Largest id accepted: the ids (sid, uid, citation_id) are OpenSearch ``integer`` fields.
+MAX_ID = 2**31 - 1
+
+#: Largest magnitude of a number accepted: the numeric sort fields are at most OpenSearch ``long``.
+MAX_NUMBER = 2**63 - 1
+
+
 def sort_key(text: str) -> str:
     """The value to index in a text sort field for ``text``: its first ``MAX_SORT_KEY_CHARS`` characters."""
     return text[:MAX_SORT_KEY_CHARS]
@@ -90,19 +97,28 @@ def _reject_constant(name: str) -> Any:
     raise CursorError(f"cursor holds {name}")
 
 
+def _is_number(value: Any) -> bool:
+    """A finite int or float within ``MAX_NUMBER`` (a JSON integer can be any size: ``10**1000`` is no number here)."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return False
+    if isinstance(value, int):
+        return abs(value) <= MAX_NUMBER
+    return math.isfinite(value) and abs(value) <= MAX_NUMBER
+
+
 def _check_value(value: Any, kind: SortValueKind) -> Any:
     if kind is SortValueKind.score:
-        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        if not _is_number(value):
             raise CursorError("cursor sort value is not a score")
         return float(value)
     if kind is SortValueKind.id:
-        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_ID:
             raise CursorError("cursor sort value is not an id")
         return value
     if value is None:
         return None
     if kind is SortValueKind.number:
-        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        if not _is_number(value):
             raise CursorError("cursor sort value is not a number")
         return value
     if not isinstance(value, str) or len(value) > MAX_STRING_SORT_VALUE:

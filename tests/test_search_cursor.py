@@ -58,6 +58,8 @@ def test_text_values_and_missing_ones_round_trip() -> None:
         _token([1, "a", [1.0, 1], 0, 0, "no"]),  # the lower-bound flag is a boolean
         base64.urlsafe_b64encode(b'[1,"a",[NaN,1],0,0,false]').decode(),  # Python's json would accept NaN
         base64.urlsafe_b64encode(b'[1,"a",[Infinity,1],0,0,false]').decode(),
+        _token([1, "a", [10**1000, 1], 0, 0, False]),  # too large for a float: not an OverflowError
+        _token([1, "a", [1.0, 2**31], 0, 0, False]),  # past an OpenSearch integer id
     ],
 )
 def test_anything_else_is_rejected(token: str) -> None:

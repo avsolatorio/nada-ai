@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from nada_ai.app import reconcile_scheduler
-from nada_ai.app.reconcile_scheduler import Scheduler, with_health
+from nada_ai.app.reconcile_scheduler import ITEM_DEATH_LIMIT, Scheduler, with_health
 from nada_ai.app.state import AppState
 from nada_ai.ingest.search_index_sync import AckRefused, QueuePage, SearchIndexQueueItem, SearchIndexStatus
 from nada_ai.nada.gate import NadaFirewallBlocked, NadaUnavailable
@@ -591,7 +591,7 @@ def test_an_item_that_kills_the_process_twice_is_acked_failed_first_thing():
     second._inflight_path.write_text(killed_again[0])
 
     third = _restart()
-    assert not third._inflight_path.exists()
+    assert third._inflight_path.exists()  # kept until NADA takes the failed ack
     assert [(a["id"], a["result"], a["changed"]) for a in third.st.unsent_acks] == [(2, "failed", 1700000002)]
     assert "2 times in a row" in third.st.unsent_acks[0]["error"]
     assert third.st.last_error["object_id"] == 2
@@ -605,6 +605,20 @@ def test_an_item_that_kills_the_process_twice_is_acked_failed_first_thing():
     assert [(a["id"], a["result"]) for a in nada.acked] == [(2, "failed")]
     assert [i.id for i in nada.items] == [1, 3]  # the queue moves on past it
     assert third.st.unsent_acks == []
+    assert not third._inflight_path.exists()
+
+
+def test_a_restart_before_the_failed_ack_is_sent_acks_it_failed_again():
+    dying = Scheduler(_state())
+    dying._item_deaths[(2, 1700000002)] = ITEM_DEATH_LIMIT - 1
+    dying._write_inflight(_item(2))  # killed with the item in hand, at its last allowed death
+
+    first = _restart()  # reaches the limit; the failed ack is in memory only
+    assert [(a["id"], a["result"]) for a in first.st.unsent_acks] == [(2, "failed")]
+    # stopped before NADA took that ack: the record is still there, so the next process acks it failed too
+    second = _restart()
+    assert [(a["id"], a["result"]) for a in second.st.unsent_acks] == [(2, "failed")]
+    assert second._inflight_path.exists()
 
 
 def test_a_changed_item_starts_its_count_over():

@@ -182,6 +182,8 @@ class Scheduler:
         self._generation_rechecked = False
         #: deaths of the process with an item in hand, by (queue id, changed), from the in-flight file found at start
         self._item_deaths: dict[tuple[int, int], int] = {}
+        #: the in-flight file of an item acked failed for its deaths stays until NADA takes that ack
+        self._death_ack_pending = False
 
     # -- start / stop -----------------------------------------------------------------------------------------------
 
@@ -254,7 +256,11 @@ class Scheduler:
     def _check_inflight(self) -> None:
         """At start, under the lock: an in-flight file left behind means the last process died with that item in hand.
         One more death for it; at ``ITEM_DEATH_LIMIT`` it is acked failed first thing (it would only kill this
-        process too), otherwise it is tried again with its count kept."""
+        process too), otherwise it is tried again with its count kept.
+
+        At the limit the file is kept until NADA takes the failed ack (see ``_send_acks``): the ack is held in memory
+        only, so a restart before it is sent finds the file again and acks it failed again, rather than starting the
+        item's count over. Nothing overwrites the file meanwhile, since the loop sends unsent acks before any item."""
         try:
             record = json.loads(self._inflight_path.read_text())
         except FileNotFoundError:
@@ -263,14 +269,15 @@ class Scheduler:
             logger.warning("search-index scheduler: unreadable in-flight file %s removed: %s", self._inflight_path, e)
             self._inflight_path.unlink(missing_ok=True)
             return
-        self._inflight_path.unlink(missing_ok=True)
         key = (int(record["queue_id"]), int(record["changed"]))
         deaths = int(record.get("deaths") or 0) + 1
         what = f"{record.get('change_class')} {record.get('object_type')} {record.get('object_id')} ({record.get('object_key')})"
         if deaths < ITEM_DEATH_LIMIT:
+            self._inflight_path.unlink(missing_ok=True)
             logger.warning("search-index scheduler: the last process died while processing %s; trying it again", what)
             self._item_deaths[key] = deaths
             return
+        self._death_ack_pending = True
         message = (
             f"NADA-AI stopped while processing this item {deaths} times in a row (the process was killed, e.g. out of "
             "memory), so it is not tried again. Retry it once the cause is fixed."
@@ -735,6 +742,9 @@ class Scheduler:
                     exclude.add(int(result.get("id") or 0))
         if resend:
             self.st.unsent_acks = []
+            if self._death_ack_pending:
+                self._death_ack_pending = False
+                self._clear_inflight()  # NADA has the failed ack of the item that killed the process
         return True
 
     def _ack_failed(self, chunk: list[dict[str, Any]], exclude: set[int], message: str) -> bool:
