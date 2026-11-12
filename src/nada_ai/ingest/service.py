@@ -8,12 +8,13 @@ logic. The CLI in :mod:`nada_ai.ingest.cli` is a thin ``print`` wrapper.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
 from nada_ai.ingest.pipeline import run_bulk_index
 from nada_ai.ingest.progress import CancelToken, IngestProgressTracker, load_checkpoint
 from nada_ai.ingest.quality import QualityReport
+from nada_ai.ingest.study_sources import StudySource
 from nada_ai.search.backend.opensearch.client import build_client
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
 from nada_ai.search.backend.opensearch.index_template import (
@@ -21,7 +22,6 @@ from nada_ai.search.backend.opensearch.index_template import (
     put_composable_index_template,
 )
 from nada_ai.search.backend.opensearch.ml.setup import ensure_text_embedding_ingest_pipeline
-from nada_ai.search.backend.opensearch.studies import sids_for_idnos
 from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -34,85 +34,98 @@ def _close_quiet(client: Any) -> None:
         pass
 
 
-def _error_by_idno(load_errors: list[dict[str, Any]], empty_docs: list[dict[str, Any]]) -> dict[str, str]:
-    """Map failed idno -> a human-readable reason, for ``last_error`` reporting.
+def _error_by_sid(load_errors: list[dict[str, Any]], empty_docs: list[dict[str, Any]]) -> dict[int, str]:
+    """Map failed sid -> a human-readable reason, for ``last_error`` reporting.
 
     ``load_errors`` entries carry the real exception text; ``empty_docs`` ones
     don't (they didn't raise), so fall back to their ``reason`` code.
     """
-    errors = {e["idno"]: str(e["error"]) for e in load_errors}
+    errors = {int(e["sid"]): str(e["error"]) for e in load_errors if e.get("sid")}
     for e in empty_docs:
-        errors.setdefault(e["idno"], f"no documents produced ({e.get('reason', 'empty')})")
+        errors.setdefault(int(e["sid"]), f"no documents produced ({e.get('reason', 'empty')})")
     return errors
 
 
-def _attribute_write_error(err: Any) -> tuple[str | None, str]:
-    """Best-effort ``(idno, message)`` for one backend write-error entry.
+def _attribute_write_error(err: Any) -> tuple[int | None, str]:
+    """Best-effort ``(sid, message)`` for one backend write-error entry.
 
-    Qdrant writer entries carry an ``idno`` key directly. OpenSearch ``bulk``
-    entries are ``{"index": {"_id", "error", "data": <source doc>}}`` — the idno
-    is read from the echoed source's ``metadata.idno``. ``idno`` is ``None``
-    when the entry can't be tied to one idno (e.g. an error that aborted the
-    whole run partway through).
+    Qdrant writer entries carry a ``sid`` key directly. OpenSearch ``bulk``
+    entries are ``{"index": {"_id", "error", "data": <source doc>}}`` — the sid
+    is read from the echoed source: ``metadata.sid`` on a chunk, ``sid`` on a
+    study document. ``sid`` is ``None`` when the entry can't be tied to one
+    study (e.g. an error that aborted the whole run partway through).
     """
     if not isinstance(err, dict):
         return None, str(err)
-    idno = err.get("idno")
+    sid = err.get("sid")
     message = str(err.get("error") or err)
-    if not idno:
+    if not sid:
         for op in ("index", "create", "update"):
             body = err.get(op)
             if not isinstance(body, dict):
                 continue
             message = str(body.get("error") or message)
             data = body.get("data")
-            meta = data.get("metadata") if isinstance(data, dict) else None
-            idno = meta.get("idno") if isinstance(meta, dict) else None
+            if isinstance(data, dict):
+                meta = data.get("metadata")
+                sid = meta.get("sid") if isinstance(meta, dict) else data.get("sid")
             break
-    return (str(idno) if idno else None), message
+    try:
+        return (int(sid) if sid else None), message
+    except (TypeError, ValueError):
+        return None, message
+
+
+def _state_item(sid: int, idno: str | None, status: str, error: str | None = None) -> dict[str, Any]:
+    """One ``search_index_state`` report: keyed by ``object_id`` (the sid); ``object_key`` (the idno) is informative."""
+    item: dict[str, Any] = {"object_type": "survey", "object_id": int(sid), "status": status}
+    if idno:
+        item["object_key"] = idno
+    if error is not None:
+        item["error"] = error
+    return item
 
 
 def _state_report_items(
-    candidate_idnos: Iterable[str],
+    idno_by_sid: dict[int, str | None],
     load_errors: list[dict[str, Any]],
     empty_docs: list[dict[str, Any]],
     write_errors: list[Any] | None,
-    variables_failed: dict[str, str] | None = None,
+    variables_failed: dict[int, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build the ``search_index_state`` items for one indexing call.
+    """Build the ``search_index_state`` items for one indexing call: one per study of ``idno_by_sid`` (sid -> idno,
+    the idno when known).
 
-    ``load_errors``/``empty_docs``, backend ``write_errors`` and ``variables_failed`` (idno -> reason, see
-    :func:`_sync_variables_best_effort`) are all failures — an idno whose documents never made it into the backend
+    ``load_errors``/``empty_docs``, backend ``write_errors`` and ``variables_failed`` (sid -> reason, see
+    :func:`_sync_variables_best_effort`) are all failures — a study whose documents never made it into the backend
     must not be reported ``indexed``, or NADA drops it from its "missing" diff and reconcile never retries it. A full
     index of a study is study + chunks + variables, so a study whose variables failed is not indexed either.
 
-    Write errors that can't be tied to an idno (see :func:`_attribute_write_error`)
-    mean we can't tell which idnos are affected, so in that case nothing is
-    reported ``indexed`` for this call — those idnos stay "missing" in NADA and
+    Write errors that can't be tied to a study (see :func:`_attribute_write_error`)
+    mean we can't tell which studies are affected, so in that case nothing is
+    reported ``indexed`` for this call — those studies stay "missing" in NADA and
     a later reconcile retries them, rather than being falsely marked done.
     """
-    failed: dict[str, str] = {}
+    failed: dict[int, str] = {}
     fully_attributed = True
     for err in write_errors or []:
-        idno, message = _attribute_write_error(err)
-        if idno is None:
+        sid, message = _attribute_write_error(err)
+        if sid is None:
             fully_attributed = False
         else:
-            failed.setdefault(idno, f"write failed: {message}")
-    failed.update({idno: f"variables: {reason}" for idno, reason in (variables_failed or {}).items()})
-    failed.update(_error_by_idno(load_errors, empty_docs))
+            failed.setdefault(sid, f"write failed: {message}")
+    failed.update({sid: f"variables: {reason}" for sid, reason in (variables_failed or {}).items()})
+    failed.update(_error_by_sid(load_errors, empty_docs))
 
     items: list[dict[str, Any]] = []
     if fully_attributed:
-        items += [
-            {"object_type": "survey", "object_key": i, "status": "indexed"} for i in candidate_idnos if i not in failed
-        ]
+        items += [_state_item(sid, idno, "indexed") for sid, idno in idno_by_sid.items() if sid not in failed]
     else:
         logger.warning(
-            "Backend reported write errors not attributable to an idno; not reporting any idno as 'indexed' "
+            "Backend reported write errors not attributable to a study; not reporting any study as 'indexed' "
             "to search_index_state for this call (they stay 'missing' so a reconcile retries them)"
         )
-    items += [{"object_type": "survey", "object_key": i, "status": "failed", "error": m} for i, m in failed.items()]
+    items += [_state_item(sid, idno_by_sid.get(sid), "failed", m) for sid, m in failed.items()]
     return items
 
 
@@ -139,106 +152,27 @@ def _report_state_bulk_best_effort(settings: Settings, items: list[dict[str, Any
         logger.warning("search_index_state report failed for %d item(s): %s", len(items), e)
 
 
-def delete_by_idno_op(settings: Settings, idno: str) -> dict[str, Any]:
-    """Delete all indexed documents/points for an idno. Works with both backends."""
-    if settings.search_backend == "qdrant":
-        result = _delete_qdrant(settings, idno)
-    else:
-        result = _delete_opensearch(settings, idno)
-    _report_state_bulk_best_effort(settings, [{"object_type": "survey", "object_key": idno, "status": "deleted"}])
-    return result
-
-
-def _delete_qdrant(settings: Settings, idno: str) -> dict[str, Any]:
-    from qdrant_client.http import models as qm
-
-    from nada_ai.ingest.qdrant_writer import _client as make_client
-    from nada_ai.search.backend.opensearch.mapping import metadata_field
-
-    client = make_client(settings)
-    coll = settings.qdrant_collection
-    try:
-        result = client.delete(
-            collection_name=coll,
-            points_selector=qm.FilterSelector(
-                filter=qm.Filter(must=[qm.FieldCondition(key=metadata_field("idno"), match=qm.MatchValue(value=idno))])
-            ),
-        )
-        return {
-            "backend": "qdrant",
-            "collection": coll,
-            "idno": idno,
-            "operation": result.status.value if result else "unknown",
-        }
-    finally:
-        client.close()
-
-
-def _delete_opensearch(settings: Settings, idno: str) -> dict[str, Any]:
-    out = _delete_opensearch_by(settings, idnos=[idno])
-    return {"backend": "opensearch", "index": settings.index_name, "idno": idno, **out}
-
-
-def delete_by_idnos_op(settings: Settings, idnos: list[str]) -> dict[str, Any]:
-    """Delete all indexed documents/points for a batch of idnos in one call. Works with both backends."""
-    if settings.search_backend == "qdrant":
-        result = _delete_qdrant_batch(settings, idnos)
-    else:
-        result = _delete_opensearch_batch(settings, idnos)
-    _report_state_bulk_best_effort(
-        settings, [{"object_type": "survey", "object_key": i, "status": "deleted"} for i in idnos]
-    )
-    return result
-
-
-def _delete_qdrant_batch(settings: Settings, idnos: list[str]) -> dict[str, Any]:
-    from qdrant_client.http import models as qm
-
-    from nada_ai.ingest.qdrant_writer import _client as make_client
-    from nada_ai.search.backend.opensearch.mapping import metadata_field
-
-    client = make_client(settings)
-    coll = settings.qdrant_collection
-    try:
-        result = client.delete(
-            collection_name=coll,
-            points_selector=qm.FilterSelector(
-                filter=qm.Filter(must=[qm.FieldCondition(key=metadata_field("idno"), match=qm.MatchAny(any=idnos))])
-            ),
-        )
-        return {
-            "backend": "qdrant",
-            "collection": coll,
-            "idnos": idnos,
-            "operation": result.status.value if result else "unknown",
-        }
-    finally:
-        client.close()
-
-
-def _delete_opensearch_batch(settings: Settings, idnos: list[str]) -> dict[str, Any]:
-    out = _delete_opensearch_by(settings, idnos=idnos)
-    return {"backend": "opensearch", "index": settings.index_name, "idnos": idnos, **out}
-
-
 def delete_by_sid_op(settings: Settings, sid: int) -> dict[str, Any]:
     """Delete every indexed document/point of one study, keyed by the NADA internal id ``sid``."""
     return delete_by_sids_op(settings, [sid])
 
 
 def delete_by_sids_op(settings: Settings, sids: list[int]) -> dict[str, Any]:
-    """Delete every indexed document/point of the given NADA internal study ids. Works with both backends.
+    """Delete every indexed document/point of the given NADA internal study ids, and report them ``deleted`` to
+    NADA's ``search_index_state``. Works with both backends.
 
-    The ``sid`` is the key nada-ai stores in ``metadata.sid`` on each document (see ``search.documents``).
-
-    Unlike the idno operations this does not report to NADA's ``search_index_state``, which is keyed by idno.
+    The ``sid`` is the key nada-ai stores in ``metadata.sid`` on each document (see ``search.documents``), ``sid`` on
+    the study and variable documents.
     """
     clean = list(dict.fromkeys(int(s) for s in sids))
     if not clean or any(s <= 0 for s in clean):
         raise ValueError("sids must be a non-empty list of positive integers")
     if settings.search_backend == "qdrant":
-        return _delete_qdrant_by_sids(settings, clean)
-    return _delete_opensearch_by_sids(settings, clean)
+        result = _delete_qdrant_by_sids(settings, clean)
+    else:
+        result = _delete_opensearch_by_sids(settings, clean)
+    _report_state_bulk_best_effort(settings, [_state_item(sid, None, "deleted") for sid in clean])
+    return result
 
 
 def _delete_qdrant_by_sids(settings: Settings, sids: list[int]) -> dict[str, Any]:
@@ -267,46 +201,24 @@ def _delete_qdrant_by_sids(settings: Settings, sids: list[int]) -> dict[str, Any
 
 
 def _delete_opensearch_by_sids(settings: Settings, sids: list[int]) -> dict[str, Any]:
-    out = _delete_opensearch_by(settings, sids=sids)
-    return {"backend": "opensearch", "index": settings.index_name, "sids": sids, **out}
-
-
-def _delete_opensearch_by(
-    settings: Settings, *, idnos: list[str] | None = None, sids: list[int] | None = None
-) -> dict[str, Any]:
-    """Delete studies from all three OpenSearch indexes (chunks, studies, variables), by NADA idno and/or ``sid``.
-
-    The study index stores NADA's own ``idno``, so a delete by idno first looks up the study's ``sid`` there;
-    chunks are then removed by ``sid`` as well as by their stored idno (which comes from the record's schema and
-    can differ from NADA's), so none are left behind. Variables carry NADA's own idno and sid, like studies.
-    """
+    """Delete studies from all three OpenSearch indexes (chunks, studies, variables) by ``sid``: every document of a
+    study carries it (``metadata.sid`` on chunks, ``sid`` on study and variable documents)."""
     from nada_ai.search.backend.opensearch.mapping import metadata_field
 
-    idnos = idnos or []
-    sid_set = set(sids or [])
     client = build_client(settings)
     try:
-        sid_set.update(sids_for_idnos(client, settings.studies_index, idnos).values())
 
-        chunk_match: list[dict[str, Any]] = []
-        study_match: list[dict[str, Any]] = []
-        if idnos:
-            chunk_match.append({"terms": {metadata_field("idno"): idnos}})
-            study_match.append({"terms": {"idno": idnos}})
-        if sid_set:
-            chunk_match.append({"terms": {metadata_field("sid"): sorted(sid_set)}})
-            study_match.append({"terms": {"sid": sorted(sid_set)}})
+        def delete(index: str, query: dict[str, Any]) -> dict[str, Any]:
+            return client.delete_by_query(index=index, body={"query": query}, refresh=True, ignore_unavailable=True)
 
-        def delete(index: str, should: list[dict[str, Any]]) -> dict[str, Any]:
-            body = {"query": {"bool": {"should": should, "minimum_should_match": 1}}}
-            return client.delete_by_query(index=index, body=body, refresh=True, ignore_unavailable=True)
-
-        chunks = delete(settings.index_name, chunk_match)
-        studies = delete(settings.studies_index, study_match)
-        # A deleted (or unpublished-and-removed) study's variables must not stay searchable: variable documents
-        # carry the same NADA ``idno`` and ``sid`` as the study, at the document root.
-        variables = delete(settings.variables_index, study_match)
+        chunks = delete(settings.index_name, {"terms": {metadata_field("sid"): sids}})
+        studies = delete(settings.studies_index, {"terms": {"sid": sids}})
+        # A deleted (or unpublished-and-removed) study's variables must not stay searchable.
+        variables = delete(settings.variables_index, {"terms": {"sid": sids}})
         return {
+            "backend": "opensearch",
+            "index": settings.index_name,
+            "sids": sids,
             "deleted": int(chunks.get("deleted") or 0),
             "total": chunks.get("total"),
             "studies_index": settings.studies_index,
@@ -318,25 +230,31 @@ def _delete_opensearch_by(
         _close_quiet(client)
 
 
-def apply_study_options_op(settings: Settings, idno: str) -> dict[str, Any]:
+def apply_study_options_op(settings: Settings, sid: int) -> dict[str, Any]:
     """Apply a change of a study's options to the index without reading its metadata or embedding anything.
 
     NADA sends ``upsert_partial`` for changes to a study's options (publish state, license, data class, links, DOI,
     featured, collections): fields around the metadata, never its text, so the study's chunks keep their vectors.
-    This rewrites the study document, replaces the flat ``filter_facets`` on the study's chunks, and sets
-    ``published`` on its variables, all from NADA's extract record. OpenSearch only.
+    This rewrites the study document and replaces the flat ``filter_facets`` on the study's chunks, both from NADA's
+    extract record. Its variables are not touched: variable search reads the study's state from the study index.
+    OpenSearch only.
 
     A study with no document in the index has nothing to update: ``{"updated": False, "reason": "not_indexed"}``, and
     the caller indexes it in full.
     """
-    from nada_ai.filters.metadata_extract import fetch_study_extract
+    from nada_ai.ingest.study_sources import fetch_studies_by_sids
 
-    sid, core_fields, filters = fetch_study_extract(settings, idno)
-    return apply_study_options_from_extract(settings, idno, sid, core_fields, filters)
+    batch = fetch_studies_by_sids(settings, [sid])
+    if batch["errors"]:
+        raise ValueError(f"NADA could not build the extract of study {sid}: {batch['errors'][0].get('message')}")
+    if not batch["studies"]:
+        raise ValueError(f"Study {sid} is not in NADA's catalog")
+    record = batch["studies"][0]
+    return apply_study_options_from_extract(settings, sid, record.get("core_fields") or {}, record.get("filters") or {})
 
 
 def apply_study_options_from_extract(
-    settings: Settings, idno: str, sid: int, core_fields: dict[str, Any], filters: dict[str, Any]
+    settings: Settings, sid: int, core_fields: dict[str, Any], filters: dict[str, Any]
 ) -> dict[str, Any]:
     """:func:`apply_study_options_op` for an extract record already fetched (the scheduler fetches a page of them in
     one request).
@@ -349,8 +267,8 @@ def apply_study_options_from_extract(
 
     client = build_client(settings)
     try:
-        if not sids_for_idnos(client, settings.studies_index, [idno]):
-            return {"idno": idno, "updated": False, "reason": "not_indexed"}
+        if not client.exists(index=settings.studies_index, id=str(sid)):
+            return {"sid": sid, "updated": False, "reason": "not_indexed"}
 
         source = study_to_source(sid, core_fields, filters)
         if STUDY_ALL_TEXT_FIELD not in core_fields:
@@ -372,26 +290,7 @@ def apply_study_options_from_extract(
             refresh=True,
             conflicts="proceed",
         )
-        # The variable index keeps only ids and ``published`` in its _source, so it is never updated in place (that
-        # would drop every searchable field): when the study's published status changed, its variables are synced
-        # again from NADA instead. Nothing is embedded either way.
-        published = source[FILTER_FACETS_KEY].get("published") or []
-        published = int(published[0]) if published else 0
-        variables_resynced = False
-        if _indexed_variables_published(client, settings.variables_index, sid) not in (None, published):
-            from nada_ai.ingest.variables_index import sync_survey_variables_op
-
-            errors = sync_survey_variables_op(settings, idno, sid=sid)["errors"]
-            if errors:
-                raise RuntimeError(f"variables of {idno!r}: {len(errors)} write error(s), first: {errors[0]}")
-            variables_resynced = True
-        return {
-            "idno": idno,
-            "updated": True,
-            "sid": sid,
-            "chunks_updated": int(chunks.get("updated") or 0),
-            "variables_resynced": variables_resynced,
-        }
+        return {"sid": sid, "updated": True, "chunks_updated": int(chunks.get("updated") or 0)}
     finally:
         _close_quiet(client)
 
@@ -402,17 +301,6 @@ def _stored_all_text(client: Any, index: str, sid: int) -> list[str]:
 
     doc = client.get(index=index, id=str(sid), stored_fields=STUDY_ALL_TEXT_FIELD, _source=False)
     return list((doc.get("fields") or {}).get(STUDY_ALL_TEXT_FIELD) or [])
-
-
-def _indexed_variables_published(client: Any, index: str, sid: int) -> int | None:
-    """The ``published`` the variable index holds for a study's variables, or None when it holds none of them."""
-    resp = client.search(
-        index=index,
-        body={"size": 1, "_source": ["published"], "query": {"term": {"sid": sid}}},
-        ignore_unavailable=True,
-    )
-    hits = (resp.get("hits") or {}).get("hits") or []
-    return int(hits[0]["_source"].get("published") or 0) if hits else None
 
 
 def put_index_template_op(settings: Settings) -> dict[str, Any]:
@@ -500,17 +388,17 @@ def setup_ingest_pipeline_op(settings: Settings) -> dict[str, Any]:
 
 def _sync_variables_best_effort(
     settings: Settings,
-    idnos: Iterable[str],
+    sids: Iterable[int],
     *,
     cancel_token: CancelToken | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Sync each idno's variables (best-effort: one idno's failure doesn't stop the rest, and never raises —
+    """Sync each study's variables (best-effort: one study's failure doesn't stop the rest, and never raises —
     a full study index must not stop just because the separate variable index couldn't be reached).
 
-    Returns ``{"indexed", "errors", "failed"}``; ``failed`` maps each idno whose variables were not fully synced to
-    the reason — an error, write errors, or a cancellation (the idnos not reached count too) — so the caller reports
-    that study failed rather than indexed.
+    Returns ``{"indexed", "errors", "failed"}``; ``failed`` maps each sid whose variables were not fully synced to
+    the reason — an error, write errors, or a cancellation (the studies not reached count too) — so the caller
+    reports that study failed rather than indexed.
 
     Only called for ``metadata_type=microdata`` (variables only exist on that dataset type — see
     ``_metadata_type`` in NADA's ``Semantic.php`` for the same map). By design, a full index of a study is
@@ -519,26 +407,26 @@ def _sync_variables_best_effort(
     """
     from nada_ai.ingest.variables_index import sync_survey_variables_op
 
-    todo = list(idnos)
+    todo = list(sids)
     indexed = 0
     errors: list[Any] = []
-    failed: dict[str, str] = {}
-    for done, idno in enumerate(todo, start=1):
+    failed: dict[int, str] = {}
+    for done, sid in enumerate(todo, start=1):
         if cancel_token is not None and cancel_token.is_set():
             failed.update({i: "cancelled before its variables were synced" for i in todo[done - 1 :]})
             break
         try:
-            result = sync_survey_variables_op(settings, idno, cancel_token=cancel_token)
+            result = sync_survey_variables_op(settings, sid, cancel_token=cancel_token)
             indexed += int(result.get("indexed") or 0)
             errors.extend(result.get("errors") or [])
             if result.get("errors"):
-                failed[idno] = f"{len(result['errors'])} write error(s)"
+                failed[sid] = f"{len(result['errors'])} write error(s)"
             elif result.get("cancelled"):
-                failed[idno] = "cancelled while its variables were being synced"
+                failed[sid] = "cancelled while its variables were being synced"
         except Exception as e:  # noqa: BLE001 - reported in the result, not raised
-            logger.warning("variable sync failed for idno=%s: %s", idno, e)
-            errors.append({"idno": idno, "error": str(e)})
-            failed[idno] = str(e)
+            logger.warning("variable sync failed for study %s: %s", sid, e)
+            errors.append({"sid": sid, "error": str(e)})
+            failed[sid] = str(e)
         if progress_cb is not None:
             progress_cb(
                 {
@@ -546,7 +434,7 @@ def _sync_variables_best_effort(
                     "total": len(todo),
                     "failed": len(failed),
                     "percent": round(100 * done / len(todo), 1),
-                    "current_idno": idno,
+                    "current_sid": sid,
                 }
             )
     return {"indexed": indexed, "errors": errors, "failed": failed}
@@ -559,18 +447,18 @@ _JOB_ERROR_LIMIT = 50
 
 def sync_variables_op(
     settings: Settings,
-    idnos: list[str] | None = None,
+    sids: list[int] | None = None,
     *,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     cancel_token: CancelToken | None = None,
 ) -> dict[str, Any]:
     """Index variables only — no study document, no chunks, so no embedding.
 
-    ``idnos`` replaces those studies' variables (one NADA page-walk each). ``None`` walks the whole catalog's
+    ``sids`` replaces those studies' variables (one NADA page-walk each). ``None`` walks the whole catalog's
     variables instead, which adds and replaces but does not remove variables that no longer exist (see
     ``backfill_variables_op``). Returns ``{"scope", "indexed", "errors", "error_count", "cancelled", ...}``.
     """
-    if idnos is None:
+    if sids is None:
         from nada_ai.ingest.variables_index import backfill_variables_op
 
         result = backfill_variables_op(
@@ -579,16 +467,68 @@ def sync_variables_op(
         errors = result.pop("errors")
         return {"scope": "all", **result, "errors": errors[:_JOB_ERROR_LIMIT], "error_count": len(errors)}
 
-    result = _sync_variables_best_effort(settings, idnos, cancel_token=cancel_token, progress_cb=progress_cb)
+    result = _sync_variables_best_effort(settings, sids, cancel_token=cancel_token, progress_cb=progress_cb)
     errors = result["errors"]
     return {
-        "scope": "idnos",
-        "requested": len(idnos),
+        "scope": "sids",
+        "requested": len(sids),
         "indexed": result["indexed"],
         "errors": errors[:_JOB_ERROR_LIMIT],
         "error_count": len(errors),
         "cancelled": cancel_token is not None and cancel_token.is_set(),
     }
+
+
+def _recreate(settings: Settings, recreate: Callable[[Any, Settings], str]) -> str:
+    from nada_ai.search.backend.opensearch.client import build_client
+
+    client = build_client(settings)
+    try:
+        return recreate(client, settings)
+    finally:
+        client.close()
+
+
+def recreate_variables_op(
+    settings: Settings,
+    *,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_token: CancelToken | None = None,
+) -> dict[str, Any]:
+    """Drop the variable index, create it empty with the current mapping, and index every variable again.
+
+    Variable search has little or nothing to find until the walk is done. Returns ``sync_variables_op``'s result for
+    the whole catalog, plus ``recreated`` (the index) and ``generation``.
+    """
+    from nada_ai.ingest.variables_index import recreate_variables_index
+
+    generation = _recreate(settings, recreate_variables_index)
+    logger.info(
+        "variable index %s recreated (generation %s); indexing every variable", settings.variables_index, generation
+    )
+    result = sync_variables_op(settings, None, progress_cb=progress_cb, cancel_token=cancel_token)
+    return {"recreated": settings.variables_index, "generation": generation, **result}
+
+
+def recreate_citations_op(
+    settings: Settings,
+    *,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_token: CancelToken | None = None,
+) -> dict[str, Any]:
+    """Drop the citation index, create it empty with the current mapping, and index every citation again.
+
+    Citation search has little or nothing to find until the walk is done. Returns ``sync_citations_op``'s result for
+    the whole catalog, plus ``recreated`` (the index) and ``generation``.
+    """
+    from nada_ai.ingest.citations_index import recreate_citations_index
+
+    generation = _recreate(settings, recreate_citations_index)
+    logger.info(
+        "citation index %s recreated (generation %s); indexing every citation", settings.citations_index, generation
+    )
+    result = sync_citations_op(settings, None, progress_cb=progress_cb, cancel_token=cancel_token)
+    return {"recreated": settings.citations_index, "generation": generation, **result}
 
 
 def sync_citations_op(
@@ -635,7 +575,7 @@ def sync_citations_op(
                     "total": len(citation_ids),
                     "failed": failed,
                     "percent": round(100 * done / len(citation_ids), 1),
-                    "current_idno": str(citation_id),
+                    "current_citation_id": citation_id,
                 }
             )
     return {
@@ -649,58 +589,81 @@ def sync_citations_op(
     }
 
 
-def index_ids_op(
+class _Seen:
+    """Passes studies through, noting each one's idno by sid (for the state report) once the pipeline is done with it.
+
+    A study is noted when the pipeline asks for the next one (or the sources run out), not when it is handed over: a
+    cancelled pipeline takes the next study, sees the cancel and stops without loading it, and that study must not be
+    reported indexed. What the pipeline is done with is written before it returns (its last buffer is flushed)."""
+
+    def __init__(self, sources: Iterable[StudySource]) -> None:
+        self._sources = sources
+        self.idno_by_sid: dict[int, str | None] = {}
+        self.microdata: list[int] = []
+
+    def __iter__(self) -> Iterator[StudySource]:
+        for source in self._sources:
+            yield source
+            self.idno_by_sid[source.sid] = source.idno
+            if source.metadata_type == "microdata":
+                self.microdata.append(source.sid)
+
+
+def _index_sources(
     settings: Settings,
-    idnos: list[str],
-    metadata_type: str = "indicator",
-    force: bool = False,
-    recreate_index: bool = False,
-    show_progress_bar: bool = True,
-    buffer_size: int = 200,
-    embedding: EmbeddingService | None = None,
+    sources: Iterable[StudySource],
+    requested: Iterable[int],
+    *,
+    force: bool,
+    recreate_index: bool,
+    show_progress_bar: bool,
+    buffer_size: int,
+    embedding: EmbeddingService | None,
+    load_errors: list[dict[str, Any]],
+    progress: IngestProgressTracker | None = None,
+    cancel_token: CancelToken | None = None,
 ) -> dict[str, Any]:
-    """Bulk-index the given idnos for a single metadata_type.
-
-    ``embedding`` — pass the app's shared :class:`EmbeddingService` to avoid
-    reloading the model for every job.  ``None`` (default) self-loads.
-
-    Returns ``{"indexed", "errors", "load_errors", "empty_docs", "requested",
-    "metadata_type", "index", "quality", "variables"}``. ``quality`` is a non-blocking report
-    of thin/malformed source documents (empty content, missing idno/type)
-    *that were built* — see ``ingest/quality.py``. ``empty_docs`` is idnos that
-    loaded without error but produced zero documents to even check (no
-    langdocs, or all-empty content) — distinct from ``quality``, which never
-    sees these since no source document ever existed to observe. Neither
-    affects what gets indexed. ``variables`` is ``{"indexed", "errors"}`` for
-    the OpenSearch variable index (see ``_sync_variables_best_effort``); ``None``
-    for any metadata_type other than ``microdata``, which never has variables.
-    """
-    pairs = [(i, metadata_type) for i in idnos]
+    """Index ``sources`` in full (study, chunks and, for microdata, variables) and report every study of
+    ``requested`` (sids) to NADA's ``search_index_state``. ``load_errors`` may already hold the studies that could
+    not be fetched."""
     report = QualityReport()
-    load_errors: list[dict[str, Any]] = []
     empty_docs: list[dict[str, Any]] = []
+    seen = _Seen(sources)
     n, err = run_bulk_index(
         settings,
-        pairs,
+        seen,
         force=force,
         recreate_index=recreate_index,
         show_progress_bar=show_progress_bar,
         buffer_size=buffer_size,
         embedding=embedding,
         quality_report=report,
+        progress=progress,
+        cancel_token=cancel_token,
         load_errors=load_errors,
         empty_docs=empty_docs,
     )
+    cancelled = cancel_token is not None and cancel_token.is_set()
+
+    # A full index of a study is study + chunks + variables. Variables only exist on microdata, so this is one NADA
+    # call per microdata study of this run. A cancelled run stops here rather than starting a long sync nobody is
+    # waiting for; its microdata studies are then reported failed, so a reconcile retries them.
     variables_result: dict[str, Any] | None = None
-    if metadata_type == "microdata" and settings.search_backend == "opensearch":
-        failed_idnos = {e["idno"] for e in load_errors if e.get("idno")}
-        variables_result = _sync_variables_best_effort(settings, (i for i in idnos if i not in failed_idnos))
+    variables_failed: dict[int, str] = {}
+    if settings.search_backend == "opensearch":
+        load_failed = {int(e["sid"]) for e in load_errors if e.get("sid")}
+        microdata = [sid for sid in seen.microdata if sid not in load_failed]
+        if cancelled:
+            variables_failed = {sid: "cancelled before its variables were synced" for sid in microdata}
+        elif microdata:
+            variables_result = _sync_variables_best_effort(settings, microdata, cancel_token=cancel_token)
+            variables_failed = variables_result["failed"]
+
     # Reported after the variables: a study whose variables failed is not indexed (see _state_report_items).
+    idno_by_sid = {int(sid): None for sid in requested}
+    idno_by_sid.update(seen.idno_by_sid)
     _report_state_bulk_best_effort(
-        settings,
-        _state_report_items(
-            idnos, load_errors, empty_docs, err, variables_result["failed"] if variables_result else None
-        ),
+        settings, _state_report_items(idno_by_sid, load_errors, empty_docs, err, variables_failed)
     )
 
     idx = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
@@ -709,18 +672,81 @@ def index_ids_op(
         "errors": err or [],
         "load_errors": load_errors,
         "empty_docs": empty_docs,
-        "requested": len(idnos),
-        "metadata_type": metadata_type,
+        "cancelled": cancelled,
         "index": idx,
         "quality": report.to_dict(),
         "variables": variables_result,
     }
 
 
+def index_sids_op(
+    settings: Settings,
+    sids: list[int],
+    force: bool = False,
+    recreate_index: bool = False,
+    show_progress_bar: bool = True,
+    buffer_size: int = 200,
+    embedding: EmbeddingService | None = None,
+    records: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Index these studies (NADA internal ids) in full: their records are fetched from NADA by id.
+
+    ``records``: their full extract records when the caller already has them (nothing is fetched then).
+    ``embedding`` — pass the app's shared :class:`EmbeddingService` to avoid reloading the model for every job.
+    ``force`` embeds every chunk again (no stored vector is reused).
+
+    Returns ``{"indexed", "errors", "load_errors", "empty_docs", "requested", "index", "quality", "variables"}``.
+    ``load_errors`` are the studies that could not be fetched or loaded (``sid``, ``idno``, ``stage``, ``error``);
+    ``empty_docs`` those that loaded but produced no documents; ``quality`` is a non-blocking report of thin or
+    malformed source documents (see ``ingest/quality.py``); ``variables`` is ``{"indexed", "errors", "failed"}`` for
+    the microdata studies, else ``None``.
+    """
+    from nada_ai.ingest.study_sources import sources_by_sids, sources_from_records
+
+    sids = list(dict.fromkeys(int(s) for s in sids))
+    load_errors: list[dict[str, Any]] = []
+    sources = (
+        sources_from_records(records, load_errors)
+        if records is not None
+        else sources_by_sids(settings, sids, load_errors)
+    )
+    result = _index_sources(
+        settings,
+        sources,
+        sids,
+        force=force,
+        recreate_index=recreate_index,
+        show_progress_bar=show_progress_bar,
+        buffer_size=buffer_size,
+        embedding=embedding,
+        load_errors=load_errors,
+    )
+    result.pop("cancelled")
+    return {**result, "requested": len(sids)}
+
+
+#: Catalog types of a full run -> NADA's ``surveys.type``.
+_CATALOG_TYPE_TO_NADA_TYPE: dict[str, str] = {
+    "timeseries": "timeseries",
+    "indicator": "timeseries",
+    "microdata": "survey",
+    "survey": "survey",
+    "indicator-db": "timeseriesdb",
+    "timeseries-db": "timeseriesdb",
+    "timeseriesdb": "timeseriesdb",
+    "document": "document",
+    "geospatial": "geospatial",
+    "table": "table",
+    "script": "script",
+    "image": "image",
+    "video": "video",
+}
+
+
 def index_from_catalog_op(
     settings: Settings,
     catalog_type: str = "timeseries",
-    ps: int = 100,
+    ps: int = 20,
     limit: int | None = None,
     force: bool = False,
     recreate_index: bool = False,
@@ -731,126 +757,76 @@ def index_from_catalog_op(
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     cancel_token: CancelToken | None = None,
 ) -> dict[str, Any]:
-    """Fetch ids from Data Compass search API and bulk-index them.
+    """Index every study of ``catalog_type``, paged from NADA's metadata-extract API in id order, ``ps`` full records
+    per request; ``limit`` stops after that many studies.
 
-    Returns ``{"indexed", "errors", "load_errors", "empty_docs", "rows",
-    "resumed_skipped", "cancelled", "catalog_type", "index", "quality", "variables"}``. ``variables`` is
-    ``{"indexed", "errors"}`` for the microdata studies of this run (see ``_sync_variables_best_effort``), else ``None``.
-    ``errors`` contains backend write failures; ``load_errors`` contains per-idno metadata fetch or parsing failures;
-    ``empty_docs`` records studies that produced no indexable content. ``quality`` reports thin or malformed source
-    documents without blocking indexing. These fields explain gaps between requested and indexed records.
+    Returns ``{"indexed", "errors", "load_errors", "empty_docs", "rows", "resumed_skipped", "cancelled",
+    "catalog_type", "index", "quality", "variables"}``. ``errors`` contains backend write failures; ``load_errors``
+    the studies that could not be loaded; ``empty_docs`` those that produced no indexable content. ``quality`` reports
+    thin or malformed source documents without blocking indexing.
 
-    ``resume=True`` loads any existing checkpoint for this ``catalog_type``
-    (see ``ingest/progress.py``) and skips idnos it already recorded as done —
-    use this to continue a run that was cancelled or crashed partway through
-    instead of reindexing everything again. ``progress_cb``, if given, is
-    called after every idno with a live snapshot (processed/total/failed);
-    ``cancel_token``, checked once per idno, is what makes cancelling this job
-    actually stop promptly instead of running the remaining catalog anyway.
+    ``resume=True`` loads any existing checkpoint for this ``catalog_type`` (see ``ingest/progress.py``) and skips the
+    studies (by sid) it already recorded as done — use this to continue a run that was cancelled or crashed partway
+    through. ``progress_cb``, if given, is called after every study with a live snapshot (processed/total/failed);
+    ``cancel_token``, checked once per study, makes cancelling this job stop promptly.
     """
+    from nada_ai.ingest.study_sources import fetch_study_page, sources_from_records
+
     if resume and recreate_index:
         raise ValueError("resume cannot be combined with recreate_index")
+    if catalog_type not in _CATALOG_TYPE_TO_NADA_TYPE:
+        raise ValueError(f"Unknown catalog_type {catalog_type!r}; one of {sorted(_CATALOG_TYPE_TO_NADA_TYPE)}")
+    nada_type = _CATALOG_TYPE_TO_NADA_TYPE[catalog_type]
 
-    from ai4data.discovery.catalog import get_metadata_ids, is_extract_mode
-
-    params: dict[str, Any] = {"sk": "", "ps": ps, "type": catalog_type, "sort_by": "year", "sort_order": "asc"}
-    if catalog_type == "indicator":
-        params["type"] = "timeseries"
-    elif catalog_type == "microdata":
-        params["type"] = "survey"
-    elif catalog_type in ("indicator-db", "timeseries-db"):
-        params["type"] = "timeseriesdb"
-
-    rows = get_metadata_ids(
-        params,
-        max_items=limit,
-        cache_metadata=is_extract_mode(),
-        include_resources=True,
-    )
-    all_pairs: list[tuple[str, str]] = []
-    for row in rows:
-        idno = row.get("idno")
-        t = row.get("type")
-        if not idno or not t:
-            continue
-        all_pairs.append((idno, t))
+    first = fetch_study_page(settings, offset=0, limit=ps, nada_type=nada_type)
+    total = first["total"] if limit is None else min(first["total"], limit)
 
     checkpoint = load_checkpoint(settings, catalog_type) if resume else None
-    pairs = all_pairs
-    if checkpoint is not None:
-        pairs = [(idno, t) for idno, t in all_pairs if idno not in checkpoint.completed_idnos]
+    done = checkpoint.completed_sids if checkpoint is not None else set()
+    tracker = IngestProgressTracker(settings, catalog_type, total=total, checkpoint=checkpoint, on_update=progress_cb)
 
-    tracker = IngestProgressTracker(
-        settings,
-        catalog_type,
-        total=len(all_pairs),
-        checkpoint=checkpoint,
-        on_update=progress_cb,
-    )
-
-    report = QualityReport()
+    rows = skipped = 0
     load_errors: list[dict[str, Any]] = []
-    empty_docs: list[dict[str, Any]] = []
+
+    def records() -> Iterator[dict[str, Any]]:
+        nonlocal rows, skipped
+        page, offset = first, 0
+        while True:
+            for record in page["studies"]:
+                if rows >= total:
+                    return
+                rows += 1
+                if int((record.get("core_fields") or {}).get("catalog_id") or 0) in done:
+                    skipped += 1
+                    continue
+                yield record
+            offset += len(page["studies"])
+            if not page["has_more"] or not page["studies"] or rows >= total:
+                return
+            if cancel_token is not None and cancel_token.is_set():
+                return
+            page = fetch_study_page(settings, offset=offset, limit=ps, nada_type=nada_type)
+
     try:
-        n, err = run_bulk_index(
+        result = _index_sources(
             settings,
-            pairs,
+            sources_from_records(records(), load_errors, on_skip=lambda sid, error: tracker.mark(sid, False, error)),
+            [],
             force=force,
             recreate_index=recreate_index,
             show_progress_bar=show_progress_bar,
             buffer_size=buffer_size,
             embedding=embedding,
-            quality_report=report,
+            load_errors=load_errors,
             progress=tracker,
             cancel_token=cancel_token,
-            load_errors=load_errors,
-            empty_docs=empty_docs,
         )
     except Exception:
-        # Didn't run to completion (unexpected error, not a per-idno one
-        # already handled inside the pipeline) — keep the checkpoint so a
-        # follow-up resume=True run doesn't lose whatever *did* complete.
+        # Didn't run to completion (an unexpected error, not a per-study one already handled inside the pipeline) —
+        # keep the checkpoint so a follow-up resume=True run doesn't lose whatever *did* complete.
         tracker.finalize(completed=False)
         raise
-
-    cancelled = cancel_token is not None and cancel_token.is_set()
-    # Ran through the whole (possibly resumed) list, cancellation aside — even
-    # if individual idnos failed, that's already captured in errors/load_errors
-    # above, so there's nothing left worth resuming; clear the checkpoint.
-    tracker.finalize(completed=not cancelled)
-
-    # A full index of a study is study + chunks + variables (see index_ids_op). Variables only exist on microdata,
-    # so this is one NADA call per microdata study of this run, not per catalog row — a run over thousands of
-    # documents makes none. A cancelled run stops here rather than starting a long sync nobody is waiting for; its
-    # microdata studies are then reported failed (their variables were never synced), so a reconcile retries them.
-    variables_result: dict[str, Any] | None = None
-    variables_failed: dict[str, str] = {}
-    if settings.search_backend == "opensearch":
-        failed_idnos = {e["idno"] for e in load_errors if e.get("idno")}
-        microdata_idnos = [idno for idno, t in pairs if t == "microdata" and idno not in failed_idnos]
-        if cancelled:
-            variables_failed = {i: "cancelled before its variables were synced" for i in microdata_idnos}
-        elif microdata_idnos:
-            variables_result = _sync_variables_best_effort(settings, microdata_idnos, cancel_token=cancel_token)
-            variables_failed = variables_result["failed"]
-
-    # Reported after the variables: a study whose variables failed is not indexed (see _state_report_items).
-    _report_state_bulk_best_effort(
-        settings,
-        _state_report_items(tracker.checkpoint.completed_idnos, load_errors, empty_docs, err, variables_failed),
-    )
-
-    idx = settings.qdrant_collection if settings.search_backend == "qdrant" else settings.index_name
-    return {
-        "indexed": int(n),
-        "errors": err or [],
-        "load_errors": load_errors,
-        "empty_docs": empty_docs,
-        "rows": len(all_pairs),
-        "resumed_skipped": len(all_pairs) - len(pairs),
-        "cancelled": cancelled,
-        "catalog_type": catalog_type,
-        "index": idx,
-        "quality": report.to_dict(),
-        "variables": variables_result,
-    }
+    # Ran through the whole (possibly resumed) list, cancellation aside: per-study failures are already in the
+    # result, so there is nothing left worth resuming.
+    tracker.finalize(completed=not result["cancelled"])
+    return {**result, "rows": rows, "resumed_skipped": skipped, "catalog_type": catalog_type}

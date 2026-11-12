@@ -12,7 +12,7 @@
 Usage in any ingest factory::
 
     async def factory() -> dict[str, Any]:
-        return await guarded_ingest(s, index_ids_op, settings, [idno], metadata_type, force)
+        return await guarded_ingest(s, index_sids_op, settings, [sid], force)
 
 The call signature mirrors a direct ``asyncio.to_thread(fn, *args, **kwargs)``
 call, except that ``embedding=s.embedding`` is automatically injected as a
@@ -27,18 +27,14 @@ from typing import Any, Callable
 from nada_ai.app.state import AppState, ensure_embedding_initialized
 
 
-def content_sync_job_key(metadata_type: str, idno: str) -> str:
-    """Canonical job-registry key for "write current NADA content for this idno".
+def content_sync_job_key(sid: int) -> str:
+    """Canonical job-registry key for "write current NADA content for this study" (by its NADA internal id).
 
-    Every entry point that writes content for one (metadata_type, idno) pair —
-    the admin index/reindex routes, the catalog webhook, and the search-index
-    queue scheduler — MUST submit under this same key so JobRegistry's
-    single-flight dedup actually protects against them racing each other for
-    the same idno. Before this existed, "index" and "reindex" used different
-    key prefixes for the same underlying operation and could run concurrently
-    for the same idno with no coordination at all.
+    Every entry point that writes content for one study — the admin index/reindex routes and the catalog webhook —
+    MUST submit under this same key so JobRegistry's single-flight dedup actually protects against them racing each
+    other for the same study.
     """
-    return f"content:{metadata_type}:{idno}"
+    return f"content:{int(sid)}"
 
 
 async def guarded_ingest(

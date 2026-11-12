@@ -5,6 +5,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 EMBEDDING_FIELD = "embedding"
+#: The input cap, in tokens, a chunk's vector was made with (see ``EmbeddingService.input_cap``): a stored vector is
+#: reused only at the same cap.
+EMBEDDING_INPUT_CAP_FIELD = "embedding_input_cap"
 TEXT_FIELD = "page_content"
 METADATA_OBJECT_KEY = "metadata"
 FILTER_FACETS_KEY = "filter_facets"
@@ -12,7 +15,10 @@ FILTER_FACETS_KEY = "filter_facets"
 # Filter keys as NADA's metadata-extract API names them (see ``filters`` in a study extract). Everything else is
 # handled by the dynamic templates below: ``fq_<facet>`` (user-defined facets) are integer term ids, any other key
 # is a keyword.
-_KEYWORD_FILTER_KEYS = ("dataset_type", "form_model", "repositoryid", "repositories", "tags")
+_KEYWORD_FILTER_KEYS = ("dataset_type", "form_model", "repositoryid", "repositories", "tags", "ts_databases")
+#: Keyword fields the study search aggregates (tabs and facets): their global ordinals are built at refresh, not by the
+#: first search after an index change.
+_EAGER_ORDINAL_KEYS = frozenset({"dataset_type", "repositories", "tags", "ts_databases"})
 _INTEGER_FILTER_KEYS = (
     "doctype",
     "published",
@@ -22,6 +28,7 @@ _INTEGER_FILTER_KEYS = (
     "years",
     "countries",
     "regions",
+    "topics",
     "data_class_id",
 )
 
@@ -84,7 +91,10 @@ def filter_facets_mapping(prefix: str = "") -> tuple[dict[str, Any], list[dict[s
     queries). ``prefix`` is the path of the object that holds ``filter_facets``: ``"metadata."`` on chunk
     documents, ``""`` on study documents.
     """
-    properties: dict[str, Any] = {key: {"type": "keyword"} for key in _KEYWORD_FILTER_KEYS}
+    properties: dict[str, Any] = {
+        key: {"type": "keyword", "eager_global_ordinals": True} if key in _EAGER_ORDINAL_KEYS else {"type": "keyword"}
+        for key in _KEYWORD_FILTER_KEYS
+    }
     properties.update({key: {"type": "integer"} for key in _INTEGER_FILTER_KEYS})
     templates = [
         {
@@ -138,12 +148,25 @@ def index_body(embedding_dimension: int | None) -> dict[str, Any]:
                 "date_published": {"type": "date", "ignore_malformed": True},
                 "date_created": {"type": "date", "ignore_malformed": True},
                 "authors": {"type": "keyword"},
-                "doc_meta": {"type": "object", "enabled": True},
+                # the PDF loader's per-page metadata, kept whole in _source. Only page / total_pages are read, and
+                # the rest is whatever the PDF carries (moddate as "D:20160715143457" in one file and ISO in the
+                # next), so it is not mapped: a dynamic guess from one PDF would reject the chunks of the next.
+                "doc_meta": {
+                    "type": "object",
+                    "dynamic": False,
+                    "properties": {
+                        "page": {"type": "integer"},
+                        "total_pages": {"type": "integer"},
+                    },
+                },
+                # the NADA resource (PDF) a document's page chunk was read from
+                "resource_id": {"type": "keyword"},
                 FILTER_FACETS_KEY: facets_mapping,
             },
         },
     }
     if embedding_dimension is not None:
+        properties[EMBEDDING_INPUT_CAP_FIELD] = {"type": "long"}  # long: what a write before ensure-indexes maps it as
         properties[EMBEDDING_FIELD] = {
             "type": "knn_vector",
             "dimension": embedding_dimension,
@@ -198,7 +221,7 @@ STUDY_ALL_TEXT_FIELD = "all_text"
 #: every field not kept here): their documents are always rewritten whole. The chunk index is updated in place (its
 #: filters) and keeps its full ``_source``.
 STUDY_SOURCE_FIELDS = ["sid", "idno", "title", "filter_facets"]
-VARIABLE_SOURCE_FIELDS = ["uid", "sid", "published"]
+VARIABLE_SOURCE_FIELDS = ["uid", "sid"]
 CITATION_SOURCE_FIELDS = ["citation_id", "uuid"]
 
 
@@ -309,11 +332,10 @@ VARIABLE_TEXT_FIELDS = ("name", "label", "question", "categories")
 def variables_index_body() -> dict[str, Any]:
     """OpenSearch settings + mappings of the **variable** index: one document per variable, ``_id`` = ``uid``.
 
-    Denormalized with the owning study's fields (no join at query time), following NADA's own, separate variable
-    indexer (``OpenSearch_variable_indexer.php``) for the field set. Lexical only: ``name``/``label``/``question``/
-    ``categories`` are searched; ``idno``/``title``/``nation`` are stored for display, not matched (NADA's own
-    variable search does not match on them either). Sorting uses ``name.sort`` and ``title``, both normalized
-    (case- and accent-insensitive): a ``text`` field cannot be sorted on.
+    The variable only, plus its study's ``title`` to sort by: everything else about the study is read from the study
+    index at search time (``variables_search.allowed_sids``). Lexical only: ``name``/``label``/``question``/
+    ``categories`` are searched. Sorting uses ``name.sort`` and ``title``, both normalized (case- and
+    accent-insensitive): a ``text`` field cannot be sorted on.
     """
     return {
         "settings": {
@@ -338,22 +360,13 @@ def variables_index_body() -> dict[str, Any]:
             "properties": {
                 "uid": {"type": "integer"},
                 "sid": {"type": "integer"},
-                "fid": {"type": "keyword"},
-                "vid": {"type": "keyword"},
                 **{field: {"type": "text", "analyzer": "nada_text"} for field in VARIABLE_TEXT_FIELDS},
                 "name": {
                     "type": "text",
                     "analyzer": "nada_text",
                     "fields": {"sort": {"type": "keyword", "normalizer": "nada_sort", "ignore_above": 256}},
                 },
-                "idno": {"type": "keyword"},
                 "title": {"type": "keyword", "normalizer": "nada_sort"},
-                "nation": {"type": "keyword"},
-                "dataset_type": {"type": "keyword"},
-                "published": {"type": "integer"},
-                "year_start": {"type": "integer"},
-                "year_end": {"type": "integer"},
-                "countries": {"type": "integer"},
             },
         },
     }

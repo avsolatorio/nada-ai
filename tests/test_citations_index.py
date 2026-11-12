@@ -156,3 +156,36 @@ def test_backfill_can_recreate_the_index_first() -> None:
     ):
         ci.backfill_citations_op(_settings(), show_progress_bar=False, recreate_index=True)
     run.client.indices.delete.assert_called_once_with(index="idx-citations")
+
+
+def test_recreate_drops_the_citation_index_and_creates_it_with_the_current_mapping() -> None:
+    from nada_ai.ingest.citations_index import recreate_citations_index
+    from nada_ai.search.backend.opensearch.mapping import citations_index_body
+
+    client = MagicMock()
+    generation = recreate_citations_index(client, _settings())
+    client.indices.delete.assert_called_once_with(index=_settings().citations_index)
+    body = client.indices.create.call_args.kwargs["body"]
+    assert body["mappings"]["properties"] == citations_index_body()["mappings"]["properties"]
+    assert body["mappings"]["_meta"]["generation"] == generation
+
+
+def test_recreate_citations_op_recreates_then_indexes_every_citation() -> None:
+    import nada_ai.ingest.service as service
+
+    calls: list[str] = []
+    with (
+        patch("nada_ai.search.backend.opensearch.client.build_client", return_value=MagicMock()),
+        patch(
+            "nada_ai.ingest.citations_index.recreate_citations_index",
+            side_effect=lambda client, settings: calls.append("recreate") or "gen-1",
+        ),
+        patch.object(
+            service,
+            "sync_citations_op",
+            side_effect=lambda settings, ids, **kw: calls.append(f"sync:{ids}") or {"scope": "all", "indexed": 3},
+        ),
+    ):
+        result = service.recreate_citations_op(_settings())
+    assert calls == ["recreate", "sync:None"]
+    assert (result["generation"], result["indexed"]) == ("gen-1", 3)

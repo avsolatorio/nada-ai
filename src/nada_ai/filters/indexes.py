@@ -9,7 +9,12 @@ from typing import Any
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 
-from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, METADATA_OBJECT_KEY, filter_facets_mapping
+from nada_ai.search.backend.opensearch.mapping import (
+    EMBEDDING_INPUT_CAP_FIELD,
+    FILTER_FACETS_KEY,
+    METADATA_OBJECT_KEY,
+    filter_facets_mapping,
+)
 from nada_ai.search.dynamic_filters import dynamic_facet_field, load_dynamic_facet_keys
 from nada_ai.settings import Settings
 
@@ -100,16 +105,20 @@ def ensure_qdrant_filter_field_indexes(
 
 
 def ensure_opensearch_filter_facets_mapping(client: Any, settings: Settings) -> dict[str, Any]:
-    """(Re)apply the flat ``filter_facets`` mapping and its dynamic templates to both OpenSearch indexes.
+    """(Re)apply the flat ``filter_facets`` mapping and its dynamic templates to both OpenSearch indexes, and the
+    chunk index's ``embedding_input_cap`` field when it holds vectors.
 
-    New indexes already have it (see ``search.backend.opensearch.mapping``); this repairs one created without it.
+    New indexes already have them (see ``search.backend.opensearch.mapping``); this repairs one created without them.
     """
     chunk_facets, chunk_templates = filter_facets_mapping(f"{METADATA_OBJECT_KEY}.")
     study_facets, study_templates = filter_facets_mapping()
+    chunk_properties: dict[str, Any] = {METADATA_OBJECT_KEY: {"properties": {FILTER_FACETS_KEY: chunk_facets}}}
+    if settings.embedding_backend != "none":
+        chunk_properties[EMBEDDING_INPUT_CAP_FIELD] = {"type": "long"}  # long: what a write before this maps it as
     bodies = {
         settings.index_name: {
             "dynamic_templates": chunk_templates,
-            "properties": {METADATA_OBJECT_KEY: {"properties": {FILTER_FACETS_KEY: chunk_facets}}},
+            "properties": chunk_properties,
         },
         settings.studies_index: {
             "dynamic_templates": study_templates,

@@ -7,9 +7,9 @@ from typing import Any
 from nada_ai.filters.sync import (
     backfill_filter_facets,
     ensure_filter_indexes_op,
-    get_filter_fields_for_idno,
+    get_filter_fields_for_sid,
     sync_filters_batch,
-    sync_filters_for_idno,
+    sync_filters_for_sid,
 )
 from nada_ai.settings import Settings
 
@@ -28,13 +28,13 @@ def sync_filters_op(
     }
 
 
-def sync_filter_for_idno_op(settings: Settings, idno: str, filters: dict[str, Any]) -> dict[str, Any]:
-    result = sync_filters_for_idno(settings, idno, filters)
+def sync_filter_for_sid_op(settings: Settings, sid: int, filters: dict[str, Any]) -> dict[str, Any]:
+    result = sync_filters_for_sid(settings, sid, filters)
     return {"backend": settings.search_backend, **result}
 
 
-def get_filters_op(settings: Settings, idno: str) -> dict[str, Any]:
-    out = get_filter_fields_for_idno(settings, idno)
+def get_filters_op(settings: Settings, sid: int) -> dict[str, Any]:
+    out = get_filter_fields_for_sid(settings, sid)
     out["backend"] = settings.search_backend
     return out
 

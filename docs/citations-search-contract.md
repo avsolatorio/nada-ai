@@ -23,22 +23,34 @@ the full rows (authors, survey counts, ...) from its own database, as it does fo
 | `query` | Required, 1-500 characters. Matched against title (x5), authors (x3), subtitle (x2), keywords (x2), abstract and notes. An exact, case-folded DOI match outranks any text match. |
 | `filters.ctypes` | Citation types, any-of. |
 | `filters.year_from` / `year_to` | Publication year, inclusive; either may be omitted. `year_from` after `year_to` is `invalid_filter_value`. |
-| `sort` | `relevance` (default), `title` or `year`. |
+| `sort` | `relevance` (default), `title` or `year` (then title). Every sort ends on the citation id, so equal titles or years keep one order from page to page. |
 | `order` | `asc` (default) or `desc`; applies to `title` and `year` only. Citations with no year sort last either way. |
-| `limit` / `offset` | `limit` 1-100 (default 15); `offset + limit` must not exceed 10,000. |
+| `limit` / `offset` | `limit` 1-100 (default 15); `offset + limit` must not exceed `limits.citations_max_offset` (setting `NADA_CITATIONS_MAX_OFFSET`, default and most 10,000); past it, `offset_out_of_range` with `details.max_offset`. |
+| `cursor` | In place of `offset`: a `next_cursor` or `prev_cursor` of an earlier page of the same search (same query, filters, sort and order), for pages past `max_offset`. Sending both is `invalid_request`; a cursor of another sort, or an edited one, is `cursor_invalid` (422). |
 
 Only **published** citations are ever searched; that is not a filter. Unknown filter keys are `unknown_filter`
 (422), listing the supported ones. Errors use the study search's envelope and codes (`invalid_request`,
-`invalid_filter_value`, `unknown_filter`, `offset_out_of_range`, `unsupported_capability` (501 on Qdrant),
-`index_not_ready` (503 before the first sync), `backend_unavailable`, `query_rejected`, `unauthorized`, `forbidden`,
+`invalid_filter_value`, `unknown_filter`, `offset_out_of_range`, `cursor_invalid`, `unsupported_capability` (501 on Qdrant),
+`index_not_ready` (503 before the first sync), `backend_unavailable`, `search_timeout` (504: no answer within
+`search_timeout_seconds`, one slow query, not an outage), `query_rejected`, `unauthorized`, `forbidden`,
 `rate_limited`).
 
 ## 2. Response
 
-`{engine, found, limit, offset, truncated, hits, applied, timing_ms}`; each hit is
+`{engine, found, limit, offset, max_offset, next_cursor, prev_cursor, hits, applied, timing_ms}`; each hit is
 `{rank, citation_id, uuid, score}` — ids only: `citation_id` is NADA's `citations.id`, and NADA reads the citation
 itself from its database. The citation index stores only `citation_id` and `uuid` in `_source`; the other fields
 are indexed for search, sorting and filtering, not stored.
+
+**Paging** works like the variable search (`variables-search-contract.md`, and `nada_ai.search.cursor`): offset pages
+for the first `max_offset` rows, then cursors (`search_after`, stateless, no expiry). `offset` is the 0-based position
+of the page's first hit (on a cursor page it comes from the cursor), and `rank` is `offset + index + 1`. `next_cursor`
+is null on the last page and `prev_cursor` on the first; every page carries them, but a client only needs them past
+`max_offset`. A cursor page does not count again: `found` is the first page's count, carried in the cursor.
+`applied.paging` is `offset` or `cursor`. The title sort key (`title_sort`) is the title's first 256 characters, so a
+cursor stays within its size limit whatever the title; a citation indexed before that cap keeps its whole title as the
+key until it is indexed again, and a cursor taken at a longer one is `cursor_invalid`. After deploying the cap, rebuild
+the citation index (below) once.
 
 `GET /info` reports `capabilities.citations_search: true` on OpenSearch.
 
@@ -64,5 +76,10 @@ does not send them (NADA serves citations from the engine its `search_engine` se
   first sync is a normal state.
 - **Lifecycle:** the citation index is independent of the study indexes. Recreating or dropping the study index does
   **not** touch it (citations do not depend on studies, and a rebuild does not re-ingest them).
+- **Recreating the citation index only:** `POST /admin/index/citations/recreate?confirm=true` (role `admin`,
+  OpenSearch only) drops it, creates it empty with the current mapping and indexes every citation again, as one job
+  (kind `recreate_citations`). For a change to the citation mapping. Shares the single-flight key of a whole-catalog
+  sync (`index_citations:all`): while one runs it answers 409 and drops nothing. NADA's Semantic › Maintenance starts
+  it ("Rebuild the citation index", `POST /api/admin/semantic/citations_index_recreate`).
 - **Index name:** `<index_name>-citations`, or `NADA_CITATIONS_INDEX_NAME`.
 - **Not tracked:** the diff/stale views and search-index state reporting still cover studies only.

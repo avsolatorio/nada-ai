@@ -41,12 +41,14 @@
       ],
       "passages": [
         {
+          "resource_id": 41,
           "page": 3,
           "total_pages": 12,
           "score": 0.52,
           "excerpt": "... poverty headcount fell between the two survey rounds ..."
         },
         {
+          "resource_id": 41,
           "page": 7,
           "total_pages": 12,
           "score": 0.47,

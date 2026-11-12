@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from nada_ai.search.backend.opensearch.mapping import FILTER_FACETS_KEY, STUDY_ALL_TEXT_FIELD, STUDY_TEXT_FIELDS
+from nada_ai.search.cursor import sort_key
 from nada_ai.search.dynamic_filters import normalize_external_filters, normalized_to_facets_map
 
 _INT_FIELDS = ("year_start", "year_end", "created", "changed", "total_views", "total_downloads", "varcount")
@@ -44,9 +45,9 @@ def study_to_source(sid: int, core_fields: dict[str, Any], filters: dict[str, An
     if all_text:
         source[STUDY_ALL_TEXT_FIELD] = all_text
     if "title" in source:
-        source["title_sort"] = source["title"]
+        source["title_sort"] = sort_key(source["title"])
     if "nation" in source:
-        source["nation_sort"] = source["nation"]
+        source["nation_sort"] = sort_key(source["nation"])
     for field in _INT_FIELDS:
         number = _as_int(core_fields.get(field))
         if number is not None:
@@ -63,19 +64,3 @@ def study_bulk_action(index: str, sid: int, core_fields: dict[str, Any], filters
         "_id": str(int(sid)),
         "_source": study_to_source(sid, core_fields, filters),
     }
-
-
-def sids_for_idnos(client: Any, studies_index: str, idnos: list[str]) -> dict[str, int]:
-    """``{idno: sid}`` for the given NADA idnos, from the study index (which stores NADA's own idno).
-
-    Chunk documents carry the record's schema idno, which can differ, so anything that must reach every chunk of
-    a study by NADA idno goes through the ``sid`` found here. Idnos with no study document are absent.
-    """
-    if not idnos:
-        return {}
-    found = client.search(
-        index=studies_index,
-        body={"size": len(idnos), "_source": ["sid", "idno"], "query": {"terms": {"idno": idnos}}},
-        ignore_unavailable=True,
-    )
-    return {hit["_source"]["idno"]: int(hit["_source"]["sid"]) for hit in found.get("hits", {}).get("hits", [])}

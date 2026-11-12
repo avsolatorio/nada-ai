@@ -23,7 +23,9 @@ from nada_ai.ingest.progress import CancelToken
 from nada_ai.nada.admin_auth import scrub_admin_credentials
 from nada_ai.search.backend.opensearch.citations import citation_bulk_action
 from nada_ai.search.backend.opensearch.client import build_client
+from nada_ai.search.backend.opensearch.index_template import put_index_template_of
 from nada_ai.search.backend.opensearch.mapping import citations_index_body, new_index_generation
+from nada_ai.search.backend.opensearch.recreate import recreate_index
 from nada_ai.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -36,7 +38,14 @@ def ensure_citations_index(client: Any, settings: Settings) -> None:
         return
     body = citations_index_body()
     body["mappings"]["_meta"] = {"generation": new_index_generation()}
+    put_index_template_of(client, settings, name)
     client.indices.create(index=name, body=body)
+
+
+def recreate_citations_index(client: Any, settings: Settings) -> str:
+    """Drop the citation index and create it empty with the current mapping (and template); returns its new generation."""
+    put_index_template_of(client, settings, settings.citations_index)
+    return recreate_index(client, settings.citations_index, citations_index_body())
 
 
 def _write_batch(client: Any, index: str, batch: list[dict[str, Any]]) -> tuple[int, list[Any]]:

@@ -32,48 +32,50 @@ def test_render_pdf_page_png_bytes(tmp_path: Path) -> None:
         render_pdf_page_png(pdf, 9, dpi=72)
 
 
-def test_demo_page_preview_endpoint(
-    tmp_discovery_data_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _use_cache_dir(tmp_discovery_data_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from ai4data.discovery import config as discovery_config
-    from ai4data.discovery.paths import get_document_cache_path, init_discovery_paths
+    from ai4data.discovery.paths import init_discovery_paths
 
     monkeypatch.setattr(discovery_config.discovery_data, "data_path", tmp_discovery_data_path)
     init_discovery_paths(tmp_discovery_data_path)
+
+
+def _cached_pdf(idno: str, resource_id: str, filesize: int, pages: int = 3) -> Path:
+    from ai4data.discovery.paths import get_document_cache_path
+
+    path = get_document_cache_path(idno, "document", resource_id=resource_id, filesize=filesize)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_minimal_pdf(path, pages=pages)
+    return path
+
+
+def test_demo_page_preview_endpoint(tmp_discovery_data_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _use_cache_dir(tmp_discovery_data_path, monkeypatch)
     idno = "TESTDOC001"
-    pdf_path = get_document_cache_path(idno, "document")
-    pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_minimal_pdf(pdf_path, pages=3)
+    _cached_pdf(idno, "7", 1000, pages=3)
 
     with TestClient(app) as client:
-        r = client.get(f"/demo/documents/{idno}/pages/1.png")
+        r = client.get(f"/demo/documents/{idno}/resources/7/pages/1.png")
         assert r.status_code == 200
         assert r.headers["content-type"] == "image/png"
         assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
 
-        missing = client.get("/demo/documents/NO_SUCH_IDNO/pages/0.png")
-        assert missing.status_code == 404
+        assert client.get("/demo/documents/NO_SUCH_IDNO/resources/7/pages/0.png").status_code == 404
+        # another PDF of the same document is not this one
+        assert client.get(f"/demo/documents/{idno}/resources/8/pages/0.png").status_code == 404
+        assert client.get(f"/demo/documents/{idno}/resources/7/pages/99.png").status_code == 400
 
-        bad_page = client.get(f"/demo/documents/{idno}/pages/99.png")
-        assert bad_page.status_code == 400
 
-
-def test_resolve_document_pdf_path_resource_id_suffix(
+def test_resolve_document_pdf_path_finds_the_resources_pdf(
     tmp_discovery_data_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from ai4data.discovery import config as discovery_config
-    from ai4data.discovery.paths import get_document_cache_path, init_discovery_paths
     from nada_ai.app.demo_preview import resolve_document_pdf_path
 
-    monkeypatch.setattr(discovery_config.discovery_data, "data_path", tmp_discovery_data_path)
-    init_discovery_paths(tmp_discovery_data_path)
-
+    _use_cache_dir(tmp_discovery_data_path, monkeypatch)
     idno = "RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1"
-    resource_id = "772"
-    pdf_path = get_document_cache_path(idno, "document", resource_id=resource_id)
-    pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_minimal_pdf(pdf_path, pages=1)
+    first = _cached_pdf(idno, "772", 3667934, pages=1)
+    second = _cached_pdf(idno, "773", 1200, pages=1)
 
-    resolved = resolve_document_pdf_path(idno)
-    assert resolved == pdf_path
-    assert resolved.name == f"document_{idno}--{resource_id}.pdf"
+    assert resolve_document_pdf_path(idno, 772) == first
+    assert resolve_document_pdf_path(idno, 773) == second
+    assert resolve_document_pdf_path(idno, 77) is None

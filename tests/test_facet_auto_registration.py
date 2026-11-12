@@ -12,7 +12,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from nada_ai.filters.facets_service import add_facet_keys, remove_facet_keys
-from nada_ai.filters.sync import auto_register_new_facet_keys, sync_filters_for_idno
+from nada_ai.filters.sync import auto_register_new_facet_keys, sync_filters_for_sid
 from nada_ai.search.dynamic_filters import load_dynamic_facet_keys, load_excluded_facet_keys
 from nada_ai.settings import Settings
 
@@ -25,6 +25,7 @@ def _settings(tmp_path, **overrides) -> Settings:
 # ---------------------------------------------------------------------------
 # auto_register_new_facet_keys
 # ---------------------------------------------------------------------------
+
 
 def test_auto_register_promotes_new_key(tmp_path):
     settings = _settings(tmp_path, search_backend="opensearch")
@@ -90,6 +91,7 @@ def test_auto_register_no_qdrant_call_when_nothing_new(mock_client_fn, tmp_path)
 # remove/add round-trip on the excluded (deny) list
 # ---------------------------------------------------------------------------
 
+
 def test_remove_then_add_clears_exclusion(tmp_path):
     settings = _settings(tmp_path, search_backend="opensearch")
     add_facet_keys(settings, ["some_key"])
@@ -114,26 +116,27 @@ def test_unrelated_registry_write_preserves_excluded_list(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# sync_filters_for_idno end-to-end: same-study update introduces a new key
+# sync_filters_for_sid end-to-end: same-study update introduces a new key
 # ---------------------------------------------------------------------------
 
+
 @patch("nada_ai.filters.sync.qdrant_client")
-def test_sync_registers_new_key_then_updates_same_idno_with_more_keys(mock_client_fn, tmp_path):
+def test_sync_registers_new_key_then_updates_same_study_with_more_keys(mock_client_fn, tmp_path):
     """Simulates NADA sending updated filters for the same study across two
     syncs: first sync has one key, second sync adds a brand-new key. Both
     should register/index correctly, and the second sync's full-replace write
-    should reflect the updated (superset) filter set for that idno."""
+    should reflect the updated (superset) filter set for that study."""
     client = MagicMock()
     mock_client_fn.return_value = client
     client.count.return_value = MagicMock(count=1)
     settings = _settings(tmp_path, search_backend="qdrant")
 
-    res1 = sync_filters_for_idno(settings, "DOC-1", {"countries": [181]})
+    res1 = sync_filters_for_sid(settings, 5, {"countries": [181]})
     assert res1["found"] is True
     assert "brand_new_topic" not in load_dynamic_facet_keys(settings)
 
-    # NADA now returns updated filters for the same idno, including a new key
-    res2 = sync_filters_for_idno(settings, "DOC-1", {"countries": [181], "brand_new_topic": ["health"]})
+    # NADA now returns updated filters for the same study, including a new key
+    res2 = sync_filters_for_sid(settings, 5, {"countries": [181], "brand_new_topic": ["health"]})
     assert res2["found"] is True
     assert "brand_new_topic" in load_dynamic_facet_keys(settings)
 

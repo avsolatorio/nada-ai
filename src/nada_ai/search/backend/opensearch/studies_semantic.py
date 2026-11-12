@@ -79,18 +79,35 @@ def knn_body(vector: list[float], filter_clauses: list[dict[str, Any]], policy: 
             "inner_hits": {
                 "name": "passages",
                 "size": policy.passages_per_study,
-                "_source": [f"{METADATA_OBJECT_KEY}.qfield", f"{METADATA_OBJECT_KEY}.doc_meta", "page_content"],
+                "_source": [
+                    f"{METADATA_OBJECT_KEY}.qfield",
+                    f"{METADATA_OBJECT_KEY}.doc_meta",
+                    f"{METADATA_OBJECT_KEY}.resource_id",
+                    "page_content",
+                ],
             },
         },
     }
 
 
-def passages_from_inner_hits(inner_hits: list[dict[str, Any]], policy: StudyPolicy) -> list[dict[str, Any]]:
-    """Matching pages of a document study, best first: ``{page (1-based), total_pages?, score, excerpt?}``.
+def _resource_id(meta: dict[str, Any]) -> int | None:
+    """The NADA resource (the PDF) a passage chunk was read from; ``None`` when it has no usable one."""
+    try:
+        resource_id = int(str(meta.get("resource_id")).strip())
+    except ValueError:
+        return None
+    return resource_id if resource_id > 0 else None
 
-    Only passage chunks carry a page; the best score per page wins.
+
+def passages_from_inner_hits(inner_hits: list[dict[str, Any]], policy: StudyPolicy) -> list[dict[str, Any]]:
+    """Matching pages of a document study, best first:
+    ``{resource_id, page (1-based), total_pages?, score, excerpt?}``.
+
+    Only passage chunks carry a page; the best score per page of each PDF (``resource_id``) wins. A passage without a
+    resource cannot be opened in the catalog and is left out: it was indexed before page chunks recorded their PDF,
+    and the study needs indexing again.
     """
-    best: dict[int, dict[str, Any]] = {}
+    best: dict[tuple[int, int], dict[str, Any]] = {}
     for hit in inner_hits:
         source = hit.get("_source") or {}
         meta = source.get(METADATA_OBJECT_KEY) or {}
@@ -98,17 +115,21 @@ def passages_from_inner_hits(inner_hits: list[dict[str, Any]], policy: StudyPoli
         page_index = doc_meta.get("page")
         if meta.get("qfield") != "passages" or not isinstance(page_index, int) or page_index < 0:
             continue
-        score = float(hit.get("_score") or 0.0)
-        if page_index in best and best[page_index]["score"] >= score:
+        resource_id = _resource_id(meta)
+        if resource_id is None:
             continue
-        passage: dict[str, Any] = {"page": page_index + 1, "score": round(score, 4)}
+        key = (resource_id, page_index)
+        score = float(hit.get("_score") or 0.0)
+        if key in best and best[key]["score"] >= score:
+            continue
+        passage: dict[str, Any] = {"resource_id": resource_id, "page": page_index + 1, "score": round(score, 4)}
         if isinstance(doc_meta.get("total_pages"), int) and doc_meta["total_pages"] > 0:
             passage["total_pages"] = doc_meta["total_pages"]
         excerpt = _WHITESPACE.sub(" ", str(source.get("page_content") or "")).strip()
         if excerpt:
             passage["excerpt"] = excerpt[: policy.excerpt_chars]
-        best[page_index] = passage
-    return sorted(best.values(), key=lambda p: (-p["score"], p["page"]))
+        best[key] = passage
+    return sorted(best.values(), key=lambda p: (-p["score"], p["resource_id"], p["page"]))
 
 
 def parse_semantic(response: dict[str, Any], policy: StudyPolicy) -> list[Ranked]:

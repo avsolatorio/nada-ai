@@ -121,7 +121,20 @@ def test_chunk_index_has_flat_filter_facets_and_no_filter_fields() -> None:
     assert "filter_fields" not in metadata
     facets = metadata["filter_facets"]["properties"]
     assert facets["countries"] == {"type": "integer"}
-    assert facets["dataset_type"] == {"type": "keyword"}
+    assert facets["dataset_type"] == {"type": "keyword", "eager_global_ordinals": True}
+    assert facets["form_model"] == {"type": "keyword"}
+    assert facets["topics"] == {"type": "integer"}
+    assert facets["ts_databases"] == {"type": "keyword", "eager_global_ordinals": True}
+
+
+def test_chunk_index_maps_only_page_fields_of_pdf_metadata() -> None:
+    # PDF metadata varies per file (moddate "D:20160715143457" vs ISO); a dynamic guess would reject later PDFs
+    metadata = index_body(4)["mappings"]["properties"]["metadata"]["properties"]
+    assert metadata["doc_meta"] == {
+        "type": "object",
+        "dynamic": False,
+        "properties": {"page": {"type": "integer"}, "total_pages": {"type": "integer"}},
+    }
 
 
 def test_study_index_is_strict_and_typed() -> None:
@@ -237,6 +250,8 @@ def test_ensure_studies_index_creates_once() -> None:
 
 
 class _Embedding:
+    input_cap = 1024
+
     def embedding_dimension(self) -> int:
         return 4
 
@@ -349,7 +364,8 @@ def test_writer_installs_every_index_template_when_enabled() -> None:
     settings = Settings(index_name="chunks", opensearch_put_composable_index_template=True)
     client = _client()
     _run_writer(settings, client, recreate=False, bulk_results=[(0, []), (0, [])])
-    assert client.indices.put_index_template.call_count == 4
+    installed = {c.kwargs["name"] for c in client.indices.put_index_template.call_args_list}
+    assert len(installed) == 4  # chunks, studies, variables, citations (creating an index installs its own again)
 
 
 def test_writer_run_bulk_loads_no_model_when_embeddings_are_disabled() -> None:
@@ -506,27 +522,41 @@ def test_stored_vectors_are_looked_up_when_the_index_holds_the_configured_models
     writer, client = _writer_and_client("m1")
     client.mget.return_value = {
         "docs": [
-            {"_id": "a", "found": True, "_source": {"embedding": [1.0, 2.0]}},
+            {"_id": "a", "found": True, "_source": {"embedding": [1.0, 2.0], "embedding_input_cap": 1024}},
             {"_id": "b", "found": False},
             {"_id": "c", "found": True, "_source": {}},
         ]
     }
-    lookup = writer._stored_vector_lookup(client, force=False, recreated=False)
+    lookup = writer._stored_vector_lookup(client, force=False, recreated=False, input_cap=1024)
     assert lookup(["a", "b", "c"]) == {"a": [1.0, 2.0]}
+    assert client.mget.call_args.kwargs["_source_includes"] == ["embedding", "embedding_input_cap"]
+
+
+def test_a_vector_made_with_another_input_cap_or_none_recorded_is_embedded_again():
+    writer, client = _writer_and_client("m1")
+    client.mget.return_value = {
+        "docs": [
+            {"_id": "same", "found": True, "_source": {"embedding": [1.0], "embedding_input_cap": 1024}},
+            {"_id": "other", "found": True, "_source": {"embedding": [2.0], "embedding_input_cap": 512}},
+            {"_id": "unrecorded", "found": True, "_source": {"embedding": [3.0]}},  # stored before the cap was
+        ]
+    }
+    lookup = writer._stored_vector_lookup(client, force=False, recreated=False, input_cap=1024)
+    assert lookup(["same", "other", "unrecorded"]) == {"same": [1.0]}
 
 
 def test_stored_vectors_are_not_reused_for_a_forced_run_a_new_index_or_another_model():
     writer, client = _writer_and_client("m1")
-    assert writer._stored_vector_lookup(client, force=True, recreated=False) is None
-    assert writer._stored_vector_lookup(client, force=False, recreated=True) is None
+    assert writer._stored_vector_lookup(client, force=True, recreated=False, input_cap=1024) is None
+    assert writer._stored_vector_lookup(client, force=False, recreated=True, input_cap=1024) is None
     other, other_client = _writer_and_client("some-other-model")
-    assert other._stored_vector_lookup(other_client, force=False, recreated=False) is None
+    assert other._stored_vector_lookup(other_client, force=False, recreated=False, input_cap=1024) is None
 
 
 def test_stored_vectors_are_not_looked_up_for_a_server_side_embedding_backend():
     writer, client = _writer_and_client("m1")
     writer._settings = writer._settings.model_copy(update={"embedding_backend": "opensearch_ml"})
-    assert writer._stored_vector_lookup(client, force=False, recreated=False) is None
+    assert writer._stored_vector_lookup(client, force=False, recreated=False, input_cap=None) is None
 
 
 def test_a_current_mapping_has_no_outdated_fields() -> None:

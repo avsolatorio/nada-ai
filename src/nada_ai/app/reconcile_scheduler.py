@@ -24,6 +24,13 @@ backoff. What the gate could not fix decides what happens next:
 It can be paused (``POST /admin/scheduler/pause``): it finishes the item in hand, then starts nothing until resumed.
 The pause is a control file next to the lock, so it survives a restart and any process can set it.
 
+An item that kills the process (out of memory, a crash in native code) is never acked, so it would be fetched and
+kill the process again on every start, holding up the queue behind it. Before each item the scheduler writes it to an
+in-flight file next to the lock and removes it once the item returns (or the scheduler is stopped); a file still there
+at start means the process died with that item in hand. After ``ITEM_DEATH_LIMIT`` such deaths in a row on the same
+item (same queue row, same change) it is acked ``failed`` before anything else, so it shows among NADA's failed
+changes and the queue moves on.
+
 Only one process runs it: the first to lock ``reconcile_search_index_lock_path``. It writes its state next to the lock
 on every heartbeat, so any process can report it (``GET /admin/scheduler/status``). A crash restarts the loop after a
 growing wait (the watchdog); a heartbeat that stops moving shows as ``stuck``.
@@ -50,11 +57,11 @@ from nada_ai.ingest.search_index_sync import (
     AckRefused,
     SearchIndexQueueItem,
     ack_batch,
-    fetch_studies_by_sids,
     get_status,
     list_queue,
     process_item,
 )
+from nada_ai.ingest.study_sources import fetch_studies_by_sids
 from nada_ai.nada import gate as nada_gate
 from nada_ai.search.backend.opensearch.generation import forget_index_generation
 from nada_ai.settings import Settings
@@ -79,6 +86,9 @@ ACCESS_DENIED_PAUSE_SECONDS = 1800
 #: Pause when ``ack_failure_limit`` acks fail in a row; doubled each time it trips again, up to the maximum.
 ACK_FAILURE_PAUSE_SECONDS = 1800
 ACK_FAILURE_PAUSE_MAX_SECONDS = 4 * 3600
+#: Deaths of the process with the same item in hand (see the module docstring) before that item is acked failed. More
+#: than one: a restart or a kill while an item was in hand for some other reason must not fail a good item.
+ITEM_DEATH_LIMIT = 2
 #: The longest Retry-After the scheduler waits out (a far-off date in it must not park the scheduler for good).
 RETRY_AFTER_PAUSE_MAX_SECONDS = 24 * 3600
 _REFUSAL_REASONS = {
@@ -170,6 +180,10 @@ class Scheduler:
         self._lock_path = Path(self.settings.reconcile_search_index_lock_path or "config/search_index_scheduler.lock")
         self._last_logged_pause: str | None = None
         self._generation_rechecked = False
+        #: deaths of the process with an item in hand, by (queue id, changed), from the in-flight file found at start
+        self._item_deaths: dict[tuple[int, int], int] = {}
+        #: the queue id of an item acked failed for its deaths: its in-flight file stays until NADA records that ack
+        self._death_ack_pending: int | None = None
 
     # -- start / stop -----------------------------------------------------------------------------------------------
 
@@ -193,6 +207,7 @@ class Scheduler:
             return
         self.st.running_here = True
         self.st.owner = {"pid": os.getpid(), "host": socket.gethostname(), "started_at": int(_now())}
+        self._check_inflight()
         self._task = asyncio.create_task(self._watchdog(), name="search-index-scheduler")
 
     async def stop(self) -> None:
@@ -231,6 +246,72 @@ class Scheduler:
     @property
     def _control_path(self) -> Path:
         return self._lock_path.with_suffix(".control.json")
+
+    @property
+    def _inflight_path(self) -> Path:
+        return self._lock_path.with_suffix(".inflight.json")
+
+    # -- an item that kills the process -----------------------------------------------------------------------------
+
+    def _check_inflight(self) -> None:
+        """At start, under the lock: an in-flight file left behind means the last process died with that item in hand.
+        One more death for it; at ``ITEM_DEATH_LIMIT`` it is acked failed first thing (it would only kill this
+        process too), otherwise it is tried again with its count kept.
+
+        At the limit the file is kept until NADA takes the failed ack (see ``_send_acks``): the ack is held in memory
+        only, so a restart before it is sent finds the file again and acks it failed again, rather than starting the
+        item's count over. Nothing overwrites the file meanwhile, since the loop sends unsent acks before any item."""
+        try:
+            record = json.loads(self._inflight_path.read_text())
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError) as e:
+            logger.warning("search-index scheduler: unreadable in-flight file %s removed: %s", self._inflight_path, e)
+            self._inflight_path.unlink(missing_ok=True)
+            return
+        key = (int(record["queue_id"]), int(record["changed"]))
+        deaths = int(record.get("deaths") or 0) + 1
+        what = f"{record.get('change_class')} {record.get('object_type')} {record.get('object_id')} ({record.get('object_key')})"
+        if deaths < ITEM_DEATH_LIMIT:
+            self._inflight_path.unlink(missing_ok=True)
+            logger.warning("search-index scheduler: the last process died while processing %s; trying it again", what)
+            self._item_deaths[key] = deaths
+            return
+        self._death_ack_pending = key[0]
+        message = (
+            f"NADA-AI stopped while processing this item {deaths} times in a row (the process was killed, e.g. out of "
+            "memory), so it is not tried again. Retry it once the cause is fixed."
+        )
+        logger.error("search-index scheduler: %s failed: %s", what, message)
+        self.st.last_error = {
+            "at": int(_now()),
+            "kind": "item",
+            "object_id": record.get("object_id"),
+            "object_key": record.get("object_key"),
+            "message": message,
+        }
+        self.st.unsent_acks.append({"id": key[0], "result": "failed", "changed": key[1], "error": message})
+
+    def _write_inflight(self, item: SearchIndexQueueItem) -> None:
+        record = {
+            "queue_id": item.id,
+            "changed": item.changed,
+            "object_type": item.object_type,
+            "object_id": item.object_id,
+            "object_key": item.object_key,
+            "change_class": item.change_class,
+            "deaths": self._item_deaths.get((item.id, item.changed), 0),
+        }
+        try:
+            self._inflight_path.write_text(json.dumps(record))
+        except OSError as e:
+            logger.warning("could not write the scheduler in-flight file: %s", e)
+
+    def _clear_inflight(self) -> None:
+        try:
+            self._inflight_path.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("could not remove the scheduler in-flight file: %s", e)
 
     # -- pause / resume ---------------------------------------------------------------------------------------------
 
@@ -543,6 +624,7 @@ class Scheduler:
             self.st.current = {
                 "queue_id": item.id,
                 "object_type": item.object_type,
+                "object_id": item.object_id,
                 "object_key": item.object_key,
                 "change_class": item.change_class,
                 "started_at": int(_now()),
@@ -552,6 +634,7 @@ class Scheduler:
                 acks.append(self._failed(item, prefailed[item.object_id]))
             else:
                 started = _now()
+                self._write_inflight(item)
                 try:
                     action = await asyncio.to_thread(
                         process_item,
@@ -560,11 +643,16 @@ class Scheduler:
                         extract=extracts.get(item.object_id),
                         embedding=self.s.embedding,
                     )
+                except asyncio.CancelledError:
+                    self._clear_inflight()  # stopped (a shutdown), not killed by the item
+                    raise
                 except nada_gate.NadaFirewallBlocked as e:
+                    self._clear_inflight()
                     self._pause_for(e)
                     stopped = True
                     break
                 except Exception as e:  # noqa: BLE001 - classified below: NADA's trouble, or the item's
+                    self._clear_inflight()
                     trouble = isinstance(e, nada_gate.NadaTrouble) or (
                         gate is not None and gate.trouble_since(started) is not None
                     )
@@ -572,9 +660,16 @@ class Scheduler:
                         self._pause_unavailable(str(e))
                         stopped = True
                         break
-                    logger.warning("search-index item failed (%s %s): %s", item.change_class, item.object_key, e)
+                    logger.warning(
+                        "search-index item failed (%s %s %s): %s",
+                        item.change_class,
+                        item.object_type,
+                        item.object_id,
+                        e,
+                    )
                     acks.append(self._failed(item, str(e)))
                 else:
+                    self._clear_inflight()
                     # a delete too: NADA takes indexed or failed only, and handles a delete row by its change class
                     acks.append({"id": item.id, "result": "indexed", "changed": item.changed})
                     self.st.pass_[action] = self.st.pass_.get(action, 0) + 1
@@ -591,7 +686,13 @@ class Scheduler:
 
     def _failed(self, item: SearchIndexQueueItem, error: str) -> dict[str, Any]:
         self.st.pass_["failed"] = self.st.pass_.get("failed", 0) + 1
-        self.st.last_error = {"at": int(_now()), "kind": "item", "object_key": item.object_key, "message": error[:500]}
+        self.st.last_error = {
+            "at": int(_now()),
+            "kind": "item",
+            "object_id": item.object_id,
+            "object_key": item.object_key,
+            "message": error[:500],
+        }
         return {"id": item.id, "result": "failed", "changed": item.changed, "error": error}
 
     async def _send_acks(self, acks: list[dict[str, Any]], exclude: set[int], *, resend: bool = False) -> bool:
@@ -636,9 +737,14 @@ class Scheduler:
                 1 for r in results if r.get("applied") or r.get("error") == "QUEUE_NOT_FOUND"
             )
             for result in results:
-                if not result.get("applied") and result.get("error") not in ("QUEUE_CHANGED", "QUEUE_NOT_FOUND"):
+                taken = result.get("applied") or result.get("error") in ("QUEUE_CHANGED", "QUEUE_NOT_FOUND")
+                if not taken:
                     logger.error("NADA did not record ack %s: %s", result.get("id"), result.get("error"))
                     exclude.add(int(result.get("id") or 0))
+                elif self._death_ack_pending is not None and int(result.get("id") or 0) == self._death_ack_pending:
+                    # NADA has the failed ack of the item that killed the process (or the row is gone or changed)
+                    self._death_ack_pending = None
+                    self._clear_inflight()
         if resend:
             self.st.unsent_acks = []
         return True

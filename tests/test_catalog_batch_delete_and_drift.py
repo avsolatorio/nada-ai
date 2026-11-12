@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 from starlette.testclient import TestClient
@@ -11,115 +12,112 @@ from starlette.testclient import TestClient
 from nada_ai.app import catalog_admin as catalog_module
 from nada_ai.app.jobs import JobRegistry
 from nada_ai.app.main import app, state
-from nada_ai.ingest.service import delete_by_idnos_op
+from nada_ai.ingest.service import delete_by_sids_op
 
 
 def _fresh_state() -> None:
     state.jobs = JobRegistry()
 
 
-def test_batch_index_validates_idnos(monkeypatch):
+def test_batch_index_validates_sids(monkeypatch):
     monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
-        r = client.post("/admin/catalog/index", json={"idnos": ["   ", ""], "metadata_type": "indicator"})
-    assert r.status_code == 400
+        assert client.post("/admin/catalog/index", json={"sids": []}).status_code == 422
+        assert client.post("/admin/catalog/index", json={"sids": ["WB_X"]}).status_code == 422
+        assert client.post("/admin/catalog/index", json={"sids": [0]}).status_code == 422
 
 
 def test_batch_index_singleflight_and_passes_all_options(monkeypatch):
-    """This is the sole batch-by-idnos route (the former, duplicate
-    /admin/ingest/by-ids was removed) — assert it still single-flights on
-    (metadata_type, idnos) and still forwards recreate_index/show_progress_bar/
-    buffer_size through to index_ids_op, same as the route it replaced."""
+    """The batch-by-ids route single-flights on its studies and forwards recreate_index/show_progress_bar/
+    buffer_size through to index_sids_op."""
     monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     gate = threading.Event()
     captured: dict = {}
 
-    def slow(settings, idnos, metadata_type, force, recreate_index, show_progress_bar, buffer_size, embedding=None):
-        captured["args"] = (idnos, metadata_type, force, recreate_index, show_progress_bar, buffer_size)
+    def slow(settings, sids, force, recreate_index, show_progress_bar, buffer_size, embedding=None):
+        captured["args"] = (sids, force, recreate_index, show_progress_bar, buffer_size)
         gate.wait(timeout=5)
-        return {"indexed": 0, "errors": [], "requested": len(idnos), "metadata_type": metadata_type, "index": "x"}
+        return {"indexed": 0, "errors": [], "requested": len(sids), "index": "x"}
 
-    monkeypatch.setattr(catalog_module, "index_ids_op", slow)
+    monkeypatch.setattr(catalog_module, "index_sids_op", slow)
 
     with TestClient(app) as client:
         _fresh_state()
         r1 = client.post(
             "/admin/catalog/index",
-            json={
-                "idnos": ["a", "b"],
-                "metadata_type": "indicator",
-                "recreate_index": True,
-                "show_progress_bar": True,
-                "buffer_size": 250,
-            },
+            json={"sids": [2, 1, 2], "recreate_index": True, "show_progress_bar": True, "buffer_size": 250},
         )
         assert r1.status_code == 202
-        r2 = client.post("/admin/catalog/index", json={"idnos": ["a", "b"], "metadata_type": "indicator"})
-        assert r2.status_code == 409
+        r2 = client.post("/admin/catalog/index", json={"sids": [1, 2]})
+        assert r2.status_code == 409  # the same set of studies, whatever the order
         gate.set()
+        for _ in range(200):  # the job warms the embedding model before it calls the op
+            if client.get(f"/jobs/{r1.json()['id']}").json()["status"] in {"succeeded", "failed", "cancelled"}:
+                break
+            time.sleep(0.05)
 
-    assert captured["args"] == (["a", "b"], "indicator", False, True, True, 250)
+    assert captured["args"] == ([2, 1], False, True, True, 250)
 
 
-def test_batch_delete_validates_idnos(monkeypatch):
+def test_batch_delete_validates_sids(monkeypatch):
     monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     with TestClient(app) as client:
         _fresh_state()
-        r = client.post("/admin/catalog/delete", json={"idnos": ["   ", ""]})
-    assert r.status_code == 400
+        r = client.post("/admin/catalog/delete", json={"sids": ["A"]})
+    assert r.status_code == 422
 
 
-def test_batch_delete_calls_op_with_all_idnos(monkeypatch):
+def test_batch_delete_calls_op_with_all_sids(monkeypatch):
     monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
     captured: dict = {}
 
-    def fake_op(settings, idnos):
-        captured["idnos"] = idnos
-        return {"backend": "qdrant", "collection": "x", "idnos": idnos, "operation": "completed"}
+    def fake_op(settings, sids):
+        captured["sids"] = sids
+        return {"backend": "qdrant", "collection": "x", "sids": sids, "operation": "completed"}
 
-    monkeypatch.setattr(catalog_module, "delete_by_idnos_op", fake_op)
+    monkeypatch.setattr(catalog_module, "delete_by_sids_op", fake_op)
 
     with TestClient(app) as client:
         _fresh_state()
-        r = client.post("/admin/catalog/delete", json={"idnos": ["A", " B ", "C", ""]})
+        r = client.post("/admin/catalog/delete", json={"sids": [3, 1, 3, 2]})
 
     assert r.status_code == 200
-    assert captured["idnos"] == ["A", "B", "C"]
+    assert captured["sids"] == [3, 1, 2]
     assert r.json()["operation"] == "completed"
 
 
 def test_batch_delete_error_path_returns_503(monkeypatch):
     monkeypatch.setenv("NADA_ADMIN_AUTH_DISABLED", "true")
 
-    def failing_op(settings, idnos):
+    def failing_op(settings, sids):
         raise RuntimeError("backend down")
 
-    monkeypatch.setattr(catalog_module, "delete_by_idnos_op", failing_op)
+    monkeypatch.setattr(catalog_module, "delete_by_sids_op", failing_op)
 
     with TestClient(app) as client:
         _fresh_state()
-        r = client.post("/admin/catalog/delete", json={"idnos": ["A"]})
+        r = client.post("/admin/catalog/delete", json={"sids": [1]})
 
     assert r.status_code == 503
 
 
-def test_delete_by_idnos_op_dispatches_by_backend(monkeypatch):
-    """delete_by_idnos_op must route to the qdrant or opensearch batch helper by settings.search_backend."""
+def test_delete_by_sids_op_dispatches_by_backend(monkeypatch):
+    """delete_by_sids_op must route to the qdrant or opensearch helper by settings.search_backend."""
     import nada_ai.ingest.service as service_module
 
     calls = []
-    monkeypatch.setattr(service_module, "_delete_qdrant_batch", lambda s, idnos: calls.append(("qdrant", idnos)))
+    monkeypatch.setattr(service_module, "_delete_qdrant_by_sids", lambda s, sids: calls.append(("qdrant", sids)))
     monkeypatch.setattr(
-        service_module, "_delete_opensearch_batch", lambda s, idnos: calls.append(("opensearch", idnos))
+        service_module, "_delete_opensearch_by_sids", lambda s, sids: calls.append(("opensearch", sids))
     )
 
     class FakeSettings:
         search_backend = "qdrant"
         report_search_index_state_enabled = False
 
-    delete_by_idnos_op(FakeSettings(), ["X", "Y"])
-    assert calls == [("qdrant", ["X", "Y"])]
+    delete_by_sids_op(FakeSettings(), [1, 2])
+    assert calls == [("qdrant", [1, 2])]
 
     calls.clear()
 
@@ -127,8 +125,8 @@ def test_delete_by_idnos_op_dispatches_by_backend(monkeypatch):
         search_backend = "opensearch"
         report_search_index_state_enabled = False
 
-    delete_by_idnos_op(FakeSettingsOS(), ["Z"])
-    assert calls == [("opensearch", ["Z"])]
+    delete_by_sids_op(FakeSettingsOS(), [3])
+    assert calls == [("opensearch", [3])]
 
 
 def test_embedding_drift_no_model_loaded(monkeypatch):

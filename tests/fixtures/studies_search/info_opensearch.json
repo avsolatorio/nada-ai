@@ -7,7 +7,7 @@
     "semantic": true,
     "hybrid": true,
     "browse": true,
-    "facets": false,
+    "facets": true,
     "variables_search": true,
     "citations_search": true
   },
@@ -22,6 +22,11 @@
       "key": "countries",
       "type": "int_list",
       "description": "Country ids; any-of"
+    },
+    {
+      "key": "regions",
+      "type": "int_list",
+      "description": "Region ids (of the study's countries); any-of"
     },
     {
       "key": "year_from",
@@ -59,6 +64,16 @@
       "description": "Study tags; any-of"
     },
     {
+      "key": "topics",
+      "type": "int_list",
+      "description": "Topic ids; any-of"
+    },
+    {
+      "key": "databases",
+      "type": "string_list",
+      "description": "Timeseries database idnos; any-of"
+    },
+    {
       "key": "facets",
       "type": "facet_map",
       "description": "User-defined facets: name -> term ids (any-of per name)"
@@ -92,7 +107,11 @@
     "max_limit": 100,
     "max_offset": 10000,
     "semantic_window": 50,
-    "max_query_length": 500
+    "max_query_length": 500,
+    "variables_max_offset": 1000,
+    "citations_max_offset": 10000,
+    "variables_count_cap": 20000,
+    "search_timeout_seconds": 5.0
   },
   "index": {
     "name": "nada-metadata",

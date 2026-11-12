@@ -19,8 +19,8 @@ Queue item shape (``SearchIndexQueueItem`` in the spec)::
     {
       "id": 123,                    # queue row id — used for ack
       "object_type": "survey",      # or "citation" (not handled here)
-      "object_id": 456,             # NADA's internal numeric id
-      "object_key": "WLD_2021_...", # the study idno (what we index by)
+      "object_id": 456,             # NADA's internal id (sid / citation id): what we index by
+      "object_key": "WLD_2021_...", # the study idno (informative only: NADA reuses idnos)
       "change_class": "upsert_full" | "upsert_partial" | "variables" | "delete",
       "status": "pending" | "failed",
       "attempts": 0,
@@ -29,16 +29,11 @@ Queue item shape (``SearchIndexQueueItem`` in the spec)::
       "fetch_document": true        # false for deletes (tombstone, no document)
     }
 
-The queue item does **not** carry NADA's ``dataset_type`` (survey, geospatial,
-timeseries, document, table, image, script, video, timeseriesdb) — only
-``object_key``/idno. Since ``nada_ai.ingest`` needs an explicit
-``metadata_type`` (indicator, indicator-db, document, geospatial, microdata,
-table, script, image, video — see
-``ai4data.discovery.metadata.handler.MetadataLoader``) to know which loader to
-use, this module looks up each new/changed idno's ``dataset_type`` via the
-``search-metadata-extract`` API and maps it. Items whose ``dataset_type`` has
-no known mapping are acked as ``failed`` with a clear reason rather than
-guessed at or silently dropped — that keeps them visible in NADA's
+Every study is fetched, indexed, updated and deleted by ``object_id`` (see
+``ingest.study_sources``). Its ingest type comes from the ``dataset_type`` of
+its extract record; a study whose ``dataset_type`` has no known mapping is
+acked as ``failed`` with a clear reason rather than guessed at or silently
+dropped — that keeps it visible in NADA's
 ``/admin/search-index/queue?status=failed`` for a human to resolve, instead of
 retrying forever or corrupting the index with a wrong type.
 """
@@ -49,7 +44,6 @@ import logging
 from collections.abc import Callable
 from typing import Any, Literal
 
-import ai4data.discovery.catalog.extract as catalog_extract
 import httpx
 from ai4data.discovery.config import metadata_catalog
 from pydantic import BaseModel
@@ -57,11 +51,11 @@ from pydantic import BaseModel
 from nada_ai.ingest.progress import CancelToken
 from nada_ai.ingest.service import (
     _attribute_write_error,
-    _error_by_idno,
-    delete_by_idno_op,
-    delete_by_idnos_op,
-    index_ids_op,
+    _error_by_sid,
+    delete_by_sids_op,
+    index_sids_op,
 )
+from nada_ai.ingest.study_sources import fetch_studies_by_sids, metadata_type_of
 from nada_ai.nada import gate as nada_gate
 from nada_ai.nada.admin_auth import resolve_admin_cookies, resolve_admin_headers
 from nada_ai.search.backend.opensearch.generation import index_generation
@@ -71,21 +65,6 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT = 30.0
 _USER_AGENT = "nada-ai-search-index-sync/1.0"
-
-#: NADA dataset_type -> nada_ai metadata_type. Anything not listed here has no
-#: ingest path yet and is acked as failed rather than guessed at.
-_DATASET_TYPE_TO_METADATA_TYPE: dict[str, str] = {
-    "timeseries": "indicator",
-    "timeseriesdb": "indicator-db",
-    "timeseries-db": "indicator-db",
-    "document": "document",
-    "geospatial": "geospatial",
-    "survey": "microdata",
-    "table": "table",
-    "script": "script",
-    "image": "image",
-    "video": "video",
-}
 
 
 class SearchIndexSyncError(RuntimeError):
@@ -105,7 +84,8 @@ class SearchIndexQueueItem(BaseModel):
     id: int
     object_type: Literal["survey", "citation"]
     object_id: int
-    object_key: str
+    #: the study's idno / citation's uuid: informative only (the id is the key)
+    object_key: str | None = None
     change_class: Literal["upsert_full", "upsert_partial", "variables", "delete"]
     status: Literal["pending", "failed"]
     attempts: int = 0
@@ -144,9 +124,10 @@ class QueuePage(BaseModel):
 
 
 class DiffItem(BaseModel):
-    idno: str
-    type: str | None = None  # only present on diff_missing; NADA's surveys.type for this idno
-    last_error: str | None = None  # the reported error, if this idno's last attempt failed
+    object_id: int  # the study's sid (citation's id): the key
+    idno: str | None = None  # informative only
+    type: str | None = None  # NADA's surveys.type of the study
+    last_error: str | None = None  # the reported error, if the study's last attempt failed
 
 
 class ObjectTypeSummary(BaseModel):
@@ -307,36 +288,6 @@ def ack_batch(settings: Settings, acks: list[dict[str, Any]]) -> list[dict[str, 
     return list(resp.json().get("results") or [])
 
 
-def fetch_studies_by_sids(
-    settings: Settings, sids: list[int], *, include_metadata: bool = False, include_resources: bool = False
-) -> dict[str, Any]:
-    """Extract records of these studies in one request: ``{studies, missing, errors}`` (see NADA's
-    ``GET search-metadata-extract/studies?sids=``). ``include_metadata=False`` sends core fields and filters only;
-    ``include_metadata`` with ``include_resources`` is the full record indexing reads."""
-    if not sids:
-        return {"studies": [], "missing": [], "errors": []}
-    extract_base = (settings.metadata_extract_base_url or catalog_extract.extract_base_url() or "").rstrip("/")
-    if not extract_base:
-        raise SearchIndexSyncError("No metadata-extract base URL configured")
-    with _client(settings) as client:
-        resp = client.get(
-            f"{extract_base}/studies",
-            params={
-                "sids": ",".join(str(i) for i in sids),
-                "include_metadata": "1" if include_metadata else "0",
-                "include_admin_metadata": "1" if include_metadata else "0",
-                "include_resources": "1" if include_resources else "0",
-            },
-        )
-        resp.raise_for_status()
-    data = resp.json()
-    return {
-        "studies": list(data.get("studies") or []),
-        "missing": [int(i) for i in data.get("missing") or []],
-        "errors": list(data.get("errors") or []),
-    }
-
-
 def trigger_sync(settings: Settings, *, object_type: str = "all", refresh_indexed: bool = False) -> dict[str, Any]:
     """Ask NADA to queue what this index needs to match the catalog (``POST /admin/search-index/sync``)."""
     params = {"object_type": object_type, "refresh_indexed": "1" if refresh_indexed else "0"}
@@ -372,7 +323,8 @@ STATE_OBJECT_TYPE_SURVEY = "survey"
 def report_state_bulk(settings: Settings, items: list[dict[str, Any]]) -> dict[str, Any]:
     """Best-effort: report indexing/deletion outcomes to NADA's search_index_state.
 
-    ``items``: ``[{"object_type": "survey", "object_key": idno, "status": "indexed"|"failed"|"deleted", "error": str|None}, ...]``.
+    ``items``: ``[{"object_type": "survey", "object_id": sid, "object_key": idno (optional), "status":
+    "indexed"|"failed"|"deleted", "error": str|None}, ...]`` — keyed by ``object_id``.
     ``error`` is optional and only meaningful (and only stored by NADA) when
     ``status == "failed"`` — the message from whatever raised, for a human
     checking the diff dashboard later without digging through logs.
@@ -453,25 +405,6 @@ def list_diff_stale(
     return DiffPage.model_validate(resp.json())
 
 
-def lookup_metadata_type(settings: Settings, idno: str) -> str | None:
-    """Resolve NADA's dataset_type for idno and map it to a nada_ai metadata_type.
-
-    The dataset type is read from ``study["filters"]["dataset_type"]`` in the metadata extract.
-    """
-    extract_base = settings.metadata_extract_base_url or catalog_extract.extract_base_url()
-    kwargs: dict[str, Any] = {
-        "headers": resolve_admin_headers(user_agent=_USER_AGENT),
-        "cookies": resolve_admin_cookies(),
-    }
-    if extract_base:
-        kwargs["base_url"] = extract_base
-    data = catalog_extract.fetch_extract_study(idno, **kwargs)
-    study = data.get("study") if isinstance(data.get("study"), dict) else data
-    filters = (study or {}).get("filters")
-    dataset_type = filters.get("dataset_type") if isinstance(filters, dict) else None
-    return _DATASET_TYPE_TO_METADATA_TYPE.get(dataset_type) if dataset_type else None
-
-
 def _apply_citation(settings: Settings, item: SearchIndexQueueItem) -> Literal["indexed", "deleted"]:
     """Apply one citation queue item. Citations are indexed on OpenSearch only (lexical, ``docs/citations-search-contract.md``);
     Qdrant has no citation index, so there is nothing to do — the item is still acked as handled rather than left
@@ -494,31 +427,26 @@ def _raise_on_write_errors(what: str, errors: list[Any]) -> None:
         raise SearchIndexSyncError(f"{what}: {len(errors)} write error(s), first: {errors[0]}")
 
 
-def _raise_if_not_indexed(idno: str, result: dict[str, Any]) -> None:
-    """``index_ids_op`` never raises for a per-idno failure (metadata failed to load/parse, no documents produced,
-    a backend write error) — it reports them in its return value. Raise so the queue item is acked failed: acking it
-    indexed would also overwrite the failed ``search_index_state`` that ``index_ids_op`` just reported, and the study
-    would drop out of NADA's "missing" diff, so neither the queue nor ``reconcile_diff_once`` would retry it."""
-    reasons = list(_error_by_idno(result["load_errors"], result["empty_docs"]).values())
+def _raise_if_not_indexed(sid: int, result: dict[str, Any]) -> None:
+    """``index_sids_op`` never raises for a per-study failure (record not fetched or not loadable, no documents
+    produced, a backend write error) — it reports them in its return value. Raise so the queue item is acked failed:
+    acking it indexed would also overwrite the failed ``search_index_state`` that ``index_sids_op`` just reported, and
+    the study would drop out of NADA's "missing" diff, so neither the queue nor ``reconcile_diff_once`` would retry it."""
+    reasons = list(_error_by_sid(result["load_errors"], result["empty_docs"]).values())
     reasons += [_attribute_write_error(e)[1] for e in result["errors"]]
     # A full index of a study includes its variables; their sync never raises, so read what it reported.
     reasons += [f"variables: {reason}" for reason in ((result.get("variables") or {}).get("failed") or {}).values()]
     if reasons:
-        raise SearchIndexSyncError(f"index reported no success for idno {idno!r}: {'; '.join(reasons)}")
-
-
-def metadata_type_for(settings: Settings, item: SearchIndexQueueItem) -> str | None:
-    """The nada_ai metadata_type of a study item: from the ``data_type`` NADA sends with it, looked up when absent."""
-    if item.data_type:
-        return _DATASET_TYPE_TO_METADATA_TYPE.get(item.data_type)
-    return lookup_metadata_type(settings, item.object_key)
+        raise SearchIndexSyncError(f"index reported no success for study {sid}: {'; '.join(reasons)}")
 
 
 def full_record(settings: Settings, sid: int) -> dict[str, Any]:
     """One study's full extract record (metadata and resources), fetched by its id."""
     batch = fetch_studies_by_sids(settings, [sid], include_metadata=True, include_resources=True)
     if batch["errors"]:
-        raise SearchIndexSyncError(f"NADA could not build the extract of study {sid}: {batch['errors'][0].get('message')}")
+        raise SearchIndexSyncError(
+            f"NADA could not build the extract of study {sid}: {batch['errors'][0].get('message')}"
+        )
     if not batch["studies"]:
         raise SearchIndexSyncError(f"Study {sid} is not in NADA's catalog")
     return batch["studies"][0]
@@ -527,30 +455,18 @@ def full_record(settings: Settings, sid: int) -> dict[str, Any]:
 def _index_in_full(
     settings: Settings, item: SearchIndexQueueItem, embedding: Any | None, extract: dict[str, Any] | None = None
 ) -> str:
-    """Index one study in full from its record fetched **by id**: the record is put where ai4data's loader reads it
-    (its metadata cache), so the loader never fetches by idno — NADA cannot resolve every idno in a URL (``:``,
-    ``/``, spaces). ``extract``: the record when the caller already fetched it with its metadata. Indexing does not
-    force a re-embed: chunks whose text did not change keep their vectors."""
-    metadata_type = metadata_type_for(settings, item)
-    if metadata_type is None:
-        raise SearchIndexSyncError(
-            f"No metadata_type mapping for idno {item.object_key!r} (dataset_type {item.data_type!r})"
-        )
-    record = extract if extract is not None and isinstance(extract.get("metadata"), dict) else full_record(
-        settings, item.object_id
+    """Index one study in full from its record fetched **by id**. ``extract``: the record when the caller already
+    fetched it with its metadata. Indexing does not force a re-embed: chunks whose text did not change keep their
+    vectors."""
+    record = (
+        extract
+        if extract is not None and isinstance(extract.get("metadata"), dict)
+        else full_record(settings, item.object_id)
     )
-    catalog_extract.write_metadata_cache(
-        catalog_extract.study_to_catalog_metadata(record), item.object_key, metadata_type, include_resources=True
+    report = index_sids_op(
+        settings, [item.object_id], force=False, show_progress_bar=False, embedding=embedding, records=[record]
     )
-    report = index_ids_op(
-        settings,
-        idnos=[item.object_key],
-        metadata_type=metadata_type,
-        force=False,
-        show_progress_bar=False,
-        embedding=embedding,
-    )
-    _raise_if_not_indexed(item.object_key, report)
+    _raise_if_not_indexed(item.object_id, report)
     return "indexed"
 
 
@@ -570,7 +486,7 @@ def process_item(
     if item.object_type == "citation":
         return _apply_citation(settings, item)
     if item.is_delete:
-        delete_by_idno_op(settings, item.object_key)
+        delete_by_sids_op(settings, [item.object_id])
         return "deleted"
     if item.change_class == "variables":
         # Only this study's variables changed (a DDI/data-dictionary re-import): sync them, nothing else. Qdrant has
@@ -579,8 +495,8 @@ def process_item(
             from nada_ai.ingest.variables_index import sync_survey_variables_op
 
             _raise_on_write_errors(
-                f"variables of {item.object_key!r}",
-                sync_survey_variables_op(settings, item.object_key, sid=item.object_id)["errors"],
+                f"variables of study {item.object_id}",
+                sync_survey_variables_op(settings, item.object_id)["errors"],
             )
         return "indexed"
     if item.change_class == "upsert_partial" and settings.search_backend == "opensearch":
@@ -590,12 +506,11 @@ def process_item(
         from nada_ai.ingest.service import apply_study_options_from_extract, apply_study_options_op
 
         if extract is not None:
-            core = extract.get("core_fields") or {}
             result = apply_study_options_from_extract(
-                settings, item.object_key, int(core.get("catalog_id") or item.object_id), core, extract.get("filters") or {}
+                settings, item.object_id, extract.get("core_fields") or {}, extract.get("filters") or {}
             )
         else:
-            result = apply_study_options_op(settings, item.object_key)
+            result = apply_study_options_op(settings, item.object_id)
         if result.get("updated"):
             return "indexed"
     return _index_in_full(settings, item, embedding, extract)
@@ -627,7 +542,7 @@ def reconcile_once(
             summary["not_processed"] = len(page.items) - n
             break
         except Exception as e:  # noqa: BLE001 - reported back to NADA, not swallowed
-            logger.warning("search-index reconcile failed for idno=%s: %s", item.object_key, e)
+            logger.warning("search-index reconcile failed for %s %s: %s", item.object_type, item.object_id, e)
             acks.append({"id": item.id, "result": "failed", "changed": item.changed, "error": str(e)})
             summary["failed"] += 1
             continue
@@ -663,7 +578,7 @@ def reconcile_diff_once(
     remove_only: bool = False,
 ) -> dict[str, Any]:
     """Pull NADA's missing/stale diff for object_type and resolve all of it:
-    index every missing idno, delete every stale one.
+    index every missing study, delete every stale one (by ``object_id``).
 
     ``data_type``, when given, narrows the whole run to one surveys.type
     value (microdata aka 'survey', geospatial, document, timeseries, ...) —
@@ -695,10 +610,10 @@ def reconcile_diff_once(
     attempted once per run, not retried every time it comes back.
 
     ``progress_cb``, if given, is called with a Jobs-shaped snapshot
-    (``processed``/``total``/``percent``/``failed``/``current_idno``) after
-    totals are known and again after every idno — same shape as
+    (``processed``/``total``/``percent``/``failed``/``current_sid``) after
+    totals are known and again after every study — same shape as
     ``IngestProgressTracker`` so ``GET /jobs/{id}`` can render a bar.
-    ``cancel_token`` is checked once per idno so Stop actually stops the
+    ``cancel_token`` is checked once per study so Stop actually stops the
     worker thread (``asyncio.Task.cancel`` alone cannot).
     """
     if not settings.report_search_index_state_enabled:
@@ -728,7 +643,7 @@ def reconcile_diff_once(
     total = missing_page.total + stale_page.total
     processed = 0
 
-    def _emit(current_idno: str | None = None, *, phase: str) -> None:
+    def _emit(current_sid: int | None = None, *, phase: str) -> None:
         if progress_cb is None:
             return
         progress_cb(
@@ -736,7 +651,7 @@ def reconcile_diff_once(
                 "processed": processed,
                 "total": total,
                 "failed": summary["failed"],
-                "current_idno": current_idno,
+                "current_sid": current_sid,
                 "percent": round(100 * processed / total, 1) if total else 100.0,
                 "phase": phase,
             }
@@ -747,7 +662,7 @@ def reconcile_diff_once(
 
     _emit(phase="missing")
 
-    seen_missing: set[str] = set()
+    seen_missing: set[int] = set()
     page = missing_page
     offset = 0
     for i in range(_DIFF_RECONCILE_MAX_ITERATIONS):
@@ -761,58 +676,50 @@ def reconcile_diff_once(
             )
         if not page.items:
             break
-        new_items = [it for it in page.items if it.idno not in seen_missing]
+        new_items = [it for it in page.items if it.object_id not in seen_missing]
         succeeded = 0
         for item in new_items:
             if _cancelled():
                 summary["cancelled"] = True
-                _emit(current_idno=item.idno, phase="missing")
+                _emit(current_sid=item.object_id, phase="missing")
                 return summary
-            seen_missing.add(item.idno)
-            resolved_type = _DATASET_TYPE_TO_METADATA_TYPE.get(item.type) if item.type else None
-            if resolved_type is None:
+            seen_missing.add(item.object_id)
+            if metadata_type_of(item.type) is None:
                 summary["skipped"] += 1
                 logger.warning(
-                    "diff reconcile: no metadata_type mapping for idno=%s dataset_type=%s", item.idno, item.type
+                    "diff reconcile: no metadata_type mapping for study %s (dataset_type %s)", item.object_id, item.type
                 )
                 processed += 1
-                _emit(item.idno, phase="missing")
+                _emit(item.object_id, phase="missing")
                 continue
             try:
-                result = index_ids_op(
-                    settings,
-                    idnos=[item.idno],
-                    metadata_type=resolved_type,
-                    force=True,
-                    show_progress_bar=False,
-                    embedding=embedding,
+                result = index_sids_op(
+                    settings, [item.object_id], force=True, show_progress_bar=False, embedding=embedding
                 )
-            except Exception as e:  # noqa: BLE001 - one idno's failure must not stop the reconcile run
-                logger.warning("diff reconcile: index failed for idno=%s: %s", item.idno, e)
+            except Exception as e:  # noqa: BLE001 - one study's failure must not stop the reconcile run
+                logger.warning("diff reconcile: index failed for study %s: %s", item.object_id, e)
                 summary["failed"] += 1
                 processed += 1
-                _emit(item.idno, phase="missing")
+                _emit(item.object_id, phase="missing")
                 continue
 
-            # index_ids_op never raises for a per-idno failure (metadata failed to
-            # load/parse, or loaded but produced no documents, or a backend write
-            # error) — those are reported in its return value instead, so a call
-            # that didn't raise does not by itself mean this idno got indexed.
-            # Since this call is scoped to exactly one idno, any of these being
-            # non-empty can only be about *this* idno.
+            # index_sids_op never raises for a per-study failure (record not fetched or not loadable, no documents,
+            # a backend write error) — those are reported in its return value instead, so a call that didn't raise
+            # does not by itself mean this study got indexed. The call is scoped to exactly one study, so any of
+            # these being non-empty can only be about *this* study.
             variables_failed = (result.get("variables") or {}).get("failed")
             if result.get("load_errors") or result.get("empty_docs") or result.get("errors") or variables_failed:
                 summary["failed"] += 1
-                logger.warning("diff reconcile: index reported no success for idno=%s: %s", item.idno, result)
+                logger.warning("diff reconcile: index reported no success for study %s: %s", item.object_id, result)
             else:
                 summary["indexed"] += 1
                 succeeded += 1
             processed += 1
-            _emit(item.idno, phase="missing")
+            _emit(item.object_id, phase="missing")
         # Everything else on this page is still in the diff: move the next fetch past it.
         offset += len(page.items) - succeeded
 
-    seen_stale: set[str] = set()
+    seen_stale: set[int] = set()
     page = stale_page
     offset = 0
     for i in range(_DIFF_RECONCILE_MAX_ITERATIONS):
@@ -826,21 +733,21 @@ def reconcile_diff_once(
             )
         if not page.items:
             break
-        new_idnos = [it.idno for it in page.items if it.idno not in seen_stale]
-        seen_stale.update(new_idnos)
+        new_sids = [it.object_id for it in page.items if it.object_id not in seen_stale]
+        seen_stale.update(new_sids)
         succeeded = 0
-        if new_idnos:
+        if new_sids:
             try:
-                delete_by_idnos_op(settings, new_idnos)
-                summary["deleted"] += len(new_idnos)
-                succeeded = len(new_idnos)
+                delete_by_sids_op(settings, new_sids)
+                summary["deleted"] += len(new_sids)
+                succeeded = len(new_sids)
             except Exception as e:  # noqa: BLE001 - report and move on, same as the indexing loop above
-                logger.warning("diff reconcile: delete failed for idnos=%s: %s", new_idnos, e)
-                summary["failed"] += len(new_idnos)
+                logger.warning("diff reconcile: delete failed for studies %s: %s", new_sids, e)
+                summary["failed"] += len(new_sids)
         offset += len(page.items) - succeeded
-        for idno in new_idnos:
+        for sid in new_sids:
             processed += 1
-            _emit(idno, phase="stale")
+            _emit(sid, phase="stale")
             if _cancelled():
                 summary["cancelled"] = True
                 return summary
@@ -854,7 +761,12 @@ def _scan(client: Any, index: str, fields: list[str], page_size: int = 1000):
         return
     after: list[Any] | None = None
     while True:
-        body: dict[str, Any] = {"size": page_size, "_source": fields, "sort": [{"_id": "asc"}], "query": {"match_all": {}}}
+        body: dict[str, Any] = {
+            "size": page_size,
+            "_source": fields,
+            "sort": [{"_id": "asc"}],
+            "query": {"match_all": {}},
+        }
         if after is not None:
             body["search_after"] = after
         hits = client.search(index=index, body=body)["hits"]["hits"]
@@ -927,7 +839,9 @@ def import_index_state(
             if cid is None or not uuid:
                 continue
             citations += 1
-            items.append({"object_type": "citation", "object_key": str(uuid), "object_id": int(cid), "status": "indexed"})
+            items.append(
+                {"object_type": "citation", "object_key": str(uuid), "object_id": int(cid), "status": "indexed"}
+            )
     finally:
         client.close()
 
@@ -948,7 +862,9 @@ def import_index_state(
         summary["skipped"] += sum(1 for r in result.get("results") or [] if not r.get("applied"))
         if progress_cb is not None:
             done = min(start + _STATE_BULK_CHUNK_SIZE, total)
-            progress_cb({"processed": done, "total": total, "percent": round(100 * done / total, 1) if total else 100.0})
+            progress_cb(
+                {"processed": done, "total": total, "percent": round(100 * done / total, 1) if total else 100.0}
+            )
 
     summary["queued"] = trigger_sync(settings, object_type="all", refresh_indexed=True).get("queued")
     return summary

@@ -4,13 +4,15 @@ pausing on NADA's trouble and skipping an item that is the problem itself."""
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from unittest.mock import patch
 
 import httpx
 import pytest
 
 from nada_ai.app import reconcile_scheduler
-from nada_ai.app.reconcile_scheduler import Scheduler, with_health
+from nada_ai.app.reconcile_scheduler import ITEM_DEATH_LIMIT, Scheduler, with_health
 from nada_ai.app.state import AppState
 from nada_ai.ingest.search_index_sync import AckRefused, QueuePage, SearchIndexQueueItem, SearchIndexStatus
 from nada_ai.nada.gate import NadaFirewallBlocked, NadaUnavailable
@@ -156,8 +158,6 @@ def test_nada_going_down_pauses_and_keeps_the_acks_and_the_rest_pending():
 
 
 def test_an_outage_pause_waits_at_least_as_long_as_nada_asked():
-    import time
-
     from nada_ai.nada.gate import NadaGate
 
     gate = NadaGate(min_interval_seconds=0, max_retries=0, retry_base_seconds=0, retry_after_max_seconds=60)
@@ -445,8 +445,6 @@ async def test_only_one_process_runs_the_scheduler():
 
 @pytest.mark.asyncio
 async def test_another_process_reports_the_running_schedulers_request_figures_not_its_own():
-    import time
-
     from nada_ai.nada.gate import NadaGate
 
     def gate(requests: int) -> NadaGate:
@@ -520,3 +518,183 @@ def test_process_pending_does_nothing_while_paused_and_resume_clears_it():
 def test_a_pause_survives_a_restart():
     Scheduler(_state()).pause()
     assert Scheduler(_state()).paused_since() is not None  # a new process reads the same control file
+
+
+# -- an item that kills the process ---------------------------------------------------------------------------------
+
+
+def _killed_on(nada: FakeNada, item_id: int, **settings) -> None:
+    """A process that dies (SIGKILL: no exception, no clean-up) while item ``item_id`` is in hand: what it leaves behind
+    is its in-flight file, read here at the moment of death and put back after the run."""
+    scheduler = Scheduler(_state(**settings))
+    left: list[str] = []
+
+    def process(settings, item, **kw):
+        if item.id == item_id:
+            left.append(scheduler._inflight_path.read_text())
+        return "indexed"
+
+    queued = list(nada.items)
+    _run(nada, process, scheduler, limit=5)
+    assert left, "the item was never processed"
+    nada.acked.clear()
+    nada.items = queued  # a killed process never sends its acks: everything stays pending
+    scheduler._inflight_path.write_text(left[0])
+
+
+def _restart(**settings) -> Scheduler:
+    scheduler = Scheduler(_state(**settings))
+    scheduler._check_inflight()  # what start() does under the lock
+    return scheduler
+
+
+def test_an_item_in_hand_is_written_to_the_inflight_file_and_removed_when_done():
+    nada = FakeNada([_item(1), _item(2)])
+    seen: list[dict] = []
+    scheduler = Scheduler(_state(limit=5))
+
+    def process(settings, item, **kw):
+        seen.append(json.loads(scheduler._inflight_path.read_text()))
+        if item.id == 2:
+            raise ValueError("bad record")
+        return "indexed"
+
+    _run(nada, process, scheduler)
+    assert [(r["queue_id"], r["changed"], r["deaths"]) for r in seen] == [(1, 1700000001, 0), (2, 1700000002, 0)]
+    assert not scheduler._inflight_path.exists()  # removed after a success and after a failure alike
+
+
+def test_a_first_death_with_an_item_in_hand_tries_it_again():
+    _killed_on(FakeNada([_item(1), _item(2)]), 2)
+    scheduler = _restart()
+
+    assert scheduler.st.unsent_acks == []
+    assert not scheduler._inflight_path.exists()
+    nada = FakeNada([_item(1), _item(2)])
+    _run(nada, lambda settings, item, **kw: "indexed", scheduler)
+    assert [(a["id"], a["result"]) for a in nada.acked] == [(1, "indexed"), (2, "indexed")]
+
+
+def test_an_item_that_kills_the_process_twice_is_acked_failed_first_thing():
+    nada = FakeNada([_item(1), _item(2), _item(3)])
+    _killed_on(nada, 2)
+    second = _restart()
+    killed_again: list[str] = []
+
+    def process(settings, item, **kw):
+        if item.id == 2:
+            killed_again.append(second._inflight_path.read_text())
+        return "indexed"
+
+    _run(nada, process, second, limit=5)
+    assert json.loads(killed_again[0])["deaths"] == 1  # its count goes on in the file of the second process
+    second._inflight_path.write_text(killed_again[0])
+
+    third = _restart()
+    assert third._inflight_path.exists()  # kept until NADA takes the failed ack
+    assert [(a["id"], a["result"], a["changed"]) for a in third.st.unsent_acks] == [(2, "failed", 1700000002)]
+    assert "2 times in a row" in third.st.unsent_acks[0]["error"]
+    assert third.st.last_error["object_id"] == 2
+
+    nada = FakeNada([_item(1), _item(2), _item(3)])
+    with (
+        patch.object(reconcile_scheduler, "ack_batch", nada.ack_batch),
+        patch.object(reconcile_scheduler, "get_status", nada.get_status),
+    ):
+        assert asyncio.run(third._send_acks(list(third.st.unsent_acks), set(), resend=True)) is True
+    assert [(a["id"], a["result"]) for a in nada.acked] == [(2, "failed")]
+    assert [i.id for i in nada.items] == [1, 3]  # the queue moves on past it
+    assert third.st.unsent_acks == []
+    assert not third._inflight_path.exists()
+
+
+def test_a_restart_before_the_failed_ack_is_sent_acks_it_failed_again():
+    dying = Scheduler(_state())
+    dying._item_deaths[(2, 1700000002)] = ITEM_DEATH_LIMIT - 1
+    dying._write_inflight(_item(2))  # killed with the item in hand, at its last allowed death
+
+    first = _restart()  # reaches the limit; the failed ack is in memory only
+    assert [(a["id"], a["result"]) for a in first.st.unsent_acks] == [(2, "failed")]
+    # stopped before NADA took that ack: the record is still there, so the next process acks it failed too
+    second = _restart()
+    assert [(a["id"], a["result"]) for a in second.st.unsent_acks] == [(2, "failed")]
+    assert second._inflight_path.exists()
+
+
+def test_a_changed_item_starts_its_count_over():
+    _killed_on(FakeNada([_item(2)]), 2)
+    scheduler = _restart()
+    changed = _item(2).model_copy(update={"changed": 1800000000})
+    left: list[str] = []
+
+    def process(settings, item, **kw):
+        left.append(scheduler._inflight_path.read_text())
+        return "indexed"
+
+    _run(FakeNada([changed]), process, scheduler)
+    assert json.loads(left[0])["deaths"] == 0  # new content: the earlier death does not count against it
+
+
+def test_a_shutdown_with_an_item_in_hand_is_not_a_death():
+    scheduler = Scheduler(_state(limit=5))
+    nada = FakeNada([_item(1)])
+
+    async def run():
+        started = asyncio.Event()
+
+        def process(settings, item, **kw):
+            started.set()
+            time.sleep(0.3)
+            return "indexed"
+
+        with (
+            patch.object(reconcile_scheduler, "list_queue", nada.list_queue),
+            patch.object(reconcile_scheduler, "ack_batch", nada.ack_batch),
+            patch.object(reconcile_scheduler, "get_status", nada.get_status),
+            patch.object(reconcile_scheduler, "fetch_studies_by_sids", nada.fetch_studies_by_sids),
+            patch.object(reconcile_scheduler, "process_item", process),
+        ):
+            task = asyncio.create_task(scheduler._drain())
+            await started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(run())
+    assert not scheduler._inflight_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_start_reads_the_inflight_file_left_by_a_dead_process():
+    settings = {"reconcile_search_index_enabled": True, "search_index_base_url": "https://nada.example/api"}
+    first = Scheduler(_state(**settings))
+    first._item_deaths[(2, 1700000002)] = 1
+    first._write_inflight(_item(2))
+
+    async def idle(self):
+        await asyncio.sleep(3600)
+
+    second = Scheduler(_state(**settings))
+    with patch.object(Scheduler, "_watchdog", idle):
+        second.start()
+        try:
+            assert [(a["id"], a["result"]) for a in second.st.unsent_acks] == [(2, "failed")]
+        finally:
+            await second.stop()
+
+
+def test_the_death_record_stays_while_nada_answers_but_does_not_record_the_failed_ack():
+    dying = Scheduler(_state())
+    dying._item_deaths[(2, 1700000002)] = ITEM_DEATH_LIMIT - 1
+    dying._write_inflight(_item(2))
+    restarted = _restart()
+
+    nada = FakeNada([_item(2)])
+    nada.ack_error = AckRefused("DB is read-only", 400)  # NADA answers, but records nothing
+    with (
+        patch.object(reconcile_scheduler, "ack_batch", nada.ack_batch),
+        patch.object(reconcile_scheduler, "get_status", nada.get_status),
+    ):
+        asyncio.run(restarted._send_acks(list(restarted.st.unsent_acks), set(), resend=True))
+    assert restarted._inflight_path.exists()  # a restart acks it failed again
+    assert [(a["id"], a["result"]) for a in _restart().st.unsent_acks] == [(2, "failed")]

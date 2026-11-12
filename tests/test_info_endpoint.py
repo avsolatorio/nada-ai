@@ -121,7 +121,7 @@ def test_capabilities_reflect_the_modes_that_are_implemented(monkeypatch: pytest
         "lexical": True,
         "semantic": True,
         "hybrid": True,
-        "facets": False,
+        "facets": True,
         "variables_search": True,
         "citations_search": True,
     }

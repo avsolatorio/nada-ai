@@ -43,6 +43,7 @@ def test_a_query_is_run_and_the_response_matches_the_contract_shape(monkeypatch:
     hit = {
         "_score": 7.5,
         "_source": {"citation_id": 12, "uuid": "u-12"},
+        "sort": [7.5, 12],
     }
     client = _client({"took": 2, "hits": {"total": {"value": 1}, "hits": [hit]}})
     with _running(monkeypatch, "opensearch", client=client) as c:
@@ -50,7 +51,8 @@ def test_a_query_is_run_and_the_response_matches_the_contract_shape(monkeypatch:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["engine"] == "opensearch" and body["found"] == 1 and body["truncated"] is False
+    assert body["engine"] == "opensearch" and body["found"] == 1
+    assert body["offset"] == 10 and body["max_offset"] == 10_000 and body["next_cursor"] is None
     # ids only: the caller reads the citation itself from its database
     assert body["hits"] == [{"rank": 11, "citation_id": 12, "uuid": "u-12", "score": 7.5}]
     assert body["applied"] == {
@@ -59,7 +61,7 @@ def test_a_query_is_run_and_the_response_matches_the_contract_shape(monkeypatch:
         "sort": "relevance",
         "order": "asc",
         "limit": 5,
-        "offset": 10,
+        "paging": "offset",
     }
 
 
@@ -102,7 +104,51 @@ def test_offset_plus_limit_over_the_max_is_rejected(monkeypatch: pytest.MonkeyPa
     with _running(monkeypatch, "opensearch", client=_client()) as c:
         response = c.post("/citations/search", json={"query": "x", "offset": 9995, "limit": 15})
     assert response.status_code == 422
-    assert response.json()["error"]["code"] == "offset_out_of_range"
+    error = response.json()["error"]
+    assert error["code"] == "offset_out_of_range" and error["details"] == {"max_offset": 10_000}
+
+
+def _hits(ids: list[int], total: int | None = None) -> dict[str, Any]:
+    hits: dict[str, Any] = {"hits": [{"_score": 1.0, "_source": {"citation_id": i}, "sort": [1.0, i]} for i in ids]}
+    if total is not None:
+        hits["total"] = {"value": total}
+    return {"took": 1, "hits": hits}
+
+
+def test_a_next_cursor_pages_past_the_offset_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _client(_hits([9999, 10_000], total=14_200))
+    with _running(monkeypatch, "opensearch", client=client) as c:
+        first = c.post("/citations/search", json={"query": "x", "offset": 9998, "limit": 2}).json()
+        assert first["offset"] == 9998 and first["next_cursor"]
+        client.search.return_value = _hits([10_001, 10_002, 10_003])
+        second = c.post("/citations/search", json={"query": "x", "limit": 2, "cursor": first["next_cursor"]}).json()
+    assert second["offset"] == 10_000 and second["found"] == 14_200 and second["applied"]["paging"] == "cursor"
+    assert [h["citation_id"] for h in second["hits"]] == [10_001, 10_002]
+    assert [h["rank"] for h in second["hits"]] == [10_001, 10_002]
+    assert second["next_cursor"] and second["prev_cursor"]
+
+
+def test_offset_and_cursor_together_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _client(_hits([1, 2], total=40))
+    with _running(monkeypatch, "opensearch", client=client) as c:
+        token = c.post("/citations/search", json={"query": "x", "limit": 2}).json()["next_cursor"]
+        response = c.post("/citations/search", json={"query": "x", "limit": 2, "offset": 2, "cursor": token})
+    assert response.status_code == 422 and response.json()["error"]["code"] == "invalid_request"
+
+
+def test_a_cursor_of_another_sort_is_cursor_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _client(_hits([1, 2], total=40))
+    with _running(monkeypatch, "opensearch", client=client) as c:
+        token = c.post("/citations/search", json={"query": "x", "limit": 2}).json()["next_cursor"]  # relevance
+        response = c.post("/citations/search", json={"query": "x", "limit": 2, "sort": "year", "cursor": token})
+    assert response.status_code == 422 and response.json()["error"]["code"] == "cursor_invalid"
+
+
+def test_the_offset_limit_is_a_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NADA_CITATIONS_MAX_OFFSET", "100")
+    with _running(monkeypatch, "opensearch", client=_client()) as c:
+        response = c.post("/citations/search", json={"query": "x", "offset": 90, "limit": 15})
+    assert response.status_code == 422 and response.json()["error"]["details"] == {"max_offset": 100}
 
 
 def test_an_empty_query_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -143,3 +189,21 @@ def test_an_empty_index_is_index_not_ready(monkeypatch: pytest.MonkeyPatch) -> N
         response = c.post("/citations/search", json={"query": "poverty"})
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "index_not_ready"
+
+
+def test_a_search_that_takes_too_long_is_search_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    from opensearchpy.exceptions import ConnectionTimeout
+
+    client = _client(side_effect=ConnectionTimeout("TIMEOUT", "timed out", Exception("timed out")))
+    with _running(monkeypatch, "opensearch", client=client) as c:
+        response = c.post("/citations/search", json={"query": "poverty"})
+    assert response.status_code == 504
+    assert response.json()["error"]["code"] == "search_timeout"
+
+
+def test_the_search_is_bounded_by_the_search_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NADA_SEARCH_TIMEOUT_SECONDS", "2.5")
+    client = _client()
+    with _running(monkeypatch, "opensearch", client=client) as c:
+        assert c.post("/citations/search", json={"query": "poverty"}).status_code == 200
+    assert client.search.call_args.kwargs["request_timeout"] == 2.5

@@ -6,7 +6,7 @@ Examples (run from repo root with ``uv run`` so env vars apply)::
 
     uv run python -m nada_ai.ingest.cli put_index_template
 
-    uv run python -m nada_ai.ingest.cli index --idnos=WB_123,WB_456 --metadata_type=indicator
+    uv run python -m nada_ai.ingest.cli index --sids=516,517
 
     uv run python -m nada_ai.ingest.cli index_from_catalog --catalog_type=timeseries
 
@@ -20,11 +20,17 @@ from __future__ import annotations
 from nada_ai.ingest.service import (
     create_index_op,
     index_from_catalog_op,
-    index_ids_op,
+    index_sids_op,
     put_index_template_op,
     setup_ingest_pipeline_op,
 )
 from nada_ai.settings import Settings
+
+
+def _sids(value: object) -> list[int]:
+    """Study ids from the command line: ``516``, ``516,517`` (Fire may already have split it into a tuple)."""
+    parts = value if isinstance(value, (list, tuple)) else str(value).split(",")
+    return [int(str(part).strip()) for part in parts if str(part).strip()]
 
 
 def put_index_template() -> None:
@@ -51,22 +57,15 @@ def setup_ingest_pipeline() -> None:
 
 
 def index(
-    idnos: str,
-    metadata_type: str = "indicator",
+    sids: str,
     force: bool = False,
     recreate_index: bool = False,
 ) -> None:
-    """
-    Bulk-index comma-separated idnos for a single metadata_type.
-
-    Example metadata_type: indicator, document, microdata, geospatial
-    """
+    """Index studies in full by their NADA internal ids (comma-separated); each one's type comes from its record."""
     settings = Settings()
-    ids = [x.strip() for x in idnos.split(",") if x.strip()]
-    res = index_ids_op(
+    res = index_sids_op(
         settings,
-        idnos=ids,
-        metadata_type=metadata_type,
+        sids=_sids(sids),
         force=force,
         recreate_index=recreate_index,
         show_progress_bar=True,
@@ -81,16 +80,16 @@ def index(
 
 def index_from_catalog(
     catalog_type: str = "timeseries",
-    ps: int = 100,
+    ps: int = 20,
     limit: int | None = None,
     force: bool = False,
     recreate_index: bool = False,
     show_progress_bar: bool = True,
     buffer_size: int = 1000,
 ) -> None:
-    """Fetch ids from Data Compass search API and index them (via ``ai4data.discovery.catalog``).
+    """Index every study of ``catalog_type``, paged from NADA's metadata-extract API (``ps`` records per request).
 
-    Set ``limit`` to only use the first N catalog rows (pagination stops early).
+    Set ``limit`` to only index the first N studies (pagination stops early).
     """
     settings = Settings()
     res = index_from_catalog_op(
@@ -104,17 +103,17 @@ def index_from_catalog(
         buffer_size=buffer_size,
     )
     err_part = f"{len(res['errors'])} bulk error(s)" if res["errors"] else "ok"
-    print(f"Indexed {res['indexed']} docs from catalog ({res['rows']} ids); {err_part}")
+    print(f"Indexed {res['indexed']} docs from catalog ({res['rows']} studies); {err_part}")
 
 
-def index_survey_variables(idno: str) -> None:
-    """Delete then re-index every variable of one study, by its NADA idno (lexical variable search)."""
+def index_survey_variables(sid: int) -> None:
+    """Delete then re-index every variable of one study, by its NADA internal id (lexical variable search)."""
     from nada_ai.ingest.variables_index import sync_survey_variables_op
 
     settings = Settings()
-    res = sync_survey_variables_op(settings, idno)
+    res = sync_survey_variables_op(settings, int(sid))
     err_part = f"{len(res['errors'])} bulk error(s)" if res["errors"] else "ok"
-    print(f"Indexed {res['indexed']} variable(s) for {idno}; {err_part}")
+    print(f"Indexed {res['indexed']} variable(s) for study {sid}; {err_part}")
 
 
 def backfill_variables(
@@ -162,7 +161,9 @@ def reconcile_search_index(limit: int = 50) -> None:
         try:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            raise SystemExit(f"The search-index scheduler is running (lock {lock_path} held); use Process pending instead.") from None
+            raise SystemExit(
+                f"The search-index scheduler is running (lock {lock_path} held); use Process pending instead."
+            ) from None
         gated_transport(settings)
         res = reconcile_once(settings, limit=limit)
     print(res)

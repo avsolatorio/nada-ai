@@ -13,6 +13,7 @@ from tqdm.auto import tqdm
 from nada_ai.filters.metadata_extract import MetadataExtractNotConfigured
 from nada_ai.ingest.progress import CancelToken, IngestProgressTracker
 from nada_ai.ingest.quality import QualityReport
+from nada_ai.ingest.study_sources import StudySource
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
 from nada_ai.search.backend.opensearch.generation import forget_index_generation
 from nada_ai.search.backend.opensearch.mapping import (
@@ -90,9 +91,12 @@ def new_studies_index_body() -> dict[str, Any]:
 
 def ensure_studies_index(client, settings: Settings) -> None:
     """Create the study index if missing (stamped with a generation)."""
+    from nada_ai.search.backend.opensearch.index_template import put_index_template_of
+
     name = settings.studies_index
     if client.indices.exists(index=name):
         return
+    put_index_template_of(client, settings, name)
     client.indices.create(index=name, body=new_studies_index_body())
     forget_index_generation()  # NADA must be sent the new generation from the next request on
 
@@ -112,6 +116,18 @@ def require_extract_mode() -> None:
             "Indexing requires NADA's metadata-extract API: set AI4DATA_METADATA_CATALOG_EXTRACT_PATH. "
             "It is the only source of each study's internal id (sid)."
         )
+
+
+class _RecordLoader(MetadataLoader):
+    """ai4data's loader handed the study's record: it neither fetches nor caches it by idno (see
+    ``ingest.study_sources``). The loader stamps the key it is given as the record's ``idno``: NADA's own idno."""
+
+    def __init__(self, source: StudySource) -> None:
+        self._source = source
+        super().__init__(idno=source.idno, metadata_type=source.metadata_type, include_resources=True)
+
+    def load_metadata(self) -> dict:
+        return dict(self._source.metadata)
 
 
 @dataclass(frozen=True)
@@ -173,8 +189,7 @@ def _filter_payload(
 def iter_langdoc_records(
     settings: Settings,
     embedding: EmbeddingService | None,
-    pairs: Iterable[tuple[str, str]],
-    force: bool = False,
+    sources: Iterable[StudySource],
     show_progress_bar: bool = True,
     buffer_size: int = 200,
     quality_report: QualityReport | None = None,
@@ -192,8 +207,10 @@ def iter_langdoc_records(
     built (see ``ingest/quality.py``) — purely additive, never skips or
     rejects a document.
 
-    ``progress``, if given, is stepped once per ``(idno, metadata_type)`` row — this is also what persists the
-    resume checkpoint (see ``ingest/progress.py``). A row that fails to load, or has nothing to write, is marked here.
+    ``sources``: the studies, each with its record (see ``ingest.study_sources``); nothing is fetched here.
+
+    ``progress``, if given, is stepped once per study (by ``sid``) — this is also what persists the
+    resume checkpoint (see ``ingest/progress.py``). A study that fails to load, or has nothing to write, is marked here.
     A row with documents is only announced (``progress.expect``): the writer marks it by confirming each document's
     write (``progress.confirm``), so a row is never checkpointed as done before its documents are in the backend.
     ``study_documents``: the writer also writes one document per study (OpenSearch's study index), so that one is
@@ -204,10 +221,9 @@ def iter_langdoc_records(
     flushed by the caller) instead of running the remaining rows to
     completion — see ``CancelToken`` for why this matters more than it looks.
 
-    ``load_errors``, if given, collects one entry per row whose
-    ``MetadataLoader`` call itself raised — previously these were silently
-    logged and skipped, so a job's ``indexed`` count could be lower than
-    ``requested``/``rows`` with no record anywhere of which idno or why.
+    ``load_errors``, if given, collects one entry (``sid``, ``idno``, ``metadata_type``, ``stage``, ``error``) per
+    study whose metadata handler raised, or whose extract data lacks what indexing needs — so a job's ``indexed``
+    count lower than ``requested`` always says which study and why.
 
     ``empty_docs``, if given, collects one entry per row that loaded without
     error but produced zero indexable content (no langdocs at all, or every
@@ -217,7 +233,7 @@ def iter_langdoc_records(
     "processed" with no trace anywhere of why they contributed nothing to
     ``indexed``.
 
-    Also bakes in NADA's flat ``filter_facets`` (and, for Qdrant, ``filter_fields``) for each idno,
+    Also bakes in NADA's flat ``filter_facets`` (and, for Qdrant, ``filter_fields``) for each study,
     taken from the metadata-extract data (see ``_study_extract``), so bulk-indexed documents are
     filterable immediately rather than needing a separate filters-sync pass afterward.
 
@@ -227,7 +243,8 @@ def iter_langdoc_records(
     ``stored_vectors``, if given (local embedding backend only), maps chunk ids to the vectors already stored for
     them. A chunk id is a hash of the chunk's type, idno, field and text, so a stored vector belongs to exactly
     this text: those chunks are not embedded again, only the new or changed ones. The caller decides when reuse is
-    valid (same embedding model, not a forced re-embed).
+    valid (same embedding model and input cap, not a forced re-embed). Each vector is stored with the input cap it
+    was made with (``embedding_input_cap``).
 
     Every document carries ``metadata.sid``, the NADA internal study id. A study whose
     extract data lacks it is not indexed: it is reported in ``load_errors`` (``stage``
@@ -292,39 +309,48 @@ def iter_langdoc_records(
                 filter_facets=filter_facets,
                 sid=study.sid,
                 created=study.core_fields.get("created"),
+                embedding_input_cap=embedding.input_cap,
             )
             if quality_report is not None:
                 quality_report.observe(source)
             yield doc_id, vec, source
 
-    pairs_iter: Iterable[tuple[str, str]] = pairs
+    sources_iter: Iterable[StudySource] = sources
     if show_progress_bar:
-        total_rows = len(pairs) if isinstance(pairs, list) else None
-        pairs_iter = tqdm(pairs, total=total_rows, unit="row", desc="Load metadata")
+        total_rows = len(sources) if isinstance(sources, list) else None
+        sources_iter = tqdm(sources, total=total_rows, unit="study", desc="Load metadata")
 
-    for idno, metadata_type in pairs_iter:
+    def skip(source: StudySource, stage: str, error: Exception) -> None:
+        logger.warning("Skip %s study %s (%s): %s", source.metadata_type, source.sid, source.idno, error)
+        if load_errors is not None:
+            load_errors.append(
+                {
+                    "sid": source.sid,
+                    "idno": source.idno,
+                    "metadata_type": source.metadata_type,
+                    "stage": stage,
+                    "error": str(error),
+                }
+            )
+        if progress is not None:
+            progress.mark(source.sid, ok=False, error=str(error))
+
+    for source in sources_iter:
         if cancel_token is not None and cancel_token.is_set():
-            logger.info("Ingest cancelled before idno=%s %s; stopping early", metadata_type, idno)
+            logger.info("Ingest cancelled before study %s; stopping early", source.sid)
             break
+        metadata_type, idno = source.metadata_type, source.idno
         try:
-            loader = MetadataLoader(idno=idno, metadata_type=metadata_type, force=force, include_resources=True)
+            loader = _RecordLoader(source)
             raw = loader.metadata
             docs = loader.get_metadata_handler().get_langdocs()
         except Exception as e:
-            logger.warning("Skip %s %s: %s", metadata_type, idno, e)
-            if load_errors is not None:
-                load_errors.append({"idno": idno, "metadata_type": metadata_type, "stage": "load", "error": str(e)})
-            if progress is not None:
-                progress.mark(idno, ok=False, error=str(e))
+            skip(source, "load", e)
             continue
         try:
             study = _study_extract(raw, require_all_text=study_documents)
         except StudyExtractError as e:
-            logger.warning("Skip %s %s: %s", metadata_type, idno, e)
-            if load_errors is not None:
-                load_errors.append({"idno": idno, "metadata_type": metadata_type, "stage": "extract", "error": str(e)})
-            if progress is not None:
-                progress.mark(idno, ok=False, error=str(e))
+            skip(source, "extract", e)
             continue
         non_empty = [d for d in docs if d.page_content and str(d.page_content).strip()]
         study = replace(study, chunks=len(non_empty))
@@ -334,13 +360,13 @@ def iter_langdoc_records(
         expected = len(non_empty) + (1 if study_documents else 0)
         if progress is not None:
             if expected:
-                progress.expect(idno, study.sid, expected)
+                progress.expect(study.sid, expected)
             else:
-                progress.mark(idno, ok=True)  # nothing will be written for it
+                progress.mark(study.sid, ok=True)  # nothing will be written for it
         if not non_empty:
             if empty_docs is not None:
                 reason = "empty_page_content" if docs else "no_langdocs"
-                empty_docs.append({"idno": idno, "metadata_type": metadata_type, "reason": reason})
+                empty_docs.append({"sid": study.sid, "idno": idno, "metadata_type": metadata_type, "reason": reason})
             continue
         raw_meta = raw if metadata_type == "microdata" else None
         filter_fields, filter_facets = _filter_payload(settings, study.filters)
@@ -355,8 +381,7 @@ def iter_langdoc_records(
 def iter_bulk_actions(
     settings: Settings,
     embedding: EmbeddingService | None,
-    pairs: Iterable[tuple[str, str]],
-    force: bool = False,
+    sources: Iterable[StudySource],
     show_progress_bar: bool = True,
     buffer_size: int = 200,
     quality_report: QualityReport | None = None,
@@ -368,7 +393,7 @@ def iter_bulk_actions(
     stored_vectors: Callable[[list[str]], dict[str, list[float]]] | None = None,
     study_documents: bool = False,
 ) -> Iterator[dict[str, Any]]:
-    """pairs: (idno, metadata_type).
+    """OpenSearch bulk actions of the chunk documents of ``sources`` (see :func:`iter_langdoc_records`).
 
     Langdocs are accumulated across records. **Local** backend: ``encode_corpus`` runs when the buffer reaches
     ``buffer_size`` texts. **OpenSearch ML** backend: no local encoding; pipeline embeds ``page_content`` on ingest.
@@ -377,8 +402,7 @@ def iter_bulk_actions(
     for doc_id, vec, source in iter_langdoc_records(
         settings,
         embedding,
-        pairs,
-        force=force,
+        sources,
         show_progress_bar=show_progress_bar,
         buffer_size=buffer_size,
         quality_report=quality_report,
@@ -409,7 +433,7 @@ def iter_bulk_actions(
 
 def run_bulk_index(
     settings: Settings,
-    pairs: list[tuple[str, str]],
+    sources: Iterable[StudySource],
     force: bool = False,
     recreate_index: bool = False,
     show_progress_bar: bool = True,
@@ -421,13 +445,14 @@ def run_bulk_index(
     load_errors: list[dict[str, Any]] | None = None,
     empty_docs: list[dict[str, Any]] | None = None,
 ) -> tuple[int, list | None]:
+    """Index ``sources`` (see ``ingest.study_sources``). ``force`` embeds every chunk again (no stored vector reused)."""
     from nada_ai.ingest.factory import create_ingest_writer
 
     # Before the writer can recreate or otherwise touch the target index.
     require_extract_mode()
     writer = create_ingest_writer(settings)
     return writer.run_bulk(
-        pairs,
+        sources,
         force=force,
         recreate_target=recreate_index,
         show_progress_bar=show_progress_bar,
@@ -439,23 +464,3 @@ def run_bulk_index(
         load_errors=load_errors,
         empty_docs=empty_docs,
     )
-
-
-def index_ids(
-    settings: Settings | None = None,
-    idnos: list[str] | None = None,
-    metadata_type: str = "indicator",
-    force: bool = False,
-    recreate_index: bool = False,
-    show_progress_bar: bool = True,
-) -> None:
-    settings = settings or Settings()
-    if not idnos:
-        logger.warning("No idnos provided")
-        return
-    pairs = [(i, metadata_type) for i in idnos]
-    n, err = run_bulk_index(
-        settings, pairs, force=force, recreate_index=recreate_index, show_progress_bar=show_progress_bar
-    )
-    err_part = f"{len(err)} error(s)" if err else "no errors"
-    print(f"Indexed {n} documents; {err_part}")

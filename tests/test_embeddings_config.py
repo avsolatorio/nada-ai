@@ -141,3 +141,43 @@ def test_encode_query_request_override_literal_prompt():
 
     assert mock_model.encode.call_args.kwargs.get("prompt") == "Custom:\n"
     assert "prompt_name" not in mock_model.encode.call_args.kwargs
+
+
+def _model_with_limit(limit):
+    model = MagicMock()
+    model.max_seq_length = limit
+    return model
+
+
+def test_load_model_caps_max_seq_length():
+    """A model that takes tens of thousands of tokens is capped at embedding_max_seq_length."""
+    _load_model.cache_clear()
+    model = _model_with_limit(32768)
+    with patch("sentence_transformers.SentenceTransformer", return_value=model):
+        assert _load_model("m-cap", (), None, None, 512) is model
+    assert model.max_seq_length == 512
+
+
+def test_load_model_keeps_lower_model_limit():
+    _load_model.cache_clear()
+    model = _model_with_limit(256)
+    with patch("sentence_transformers.SentenceTransformer", return_value=model):
+        _load_model("m-low", (), None, None, 512)
+    assert model.max_seq_length == 256
+
+
+def test_load_model_caps_unlimited_model():
+    _load_model.cache_clear()
+    model = _model_with_limit(None)
+    with patch("sentence_transformers.SentenceTransformer", return_value=model):
+        _load_model("m-none", (), None, None, 512)
+    assert model.max_seq_length == 512
+
+
+def test_embedding_service_passes_max_seq_length():
+    _load_model.cache_clear()
+    settings = Settings()
+    settings.embedding_max_seq_length = 1024
+    with patch("nada_ai.search.backend.opensearch.embeddings._load_model", return_value=MagicMock()) as load:
+        EmbeddingService(settings)
+    assert load.call_args.args[-1] == 1024

@@ -85,6 +85,29 @@ def citations_index_template_body(settings: Settings) -> dict[str, Any]:
     }
 
 
+def template_of(settings: Settings, index: str) -> tuple[str, dict[str, Any]]:
+    """Name and body of the template of the study, variable or citation index ``index``."""
+    templates = {
+        settings.studies_index: (studies_index_template_name, studies_index_template_body),
+        settings.variables_index: (variables_index_template_name, variables_index_template_body),
+        settings.citations_index: (citations_index_template_name, citations_index_template_body),
+    }
+    name, body = templates[index]
+    return name(settings), body(settings)
+
+
+def put_index_template_of(client: Any, settings: Settings, index: str) -> None:
+    """Install the current template of ``index`` (study, variable or citation index) right before creating it.
+
+    OpenSearch merges every matching template into an index it creates, so a template left from an older mapping
+    would add fields back that the mapping no longer has (or change ones it has). Every path that creates one of these
+    indexes calls this first. Nothing when templates are switched off (``opensearch_put_composable_index_template``).
+    """
+    if settings.opensearch_put_composable_index_template:
+        name, body = template_of(settings, index)
+        client.indices.put_index_template(name=name, body=body)
+
+
 def put_composable_index_template(client: Any, settings: Settings, embedding_dimension: int | None) -> dict[str, Any]:
     """Install or replace the composable index templates of every index (chunks, studies, variables, citations)."""
     installed: dict[str, Any] = {}

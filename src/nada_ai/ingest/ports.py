@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from nada_ai.ingest.progress import CancelToken, IngestProgressTracker
     from nada_ai.ingest.quality import QualityReport
+    from nada_ai.ingest.study_sources import StudySource
     from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
 
 
@@ -19,7 +21,7 @@ class IngestWriterPort(Protocol):
 
     def run_bulk(
         self,
-        pairs: list[tuple[str, str]],
+        sources: Iterable[StudySource],
         *,
         force: bool = False,
         recreate_target: bool = False,
@@ -32,7 +34,8 @@ class IngestWriterPort(Protocol):
         load_errors: list[dict[str, Any]] | None = None,
         empty_docs: list[dict[str, Any]] | None = None,
     ) -> tuple[int, list[Any] | None]:
-        """Index all langdocs for ``pairs``; returns ``(success_count, errors_or_none)``.
+        """Index all langdocs of ``sources`` (studies with their records, see ``ingest.study_sources``); returns
+        ``(success_count, errors_or_none)``. ``force`` embeds every chunk again (no stored vector is reused).
 
         ``embedding`` — pre-built :class:`EmbeddingService` to reuse rather than
         loading the model again.  Pass ``None`` (default) and the writer will
@@ -42,16 +45,16 @@ class IngestWriterPort(Protocol):
         source document as it's built; purely additive, never rejects a document.
 
         ``progress`` — optional :class:`~nada_ai.ingest.progress.IngestProgressTracker`,
-        stepped once per ``(idno, metadata_type)`` pair.
+        stepped once per study (by ``sid``).
 
         ``cancel_token`` — optional :class:`~nada_ai.ingest.progress.CancelToken`;
-        checked once per pair so a cancelled job stops promptly instead of
-        running the remaining pairs to completion.
+        checked once per study so a cancelled job stops promptly instead of
+        running the remaining studies to completion.
 
-        ``load_errors`` — optional list collecting one entry per pair whose
+        ``load_errors`` — optional list collecting one entry per study whose
         metadata load itself failed (distinct from ``errors_or_none``, which is
         write-time failures against the search backend).
 
-        ``empty_docs`` — optional list collecting one entry per pair that loaded
+        ``empty_docs`` — optional list collecting one entry per study that loaded
         without error but produced zero indexable content.
         """

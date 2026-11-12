@@ -57,17 +57,17 @@ def _wrap_extract_error(exc: Exception) -> MetadataExtractError:
     return MetadataExtractError(scrub_admin_credentials(str(exc)))
 
 
-def study_idno(study: dict[str, Any]) -> str | None:
-    return catalog_extract.study_idno(study)
-
-
 def study_to_sync_record(study: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract ``{idno, filters}`` from one study payload."""
-    idno = study_idno(study)
+    """``{sid, filters}`` of one study payload (``sid``: NADA's internal id, ``core_fields.catalog_id``)."""
+    core = study.get("core_fields") if isinstance(study.get("core_fields"), dict) else {}
+    try:
+        sid = int(core.get("catalog_id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
     filters = study.get("filters")
-    if not idno or not isinstance(filters, dict):
+    if sid <= 0 or not isinstance(filters, dict):
         return None
-    return {"idno": idno, "filters": filters}
+    return {"sid": sid, "filters": filters}
 
 
 def parse_extract_response(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -91,48 +91,18 @@ def parse_extract_response(data: dict[str, Any]) -> list[dict[str, Any]]:
     return records
 
 
-def fetch_study_records(
-    settings: Settings,
-    idno: str,
-    *,
-    include_admin_metadata: bool = True,
-    include_metadata: bool = False,
-) -> list[dict[str, Any]]:
-    """Fetch filters for a single study idno."""
+def fetch_study_records(settings: Settings, sid: int) -> list[dict[str, Any]]:
+    """``[{sid, filters}]`` of one study, fetched by its id."""
+    from nada_ai.ingest.study_sources import fetch_studies_by_sids
+
     try:
-        data = catalog_extract.fetch_extract_study(
-            idno,
-            include_admin_metadata=include_admin_metadata,
-            include_metadata=include_metadata,
-            **_request_kwargs(settings),
-        )
+        data = fetch_studies_by_sids(settings, [sid])
     except Exception as e:
         raise _wrap_extract_error(e) from e
-
     records = parse_extract_response(data)
     if not records:
-        raise MetadataExtractError(f"No filters found in response for idno {idno!r}")
+        raise MetadataExtractError(f"No filters found in response for study {sid}")
     return records
-
-
-def fetch_study_extract(settings: Settings, idno: str) -> tuple[int, dict[str, Any], dict[str, Any]]:
-    """``(sid, core_fields, filters)`` of one study, from its extract record (no metadata body is requested)."""
-    try:
-        data = catalog_extract.fetch_extract_study(
-            idno, include_admin_metadata=True, include_metadata=False, **_request_kwargs(settings)
-        )
-    except Exception as e:
-        raise _wrap_extract_error(e) from e
-    study = data.get("study") if isinstance(data.get("study"), dict) else data
-    core = study.get("core_fields")
-    filters = study.get("filters")
-    try:
-        sid = int(core["catalog_id"])
-    except (KeyError, TypeError, ValueError):
-        sid = 0
-    if sid <= 0 or not isinstance(filters, dict):
-        raise MetadataExtractError(f"Extract record for {idno!r} lacks core_fields.catalog_id or filters")
-    return sid, core, filters
 
 
 def iter_study_records(
@@ -144,7 +114,7 @@ def iter_study_records(
     max_records: int | None = None,
     show_progress_bar: bool = False,
 ) -> Iterator[dict[str, Any]]:
-    """Paginate all studies and yield ``{idno, filters}`` records."""
+    """Paginate all studies and yield ``{sid, filters}`` records."""
     request_kwargs = _request_kwargs(settings)
     offset = 0
     seen = 0

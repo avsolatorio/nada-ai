@@ -24,15 +24,6 @@ class Settings(BaseSettings):
     opensearch_password: str | None = Field(default=None)
     opensearch_ca_certs: str | None = Field(default=None)
     opensearch_verify_certs: bool = Field(default=True)
-    opensearch_auth_mode: Literal["basic", "aws_sigv4"] = Field(
-        default="basic",
-        description="basic: user/password; aws_sigv4: IAM (install optional extra `aws` for boto3).",
-    )
-    aws_region: str | None = Field(default=None, description="AWS region for SigV4; defaults from boto3 session")
-    aws_service: str = Field(
-        default="es", description="AWS SigV4 service name (es for OpenSearch domain; aoss for Serverless)"
-    )
-    aws_profile: str | None = Field(default=None, description="Optional boto3 profile name")
 
     index_name: str = Field(default="nada-metadata")
     #: OpenSearch study index (one document per study, ``_id`` = ``sid``). Defaults to ``<index_name>-studies``;
@@ -59,6 +50,24 @@ class Settings(BaseSettings):
     studies_semantic_min_score: float = Field(default=0.70, ge=0.0, le=1.0)
     #: Study search: keep semantic matches scoring at least this fraction of the best semantic match.
     studies_semantic_relative_cutoff: float = Field(default=0.94, ge=0.0, le=1.0)
+    #: Study search: the most values one facet lists (``facets`` in the request); ``more`` says when some were left out.
+    studies_facet_size: int = Field(default=500, ge=10, le=5_000)
+
+    #: Variable search: rows reachable by offset paging (``offset + limit``); deeper pages use cursors (reported by
+    #: ``GET /info`` as ``limits.variables_max_offset``). At most OpenSearch's default ``max_result_window``, and at
+    #: least one full page of the largest size.
+    variables_max_offset: int = Field(default=1_000, ge=100, le=10_000)
+    #: Variable search: a query's matches are counted exactly up to this many, and reported as a lower bound
+    #: (``found_is_lower_bound``) beyond. A browse (no query) is always counted exactly. Counting is what a broad
+    #: query costs most on a large index.
+    variables_count_cap: int = Field(default=20_000, ge=100, le=10_000_000)
+
+    #: Citation search: rows reachable by offset paging (``offset + limit``); deeper pages use cursors (reported by
+    #: ``GET /info`` as ``limits.citations_max_offset``). At most OpenSearch's default ``max_result_window``, and at
+    #: least one full page of the largest size.
+    citations_max_offset: int = Field(default=10_000, ge=100, le=10_000)
+    #: Seconds a search request to OpenSearch may take before it is abandoned and answered ``search_timeout``.
+    search_timeout_seconds: float = Field(default=5.0, gt=0, le=120)
 
     #: If True, ``PUT _index_template`` before index create / bulk ingest so auto-created indices inherit ``knn_vector`` mapping.
     opensearch_put_composable_index_template: bool = Field(default=True)
@@ -69,7 +78,7 @@ class Settings(BaseSettings):
     opensearch_cluster_auto_create_index: str | None = Field(default=None)
 
     #: Active vector / keyword search engine.
-    search_backend: SearchBackendKind = Field(default="qdrant")
+    search_backend: SearchBackendKind = Field(default="opensearch")
 
     #: Qdrant HTTP API (``host:port`` or full URL per ``qdrant-client``).
     qdrant_url: str = Field(default="http://localhost:6333")
@@ -99,6 +108,13 @@ class Settings(BaseSettings):
     embedding_model_kwargs_json: str | None = Field(default='{"dtype": "auto"}')
     embedding_device: str | None = Field(default=None)
     embedding_batch_size: int = Field(default=32)
+    #: Longest input, in tokens, a text is embedded with; longer texts are cut off for the vector only (the stored
+    #: text and keyword search keep all of it). A batch is padded to its longest text, and some models accept tens of
+    #: thousands of tokens (harrier: 32,768), so one very long text could take the memory of a whole batch at that
+    #: length and get the process killed. Applied when the model loads; a model's own lower limit is kept.
+    #: Each chunk stores the cap its vector was made with (``embedding_input_cap``), and a stored vector is reused only
+    #: at the same cap, so changing this re-embeds each chunk as it is next indexed. 1024 covers a full PDF page.
+    embedding_max_seq_length: int = Field(default=1024, ge=16)
     #: Caps ``torch.set_num_threads`` for the local SentenceTransformers backend.
     #: Unset (default) leaves PyTorch's own default, which is every visible CPU
     #: core — on a shared/local machine this is what turns "index the catalog"
@@ -192,8 +208,8 @@ class Settings(BaseSettings):
     ack_failure_limit: int = Field(default=10, ge=1, le=1000)
 
     #: Report indexing/deletion outcomes back to NADA's search_index_state
-    #: (POST {base}/admin/search-index/state/bulk) after index_ids_op,
-    #: index_from_catalog_op, delete_by_idno_op, and delete_by_idnos_op —
+    #: (POST {base}/admin/search-index/state/bulk, by object_id) after index_sids_op,
+    #: index_from_catalog_op and delete_by_sids_op —
     #: independent of the queue/ack flow above, since bulk/admin-triggered
     #: operations never go through enqueue() and so have no queue row to ack
     #: against. Off by default, same rationale as reconcile_search_index_enabled:
@@ -296,6 +312,15 @@ class Settings(BaseSettings):
                 "embedding_backend none is not valid with search_backend=qdrant: a Qdrant collection is a vector "
                 "index, so a deployment with no embeddings has nothing for it to store or search. embedding_backend "
                 "none is only meaningful for a search_backend with its own lexical index (opensearch)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_variables_paging(self) -> Settings:
+        if self.variables_count_cap < self.variables_max_offset:
+            raise ValueError(
+                "variables_count_cap (NADA_VARIABLES_COUNT_CAP) must be at least variables_max_offset "
+                "(NADA_VARIABLES_MAX_OFFSET): every row offset paging reaches has to be counted"
             )
         return self
 

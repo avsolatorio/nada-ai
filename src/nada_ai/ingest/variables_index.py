@@ -25,8 +25,9 @@ from nada_ai.ingest.extract_access import ExtractError, request_kwargs
 from nada_ai.ingest.progress import CancelToken
 from nada_ai.nada.admin_auth import scrub_admin_credentials
 from nada_ai.search.backend.opensearch.client import build_client
+from nada_ai.search.backend.opensearch.index_template import put_index_template_of
 from nada_ai.search.backend.opensearch.mapping import new_index_generation, variables_index_body
-from nada_ai.search.backend.opensearch.studies import sids_for_idnos
+from nada_ai.search.backend.opensearch.recreate import recreate_index
 from nada_ai.search.backend.opensearch.variables import variable_bulk_action
 from nada_ai.settings import Settings
 
@@ -40,20 +41,26 @@ def ensure_variables_index(client: Any, settings: Settings) -> None:
         return
     body = variables_index_body()
     body["mappings"]["_meta"] = {"generation": new_index_generation()}
+    put_index_template_of(client, settings, name)
     client.indices.create(index=name, body=body)
+
+
+def recreate_variables_index(client: Any, settings: Settings) -> str:
+    """Drop the variable index and create it empty with the current mapping (and template); returns its new generation."""
+    put_index_template_of(client, settings, settings.variables_index)
+    return recreate_index(client, settings.variables_index, variables_index_body())
 
 
 def _bulk_actions(index: str, variables: list[dict[str, Any]]) -> list[dict[str, Any]]:
     actions = []
     for variable in variables:
         core_fields = variable.get("core_fields")
-        filters = variable.get("filters")
-        if not isinstance(core_fields, dict) or not isinstance(filters, dict):
+        if not isinstance(core_fields, dict):
             continue
         uid = core_fields.get("uid")
         if uid is None:
             continue
-        actions.append(variable_bulk_action(index, int(uid), core_fields, filters))
+        actions.append(variable_bulk_action(index, int(uid), core_fields))
     return actions
 
 
@@ -89,35 +96,28 @@ def _iter_study_variables(settings: Settings, sid: int, page_size: int):
 
 def sync_survey_variables_op(
     settings: Settings,
-    idno: str,
+    sid: int,
     *,
-    sid: int | None = None,
     page_size: int = 1000,
     cancel_token: CancelToken | None = None,
 ) -> dict[str, Any]:
-    """Replace one study's variables in the index: delete them, then write every page of them. The study is
-    ``sid`` when the caller knows it, else the study index's sid for ``idno``; its variables are fetched and replaced
-    by that id.
+    """Replace the variables of study ``sid`` (NADA's internal id) in the index: delete them, then write every page of
+    them, fetched by that id.
 
-    Best fit after that study's own document is (re)indexed, so a search never shows a variable of an unpublished or
-    deleted study. The study's variables are fetched a page at a time (a study can have far more than fit in one
+    Whether its variables are searchable is the study's business (its published state and filters are read from the
+    study index at search time), so this only writes the variables themselves. The study's variables are fetched a page at a time (a study can have far more than fit in one
     response), and the first page is fetched and built into documents **before** anything is deleted: a study that
-    cannot be read (unknown idno, NADA unreachable) or whose first page cannot be built (a field the extract no
+    cannot be read (unknown id, NADA unreachable) or whose first page cannot be built (a field the extract no
     longer sends) leaves its existing variables alone instead of emptying them. A failure after that first page
     leaves the study partially indexed and raises; running the sync again repairs it, since each variable's ``_id``
     is its ``uid``.
 
-    Returns ``{"idno", "indexed", "errors", "cancelled"}``; ``cancelled`` is true when ``cancel_token`` stopped the
+    Returns ``{"sid", "indexed", "errors", "cancelled"}``; ``cancelled`` is true when ``cancel_token`` stopped the
     pages early.
     """
     client = build_client(settings)
     try:
         ensure_variables_index(client, settings)
-        if sid is None:
-            sid = sids_for_idnos(client, settings.studies_index, [idno]).get(idno)
-            if sid is None:
-                raise ExtractError(f"{idno!r} is not in the study index: its variables cannot be synced by study id")
-
         try:
             pages = batched(_iter_study_variables(settings, int(sid), page_size), page_size)
             first = next(pages, ())
@@ -126,8 +126,10 @@ def sync_survey_variables_op(
             raise ExtractError(scrub_admin_credentials(str(e))) from e
 
         if cancel_token is not None and cancel_token.is_set():
-            return {"idno": idno, "indexed": 0, "errors": [], "cancelled": True}
-        client.delete_by_query(index=settings.variables_index, body={"query": {"term": {"sid": int(sid)}}}, refresh=True)
+            return {"sid": sid, "indexed": 0, "errors": [], "cancelled": True}
+        client.delete_by_query(
+            index=settings.variables_index, body={"query": {"term": {"sid": int(sid)}}}, refresh=True
+        )
 
         indexed = 0
         errors: list[Any] = []
@@ -145,7 +147,7 @@ def sync_survey_variables_op(
             raise ExtractError(scrub_admin_credentials(str(e))) from e
 
         client.indices.refresh(index=settings.variables_index)
-        return {"idno": idno, "indexed": indexed, "errors": errors, "cancelled": cancelled}
+        return {"sid": sid, "indexed": indexed, "errors": errors, "cancelled": cancelled}
     finally:
         client.close()
 
@@ -166,7 +168,7 @@ def backfill_variables_op(
     The catalog is walked with a keyset cursor (``after_uid``), so a page costs the same however deep it is, and
     NADA counts the catalog once, on the first page. ``progress_cb`` receives the job-registry progress shape
     (``processed``/``total``/``failed``/``percent``) after every page. This adds and replaces variables; it does not
-    remove variables that no longer exist in NADA — deleting a study does that (see ``delete_by_idno_op``), and
+    remove variables that no longer exist in NADA — deleting a study does that (see ``delete_by_sids_op``), and
     ``sync_survey_variables_op`` replaces one study's variables outright.
 
     Returns ``{"seen", "indexed", "errors", "total", "cancelled"}``.

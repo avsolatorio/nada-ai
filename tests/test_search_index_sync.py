@@ -18,7 +18,6 @@ from nada_ai.ingest.search_index_sync import (
     list_diff_stale,
     list_queue,
     list_type_breakdown,
-    lookup_metadata_type,
     process_item,
     reconcile_diff_once,
     reconcile_once,
@@ -86,7 +85,7 @@ def test_list_queue_parses_items():
     with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
         items = list_queue(_settings()).items
     assert len(items) == 1
-    assert items[0].object_key == "WLD_2021_TEST_v01"
+    assert (items[0].object_id, items[0].object_key) == (10, "WLD_2021_TEST_v01")
     assert items[0].is_delete is False
 
 
@@ -120,89 +119,21 @@ def test_ack_item_success():
     assert res["applied"] is True
 
 
-# Real single-study response shape from a live instance
-# (https://nada-demo.ihsn.org/index.php/api/admin/search-metadata-extract/studies/{idno}):
-# dataset_type lives at study["filters"]["dataset_type"], NOT at the study's top
-# level despite the catalog-admin OpenAPI spec documenting a top-level field.
-LIVE_STUDY_RESPONSE = {
-    "status": "success",
-    "study": {
-        "core_fields": {"idno": "WB_LSMS_001"},
-        "filters": {
-            "doctype": 1,
-            "published": 1,
-            "dataset_type": "document",
-            "formid": None,
-            "form_model": None,
-            "year_start": 2020,
-            "year_end": 2020,
-            "years": [2020],
-            "repositoryid": "central",
-            "repositories": ["central"],
-            "countries": [],
-            "regions": [],
-            "data_class_id": None,
-            "tags": [],
-        },
-        "metadata": {},
-        "admin_metadata": {},
-    },
-}
-
-
-def test_lookup_metadata_type_reads_dataset_type_from_filters():
-    with patch(
-        "nada_ai.ingest.search_index_sync.catalog_extract.fetch_extract_study",
-        return_value=LIVE_STUDY_RESPONSE,
-    ):
-        result = lookup_metadata_type(_settings(), "WB_LSMS_001")
-    assert result == "document"
-
-
-def test_lookup_metadata_type_none_when_dataset_type_unmapped():
-    resp = {"status": "success", "study": {**LIVE_STUDY_RESPONSE["study"], "filters": {"dataset_type": "citation"}}}
-    with patch("nada_ai.ingest.search_index_sync.catalog_extract.fetch_extract_study", return_value=resp):
-        result = lookup_metadata_type(_settings(), "SOME_CITATION_IDNO")
-    assert result is None
-
-
-@pytest.mark.parametrize(
-    ("dataset_type", "metadata_type"),
-    [
-        ("survey", "microdata"),
-        ("timeseries", "indicator"),
-        ("timeseriesdb", "indicator-db"),
-        ("timeseries-db", "indicator-db"),
-        ("document", "document"),
-        ("geospatial", "geospatial"),
-        ("table", "table"),
-        ("script", "script"),
-        ("image", "image"),
-        ("video", "video"),
-    ],
-)
-def test_lookup_metadata_type_maps_every_nada_dataset_type(dataset_type, metadata_type):
-    resp = {"status": "success", "study": {**LIVE_STUDY_RESPONSE["study"], "filters": {"dataset_type": dataset_type}}}
-    with patch("nada_ai.ingest.search_index_sync.catalog_extract.fetch_extract_study", return_value=resp):
-        result = lookup_metadata_type(_settings(), "SOME_IDNO")
-    assert result == metadata_type
-
-
 #: What the ops return when everything they were asked to write was written.
 _INDEXED_OK = {"indexed": 1, "errors": [], "load_errors": [], "empty_docs": []}
-_VARIABLES_OK = {"idno": "WLD_2021_TEST_v01", "indexed": 3, "errors": [], "cancelled": False}
+_VARIABLES_OK = {"sid": 1, "indexed": 3, "errors": [], "cancelled": False}
 _CITATION_OK = {"citation_id": 7, "indexed": 1, "deleted": 0, "errors": []}
 
 
 def _queue_item(
-    idno: str, *, delete: bool = False, item_id: int = 1, variables: bool = False, data_type: str | None = None
+    sid: int, *, delete: bool = False, variables: bool = False, data_type: str | None = None, idno: str | None = None
 ) -> SearchIndexQueueItem:
     change_class = "delete" if delete else ("variables" if variables else "upsert_full")
     return SearchIndexQueueItem(
-        id=item_id,
+        id=sid,
         object_type="survey",
-        object_id=item_id,
-        object_key=idno,
+        object_id=sid,
+        object_key=idno or f"IDNO-{sid}",
         change_class=change_class,
         status="pending",
         changed=1700000000,
@@ -211,40 +142,44 @@ def _queue_item(
     )
 
 
+def _full(sid: int, title: str = "T") -> dict:
+    return {"core_fields": {"catalog_id": sid}, "filters": {"dataset_type": "document"}, "metadata": {"title": title}}
+
+
 @pytest.fixture(autouse=True)
 def _full_records_by_id():
-    """A full index fetches the study's record by id and puts it in ai4data's cache: no NADA here, no cache file."""
-    with (
-        patch(
-            "nada_ai.ingest.search_index_sync.full_record",
-            side_effect=lambda settings, sid: {"core_fields": {"catalog_id": sid}, "metadata": {"title": "T"}},
-        ) as full_record,
-        patch("nada_ai.ingest.search_index_sync.catalog_extract.write_metadata_cache") as write_cache,
-    ):
-        yield full_record, write_cache
+    """A full index fetches the study's record by id: no NADA here."""
+    with patch(
+        "nada_ai.ingest.search_index_sync.full_record", side_effect=lambda settings, sid: _full(sid)
+    ) as full_record:
+        yield full_record
 
 
 def test_a_full_index_reads_the_record_fetched_by_id_not_by_idno(_full_records_by_id):
-    full_record, write_cache = _full_records_by_id
-    item = _queue_item("gov.noaa.ncdc:C00994", item_id=516, data_type="document")
-    with patch("nada_ai.ingest.search_index_sync.index_ids_op", return_value=_INDEXED_OK) as mock_index:
+    item = _queue_item(516, data_type="document", idno="gov.noaa.ncdc:C00994")
+    with patch("nada_ai.ingest.search_index_sync.index_sids_op", return_value=_INDEXED_OK) as mock_index:
         process_item(_settings(), item)
 
-    full_record.assert_called_once_with(_settings(), 516)
-    cached, idno, metadata_type = write_cache.call_args.args
-    assert (idno, metadata_type) == ("gov.noaa.ncdc:C00994", "document") and cached["title"] == "T"
-    assert write_cache.call_args.kwargs == {"include_resources": True}
-    assert mock_index.call_args.kwargs["force"] is False  # the loader reads the cache; unchanged chunks keep vectors
+    _full_records_by_id.assert_called_once_with(_settings(), 516)
+    assert mock_index.call_args.args[1] == [516]
+    assert mock_index.call_args.kwargs["records"] == [_full(516)]  # indexed from this record: nothing by idno
+    assert mock_index.call_args.kwargs["force"] is False  # unchanged chunks keep their vectors
 
 
 def test_a_full_index_uses_the_record_the_scheduler_already_fetched(_full_records_by_id):
-    full_record, write_cache = _full_records_by_id
-    item = _queue_item("A", data_type="document")
-    record = {"core_fields": {"catalog_id": 1}, "metadata": {"title": "from the page"}}
-    with patch("nada_ai.ingest.search_index_sync.index_ids_op", return_value=_INDEXED_OK):
-        process_item(_settings(), item, extract=record)
-    full_record.assert_not_called()
-    assert write_cache.call_args.args[0]["title"] == "from the page"
+    record = _full(1, "from the page")
+    with patch("nada_ai.ingest.search_index_sync.index_sids_op", return_value=_INDEXED_OK) as mock_index:
+        process_item(_settings(), _queue_item(1, data_type="document"), extract=record)
+    _full_records_by_id.assert_not_called()
+    assert mock_index.call_args.kwargs["records"] == [record]
+
+
+def test_a_partial_record_from_the_scheduler_is_fetched_again_in_full(_full_records_by_id):
+    """A record fetched without metadata (for a partial update) cannot be indexed in full."""
+    with patch("nada_ai.ingest.search_index_sync.index_sids_op", return_value=_INDEXED_OK) as mock_index:
+        process_item(_settings(), _queue_item(1), extract={"core_fields": {"catalog_id": 1}, "filters": {}})
+    _full_records_by_id.assert_called_once()
+    assert mock_index.call_args.kwargs["records"] == [_full(1)]
 
 
 def _page(items: list[SearchIndexQueueItem]) -> QueuePage:
@@ -261,93 +196,61 @@ def test_list_queue_sends_exclude_and_reads_the_refusal_reason():
     assert page.reason == "other_nada_ai"
 
 
-def test_full_item_uses_the_data_type_nada_sends():
-    item = _queue_item("WLD_2021_TEST_v01", data_type="document")
+def test_a_queue_item_needs_no_idno():
+    item = SearchIndexQueueItem(
+        id=1, object_type="survey", object_id=5, change_class="delete", status="pending", changed=1
+    )
+    assert item.object_key is None
+
+
+def test_a_delete_item_removes_the_study_by_its_id():
+    item = _queue_item(42, delete=True)
     with (
-        patch("nada_ai.ingest.search_index_sync.lookup_metadata_type") as mock_lookup,
-        patch("nada_ai.ingest.search_index_sync.index_ids_op", return_value=_INDEXED_OK) as mock_index,
+        patch("nada_ai.ingest.search_index_sync.index_sids_op") as mock_index,
+        patch("nada_ai.ingest.search_index_sync.delete_by_sids_op") as mock_delete,
     ):
         action = process_item(_settings(), item)
 
-    mock_lookup.assert_not_called()
-    assert mock_index.call_args.kwargs["metadata_type"] == "document"
-    assert mock_index.call_args.kwargs["idnos"] == ["WLD_2021_TEST_v01"]
-    assert action == "indexed"
-
-
-def test_full_item_looks_the_type_up_when_nada_sends_none():
-    item = _queue_item("WLD_2021_TEST_v01")
-    with (
-        patch("nada_ai.ingest.search_index_sync.lookup_metadata_type", return_value="indicator") as mock_lookup,
-        patch("nada_ai.ingest.search_index_sync.index_ids_op", return_value=_INDEXED_OK) as mock_index,
-    ):
-        process_item(_settings(), item)
-
-    mock_lookup.assert_called_once()
-    assert mock_index.call_args.kwargs["metadata_type"] == "indicator"
-
-
-def test_a_delete_item_removes_the_study():
-    item = _queue_item("WLD_2021_TEST_v01", delete=True)
-    with (
-        patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index,
-        patch("nada_ai.ingest.search_index_sync.delete_by_idno_op") as mock_delete,
-    ):
-        action = process_item(_settings(), item)
-
-    mock_delete.assert_called_once_with(mock_delete.call_args[0][0], "WLD_2021_TEST_v01")
+    assert mock_delete.call_args.args[1] == [42]
     mock_index.assert_not_called()
     assert action == "deleted"
-
-
-def test_an_unmapped_dataset_type_raises():
-    item = _queue_item("SOME_TABLE_IDNO", data_type="unknown_type")
-    with patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index:
-        with pytest.raises(SearchIndexSyncError, match="mapping"):
-            process_item(_settings(), item)
-    mock_index.assert_not_called()
 
 
 @pytest.mark.parametrize(
     ("report", "reason"),
     [
-        ({"load_errors": [{"idno": "WLD_2021_TEST_v01", "error": "metadata 404"}]}, "metadata 404"),
-        (
-            {"empty_docs": [{"idno": "WLD_2021_TEST_v01", "reason": "no_langdocs"}]},
-            "no documents produced (no_langdocs)",
-        ),
-        ({"indexed": 0, "errors": [{"idno": "WLD_2021_TEST_v01", "error": "disk full"}]}, "disk full"),
-        (
-            {"variables": {"indexed": 2, "errors": [{}], "failed": {"WLD_2021_TEST_v01": "boom"}}},
-            "variables: boom",
-        ),
+        ({"load_errors": [{"sid": 1, "error": "metadata 404"}]}, "metadata 404"),
+        ({"load_errors": [{"sid": 1, "error": "no ingest path for dataset type 'x'"}]}, "no ingest path"),
+        ({"empty_docs": [{"sid": 1, "reason": "no_langdocs"}]}, "no documents produced (no_langdocs)"),
+        ({"indexed": 0, "errors": [{"sid": 1, "error": "disk full"}]}, "disk full"),
+        ({"variables": {"indexed": 2, "errors": [{}], "failed": {1: "boom"}}}, "variables: boom"),
     ],
 )
 def test_a_full_item_whose_index_reports_no_success_raises(report, reason):
-    """index_ids_op reports a per-idno failure in its return value rather than raising. Acking such an item indexed
-    would drop it from the queue and overwrite its failed state in NADA, so nothing would ever retry it."""
-    item = _queue_item("WLD_2021_TEST_v01", data_type="survey")
-    with patch("nada_ai.ingest.search_index_sync.index_ids_op", return_value={**_INDEXED_OK, **report}):
+    """index_sids_op reports a per-study failure in its return value rather than raising. Acking such an item
+    indexed would drop it from the queue and overwrite its failed state in NADA, so nothing would ever retry it."""
+    item = _queue_item(1, data_type="survey")
+    with patch("nada_ai.ingest.search_index_sync.index_sids_op", return_value={**_INDEXED_OK, **report}):
         with pytest.raises(SearchIndexSyncError, match=reason.split(" (")[0]):
             process_item(_settings(), item)
 
 
 def test_reconcile_once_processes_a_page_and_acks_it_in_one_batch():
     items = [
-        _queue_item("WLD_2021_TEST_v01", data_type="timeseries"),
-        _queue_item("WLD_2021_GONE", delete=True, item_id=2),
-        _queue_item("BROKEN", item_id=3, data_type="timeseries"),
+        _queue_item(1, data_type="timeseries"),
+        _queue_item(2, delete=True),
+        _queue_item(3, data_type="timeseries"),
     ]
 
-    def index(settings, **kw):
-        if kw["idnos"] == ["BROKEN"]:
+    def index(settings, sids, **kw):
+        if sids == [3]:
             raise RuntimeError("boom")
         return _INDEXED_OK
 
     with (
         patch("nada_ai.ingest.search_index_sync.list_queue", return_value=_page(items)),
-        patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=index),
-        patch("nada_ai.ingest.search_index_sync.delete_by_idno_op"),
+        patch("nada_ai.ingest.search_index_sync.index_sids_op", side_effect=index),
+        patch("nada_ai.ingest.search_index_sync.delete_by_sids_op"),
         patch("nada_ai.ingest.search_index_sync.ack_batch") as mock_ack,
     ):
         summary = reconcile_once(_settings(), limit=10)
@@ -359,16 +262,16 @@ def test_reconcile_once_processes_a_page_and_acks_it_in_one_batch():
 
 
 def test_reconcile_once_stops_when_nada_cannot_serve_and_acks_what_was_done():
-    items = [_queue_item("A", data_type="timeseries"), _queue_item("B", item_id=2, data_type="timeseries")]
+    items = [_queue_item(1, data_type="timeseries"), _queue_item(2, data_type="timeseries")]
 
-    def index(settings, **kw):
-        if kw["idnos"] == ["B"]:
+    def index(settings, sids, **kw):
+        if sids == [2]:
             raise NadaUnavailable("GET /studies: timeout")
         return _INDEXED_OK
 
     with (
         patch("nada_ai.ingest.search_index_sync.list_queue", return_value=_page(items)),
-        patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=index),
+        patch("nada_ai.ingest.search_index_sync.index_sids_op", side_effect=index),
         patch("nada_ai.ingest.search_index_sync.ack_batch") as mock_ack,
     ):
         summary = reconcile_once(_settings(), limit=10)
@@ -396,25 +299,23 @@ def test_reconcile_once_does_nothing_while_nada_does_not_track_for_this_deployme
 
 
 def test_variables_change_class_syncs_only_variables_on_opensearch():
-    item = _queue_item("WLD_2021_TEST_v01", variables=True)
+    item = _queue_item(1, variables=True)
     with (
-        patch("nada_ai.ingest.search_index_sync.lookup_metadata_type") as mock_lookup,
-        patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index,
+        patch("nada_ai.ingest.search_index_sync.index_sids_op") as mock_index,
         patch("nada_ai.ingest.variables_index.sync_survey_variables_op", return_value=_VARIABLES_OK) as mock_sync,
     ):
         action = process_item(_settings(search_backend="opensearch"), item)
 
-    mock_lookup.assert_not_called()
     mock_index.assert_not_called()
-    mock_sync.assert_called_once_with(_settings(search_backend="opensearch"), "WLD_2021_TEST_v01", sid=1)
+    mock_sync.assert_called_once_with(_settings(search_backend="opensearch"), 1)
     assert action == "indexed"
 
 
 def test_variables_change_class_is_a_noop_on_qdrant():
     """Qdrant has no separate variable index; the item is still acked (not left pending forever)."""
-    item = _queue_item("WLD_2021_TEST_v01", variables=True)
+    item = _queue_item(1, variables=True)
     with (
-        patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index,
+        patch("nada_ai.ingest.search_index_sync.index_sids_op") as mock_index,
         patch("nada_ai.ingest.variables_index.sync_survey_variables_op", return_value=_VARIABLES_OK) as mock_sync,
     ):
         action = process_item(_settings(search_backend="qdrant"), item)
@@ -425,7 +326,7 @@ def test_variables_change_class_is_a_noop_on_qdrant():
 
 
 def test_variables_change_class_raises_when_sync_reports_write_errors():
-    item = _queue_item("WLD_2021_TEST_v01", variables=True)
+    item = _queue_item(1, variables=True)
     with patch(
         "nada_ai.ingest.variables_index.sync_survey_variables_op",
         return_value={**_VARIABLES_OK, "indexed": 2, "errors": [{"index": {"error": "version_conflict"}}]},
@@ -488,12 +389,12 @@ def test_report_state_bulk_splits_into_multiple_chunks():
 
 
 def test_list_diff_missing_parses_page():
-    payload = {"status": "success", "items": [{"idno": "A", "type": "survey"}], "total": 5}
+    payload = {"status": "success", "items": [{"object_id": 5, "idno": "A", "type": "survey"}], "total": 5}
     client = _mock_sync_client(get=_resp(payload))
     with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
         page = list_diff_missing(_settings(), object_type="survey", limit=10, offset=0)
     assert page.total == 5
-    assert page.items[0].idno == "A"
+    assert (page.items[0].object_id, page.items[0].idno) == (5, "A")
     assert page.items[0].type == "survey"
     assert client.get.call_args.kwargs["params"] == {"object_type": "survey", "limit": 10, "offset": 0}
 
@@ -501,7 +402,10 @@ def test_list_diff_missing_parses_page():
 def test_list_diff_missing_parses_last_error():
     payload = {
         "status": "success",
-        "items": [{"idno": "A", "type": "survey", "last_error": "boom"}, {"idno": "B", "type": "survey"}],
+        "items": [
+            {"object_id": 1, "idno": "A", "type": "survey", "last_error": "boom"},
+            {"object_id": 2, "idno": "B", "type": "survey"},
+        ],
         "total": 2,
     }
     client = _mock_sync_client(get=_resp(payload))
@@ -513,7 +417,7 @@ def test_list_diff_missing_parses_last_error():
 
 def test_list_diff_missing_total_can_exceed_items_when_nothing_indexed():
     """Empty catalog coverage must still report the real total, not look like 'nothing missing'."""
-    payload = {"status": "success", "items": [{"idno": "A", "type": "survey"}], "total": 8000}
+    payload = {"status": "success", "items": [{"object_id": 1, "idno": "A", "type": "survey"}], "total": 8000}
     client = _mock_sync_client(get=_resp(payload))
     with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
         page = list_diff_missing(_settings(), object_type="survey", limit=1)
@@ -544,12 +448,12 @@ def test_list_type_breakdown_parses_items():
 
 
 def test_list_diff_stale_parses_page():
-    payload = {"status": "success", "items": [{"idno": "Z"}], "total": 1}
+    payload = {"status": "success", "items": [{"object_id": 9, "idno": "Z"}], "total": 1}
     client = _mock_sync_client(get=_resp(payload))
     with patch("nada_ai.ingest.search_index_sync.httpx.Client", return_value=client):
         page = list_diff_stale(_settings(), object_type="survey")
     assert page.total == 1
-    assert page.items[0].idno == "Z"
+    assert page.items[0].object_id == 9
     assert page.items[0].type is None
 
 
@@ -606,22 +510,22 @@ def _diff_page(items, total=None):
     return DiffPage(items=[DiffItem(**i) for i in items], total=total if total is not None else len(items))
 
 
-def test_reconcile_diff_once_indexes_each_missing_item_with_resolved_type():
-    page = _diff_page([{"idno": "A", "type": "survey"}, {"idno": "B", "type": "geospatial"}])
+def _indexed_sids(mock_index) -> list[int]:
+    return [c.args[1][0] for c in mock_index.call_args_list]
+
+
+def test_reconcile_diff_once_indexes_each_missing_study_by_its_id():
+    page = _diff_page([{"object_id": 1, "type": "survey"}, {"object_id": 2, "type": "geospatial"}])
     empty_page = _diff_page([])
     with (
         patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[page, empty_page]),
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page),
-        patch(
-            "nada_ai.ingest.search_index_sync.index_ids_op",
-            return_value={"indexed": 1, "errors": [], "load_errors": [], "empty_docs": []},
-        ) as mock_index,
+        patch("nada_ai.ingest.search_index_sync.index_sids_op", return_value=_INDEXED_OK) as mock_index,
     ):
         summary = reconcile_diff_once(_diff_settings())
 
-    assert mock_index.call_count == 2
-    calls_by_idno = {c.kwargs["idnos"][0]: c.kwargs["metadata_type"] for c in mock_index.call_args_list}
-    assert calls_by_idno == {"A": "microdata", "B": "geospatial"}
+    assert _indexed_sids(mock_index) == [1, 2]
+    assert all(c.kwargs["force"] is True for c in mock_index.call_args_list)
     assert summary["missing_total"] == 2
     assert summary["indexed"] == 2
     assert summary["failed"] == 0
@@ -629,24 +533,16 @@ def test_reconcile_diff_once_indexes_each_missing_item_with_resolved_type():
 
 
 def test_reconcile_diff_once_counts_soft_failure_as_failed_not_indexed():
-    """index_ids_op doesn't raise for a per-idno failure (load error, empty
-    doc, backend write error) — it reports those in its return value. A call
-    that returns without raising must not be assumed to mean the idno was
+    """index_sids_op doesn't raise for a per-study failure (load error, empty doc, backend write error) — it reports
+    those in its return value. A call that returns without raising must not be assumed to mean the study was
     actually indexed."""
-    page = _diff_page([{"idno": "BAD", "type": "geospatial"}])
+    page = _diff_page([{"object_id": 1, "type": "geospatial"}])
     empty_page = _diff_page([])
+    report = {**_INDEXED_OK, "indexed": 0, "load_errors": [{"sid": 1, "stage": "load", "error": "boom"}]}
     with (
         patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[page, empty_page]),
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page),
-        patch(
-            "nada_ai.ingest.search_index_sync.index_ids_op",
-            return_value={
-                "indexed": 0,
-                "errors": [],
-                "load_errors": [{"idno": "BAD", "metadata_type": "geospatial", "stage": "load", "error": "boom"}],
-                "empty_docs": [],
-            },
-        ),
+        patch("nada_ai.ingest.search_index_sync.index_sids_op", return_value=report),
     ):
         summary = reconcile_diff_once(_diff_settings())
 
@@ -655,12 +551,12 @@ def test_reconcile_diff_once_counts_soft_failure_as_failed_not_indexed():
 
 
 def test_reconcile_diff_once_counts_a_study_whose_variables_failed_as_failed():
-    page = _diff_page([{"idno": "M", "type": "survey"}])
-    report = {**_INDEXED_OK, "variables": {"indexed": 0, "errors": [{}], "failed": {"M": "boom"}}}
+    page = _diff_page([{"object_id": 1, "type": "survey"}])
+    report = {**_INDEXED_OK, "variables": {"indexed": 0, "errors": [{}], "failed": {1: "boom"}}}
     with (
         patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[page, _diff_page([])]),
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=_diff_page([])),
-        patch("nada_ai.ingest.search_index_sync.index_ids_op", return_value=report),
+        patch("nada_ai.ingest.search_index_sync.index_sids_op", return_value=report),
     ):
         summary = reconcile_diff_once(_diff_settings())
 
@@ -681,12 +577,12 @@ def test_reconcile_diff_once_passes_data_type_through_to_both_diff_calls():
 
 
 def test_reconcile_diff_once_skips_unmapped_dataset_type():
-    page = _diff_page([{"idno": "A", "type": "citation"}])  # 'citation' has no metadata_type mapping
+    page = _diff_page([{"object_id": 1, "type": "citation"}])  # 'citation' has no metadata_type mapping
     empty_page = _diff_page([])
     with (
         patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[page, empty_page]),
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page),
-        patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index,
+        patch("nada_ai.ingest.search_index_sync.index_sids_op") as mock_index,
     ):
         summary = reconcile_diff_once(_diff_settings())
 
@@ -695,36 +591,34 @@ def test_reconcile_diff_once_skips_unmapped_dataset_type():
     assert summary["indexed"] == 0
 
 
-def test_reconcile_diff_once_deletes_stale_items_in_one_batch_call():
-    empty_missing = _diff_page([])
-    stale_page = _diff_page([{"idno": "X"}, {"idno": "Y"}])
-    empty_stale = _diff_page([])
+def test_reconcile_diff_once_deletes_stale_studies_by_id_in_one_batch_call():
+    stale_page = _diff_page([{"object_id": 8, "idno": "SAME"}, {"object_id": 9, "idno": "SAME"}])
     with (
-        patch("nada_ai.ingest.search_index_sync.list_diff_missing", return_value=empty_missing),
-        patch("nada_ai.ingest.search_index_sync.list_diff_stale", side_effect=[stale_page, empty_stale]),
-        patch("nada_ai.ingest.search_index_sync.delete_by_idnos_op") as mock_delete,
+        patch("nada_ai.ingest.search_index_sync.list_diff_missing", return_value=_diff_page([])),
+        patch("nada_ai.ingest.search_index_sync.list_diff_stale", side_effect=[stale_page, _diff_page([])]),
+        patch("nada_ai.ingest.search_index_sync.delete_by_sids_op") as mock_delete,
     ):
         summary = reconcile_diff_once(_diff_settings())
 
     mock_delete.assert_called_once()
-    assert set(mock_delete.call_args.args[1]) == {"X", "Y"}
+    assert mock_delete.call_args.args[1] == [8, 9]  # two studies that shared an idno are two studies
     assert summary["stale_total"] == 2
     assert summary["deleted"] == 2
 
 
 def test_reconcile_diff_once_remove_only_deletes_stale_and_indexes_nothing():
-    stale_page = _diff_page([{"idno": "X"}])
+    stale_page = _diff_page([{"object_id": 8}])
     with (
         patch("nada_ai.ingest.search_index_sync.list_diff_missing") as mock_missing,
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", side_effect=[stale_page, _diff_page([])]),
-        patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index,
-        patch("nada_ai.ingest.search_index_sync.delete_by_idnos_op") as mock_delete,
+        patch("nada_ai.ingest.search_index_sync.index_sids_op") as mock_index,
+        patch("nada_ai.ingest.search_index_sync.delete_by_sids_op") as mock_delete,
     ):
         summary = reconcile_diff_once(_diff_settings(), remove_only=True)
 
     mock_missing.assert_not_called()
     mock_index.assert_not_called()
-    assert mock_delete.call_args.args[1] == ["X"]
+    assert mock_delete.call_args.args[1] == [8]
     assert summary["missing_total"] == 0
     assert summary["deleted"] == 1
 
@@ -735,7 +629,7 @@ def test_reconcile_diff_once_terminates_when_an_item_keeps_failing():
     forever (correctly: it's genuinely still not indexed), so this must not
     loop forever retrying it. Simulates 200 re-fetches all returning the exact
     same permanently-broken item."""
-    stuck_page = _diff_page([{"idno": "STUCK", "type": "survey"}])
+    stuck_page = _diff_page([{"object_id": 1, "type": "survey"}])
     empty_page = _diff_page([])
 
     with (
@@ -744,7 +638,7 @@ def test_reconcile_diff_once_terminates_when_an_item_keeps_failing():
             side_effect=[stuck_page] * 200 + [empty_page],
         ),
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty_page),
-        patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=RuntimeError("permanently broken")),
+        patch("nada_ai.ingest.search_index_sync.index_sids_op", side_effect=RuntimeError("permanently broken")),
     ):
         summary = reconcile_diff_once(_diff_settings())
 
@@ -771,22 +665,19 @@ def test_reconcile_diff_once_summary_shape():
     }
 
 
-def test_reconcile_diff_once_reports_progress_per_idno():
-    """Jobs reads progress.total/processed/percent/failed/current_idno — the
+def test_reconcile_diff_once_reports_progress_per_study():
+    """Jobs reads progress.total/processed/percent/failed/current_sid — the
     same snapshot shape ingest already emits via IngestProgressTracker."""
-    missing = _diff_page([{"idno": "A", "type": "survey"}, {"idno": "B", "type": "geospatial"}])
-    stale = _diff_page([{"idno": "X"}])
+    missing = _diff_page([{"object_id": 1, "type": "survey"}, {"object_id": 2, "type": "geospatial"}])
+    stale = _diff_page([{"object_id": 9}])
     empty = _diff_page([])
     snapshots: list[dict] = []
 
     with (
         patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[missing, empty]),
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", side_effect=[stale, empty]),
-        patch(
-            "nada_ai.ingest.search_index_sync.index_ids_op",
-            return_value={"indexed": 1, "errors": [], "load_errors": [], "empty_docs": []},
-        ),
-        patch("nada_ai.ingest.search_index_sync.delete_by_idnos_op"),
+        patch("nada_ai.ingest.search_index_sync.index_sids_op", return_value=_INDEXED_OK),
+        patch("nada_ai.ingest.search_index_sync.delete_by_sids_op"),
     ):
         summary = reconcile_diff_once(_diff_settings(), progress_cb=snapshots.append)
 
@@ -796,11 +687,11 @@ def test_reconcile_diff_once_reports_progress_per_idno():
         "processed": 0,
         "total": 3,
         "failed": 0,
-        "current_idno": None,
+        "current_sid": None,
         "percent": 0.0,
         "phase": "missing",
     }
-    assert [s["current_idno"] for s in snapshots[1:]] == ["A", "B", "X"]
+    assert [s["current_sid"] for s in snapshots[1:]] == [1, 2, 9]
     assert snapshots[-1]["processed"] == 3
     assert snapshots[-1]["percent"] == 100.0
     assert snapshots[-1]["phase"] == "stale"
@@ -810,24 +701,24 @@ def test_reconcile_diff_once_reports_progress_per_idno():
 def test_reconcile_diff_once_stops_when_cancel_token_is_set():
     from nada_ai.ingest.progress import CancelToken
 
-    missing = _diff_page([{"idno": "A", "type": "survey"}, {"idno": "B", "type": "geospatial"}])
+    missing = _diff_page([{"object_id": 1, "type": "survey"}, {"object_id": 2, "type": "geospatial"}])
     empty = _diff_page([])
     token = CancelToken()
-    indexed: list[str] = []
+    indexed: list[int] = []
 
-    def index_one(settings, idnos, **kwargs):
-        indexed.append(idnos[0])
+    def index_one(settings, sids, **kwargs):
+        indexed.append(sids[0])
         token.set()
-        return {"indexed": 1, "errors": [], "load_errors": [], "empty_docs": []}
+        return _INDEXED_OK
 
     with (
         patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=[missing, empty]),
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=empty),
-        patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=index_one),
+        patch("nada_ai.ingest.search_index_sync.index_sids_op", side_effect=index_one),
     ):
         summary = reconcile_diff_once(_diff_settings(), cancel_token=token)
 
-    assert indexed == ["A"]
+    assert indexed == [1]
     assert summary["indexed"] == 1
     assert summary["cancelled"] is True
     assert summary["deleted"] == 0
@@ -854,78 +745,78 @@ class _FakeDiff:
     def fetch(self, settings, *, object_type, limit, offset, data_type):
         return _diff_page(self.items[offset : offset + limit], total=len(self.items))
 
-    def remove(self, idnos):
-        self.items = [it for it in self.items if it["idno"] not in idnos]
+    def remove(self, sids):
+        self.items = [it for it in self.items if it["object_id"] not in sids]
 
 
 def test_reconcile_diff_once_gets_past_a_full_page_of_items_that_keep_failing():
     """A page whose items all stay in the diff (failed, or skipped for an unmapped type) must not hide the rest."""
     diff = _FakeDiff(
         [
-            {"idno": "BROKEN", "type": "survey"},
-            {"idno": "UNMAPPED", "type": "citation"},
-            *({"idno": f"OK{i}", "type": "survey"} for i in range(5)),
+            {"object_id": 1, "type": "survey"},  # broken
+            {"object_id": 2, "type": "citation"},  # unmapped
+            *({"object_id": 10 + i, "type": "survey"} for i in range(5)),
         ]
     )
 
-    def index_one(settings, idnos, **kwargs):
-        if idnos == ["BROKEN"]:
-            return {**_INDEXED_OK, "indexed": 0, "load_errors": [{"idno": "BROKEN", "error": "boom"}]}
-        diff.remove(idnos)
+    def index_one(settings, sids, **kwargs):
+        if sids == [1]:
+            return {**_INDEXED_OK, "indexed": 0, "load_errors": [{"sid": 1, "error": "boom"}]}
+        diff.remove(sids)
         return _INDEXED_OK
 
     with (
         patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=diff.fetch),
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=_diff_page([])),
-        patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=index_one) as mock_index,
+        patch("nada_ai.ingest.search_index_sync.index_sids_op", side_effect=index_one) as mock_index,
     ):
         summary = reconcile_diff_once(_diff_settings(), page_size=2)
 
-    assert sorted(c.kwargs["idnos"][0] for c in mock_index.call_args_list) == ["BROKEN"] + [f"OK{i}" for i in range(5)]
+    assert sorted(_indexed_sids(mock_index)) == [1, 10, 11, 12, 13, 14]
     assert summary["indexed"] == 5
     assert summary["failed"] == 1
     assert summary["skipped"] == 1
-    assert [it["idno"] for it in diff.items] == ["BROKEN", "UNMAPPED"]
+    assert [it["object_id"] for it in diff.items] == [1, 2]
 
 
 def test_reconcile_diff_once_gets_past_a_full_page_of_stale_items_that_fail_to_delete():
-    diff = _FakeDiff([{"idno": "X1"}, {"idno": "X2"}, {"idno": "Y1"}, {"idno": "Y2"}, {"idno": "Y3"}])
+    diff = _FakeDiff([{"object_id": i} for i in (1, 2, 3, 4, 5)])
 
-    def delete(settings, idnos):
-        if "X1" in idnos:
+    def delete(settings, sids):
+        if 1 in sids:
             raise RuntimeError("delete failed")
-        diff.remove(idnos)
+        diff.remove(sids)
 
     with (
         patch("nada_ai.ingest.search_index_sync.list_diff_missing", return_value=_diff_page([])),
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", side_effect=diff.fetch),
-        patch("nada_ai.ingest.search_index_sync.delete_by_idnos_op", side_effect=delete),
+        patch("nada_ai.ingest.search_index_sync.delete_by_sids_op", side_effect=delete),
     ):
         summary = reconcile_diff_once(_diff_settings(), page_size=2)
 
     assert summary["deleted"] == 3
     assert summary["failed"] == 2
-    assert [it["idno"] for it in diff.items] == ["X1", "X2"]
+    assert [it["object_id"] for it in diff.items] == [1, 2]
 
 
 def test_reconcile_diff_once_moves_past_an_item_that_stays_after_a_reported_success():
     """A success whose state report never reached NADA leaves the item in the diff; it is fetched again, recognised
     as seen, and stepped over rather than stopping the run."""
-    diff = _FakeDiff([{"idno": f"S{i}", "type": "survey"} for i in range(4)])
+    diff = _FakeDiff([{"object_id": i, "type": "survey"} for i in range(4)])
 
-    def index_one(settings, idnos, **kwargs):
-        if idnos != ["S0"]:  # S0's report is lost: it stays in the diff
-            diff.remove(idnos)
+    def index_one(settings, sids, **kwargs):
+        if sids != [0]:  # study 0's report is lost: it stays in the diff
+            diff.remove(sids)
         return _INDEXED_OK
 
     with (
         patch("nada_ai.ingest.search_index_sync.list_diff_missing", side_effect=diff.fetch),
         patch("nada_ai.ingest.search_index_sync.list_diff_stale", return_value=_diff_page([])),
-        patch("nada_ai.ingest.search_index_sync.index_ids_op", side_effect=index_one) as mock_index,
+        patch("nada_ai.ingest.search_index_sync.index_sids_op", side_effect=index_one) as mock_index,
     ):
         summary = reconcile_diff_once(_diff_settings(), page_size=2)
 
-    assert [c.kwargs["idnos"][0] for c in mock_index.call_args_list] == ["S0", "S1", "S2", "S3"]
+    assert _indexed_sids(mock_index) == [0, 1, 2, 3]
     assert summary["indexed"] == 4
 
 
@@ -936,58 +827,55 @@ def test_reconcile_diff_once_moves_past_an_item_that_stays_after_a_reported_succ
 # ---------------------------------------------------------------------------
 
 
-def _partial_item(idno: str) -> SearchIndexQueueItem:
-    return _queue_item(idno, data_type="survey").model_copy(update={"change_class": "upsert_partial"})
+def _partial_item(sid: int) -> SearchIndexQueueItem:
+    return _queue_item(sid, data_type="survey").model_copy(update={"change_class": "upsert_partial"})
 
 
 def test_partial_change_class_is_applied_in_place_from_the_fetched_extract():
-    item = _partial_item("WLD_2021_TEST_v01")
     extract = {"core_fields": {"catalog_id": 1, "idno": "WLD_2021_TEST_v01"}, "filters": {"published": 1}}
     with (
         patch("nada_ai.ingest.service.apply_study_options_from_extract", return_value={"updated": True}) as mock_apply,
         patch("nada_ai.ingest.service.apply_study_options_op") as mock_fetching,
-        patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index,
+        patch("nada_ai.ingest.search_index_sync.index_sids_op") as mock_index,
     ):
-        action = process_item(_settings(search_backend="opensearch"), item, extract=extract)
+        action = process_item(_settings(search_backend="opensearch"), _partial_item(1), extract=extract)
 
-    assert mock_apply.call_args.args[1:] == ("WLD_2021_TEST_v01", 1, extract["core_fields"], {"published": 1})
+    assert mock_apply.call_args.args[1:] == (1, extract["core_fields"], {"published": 1})
     mock_fetching.assert_not_called()
     mock_index.assert_not_called()
     assert action == "indexed"
 
 
-def test_partial_change_class_fetches_the_extract_when_not_given():
-    item = _partial_item("WLD_2021_TEST_v01")
+def test_partial_change_class_fetches_the_extract_by_id_when_not_given():
     with (
         patch("nada_ai.ingest.service.apply_study_options_op", return_value={"updated": True}) as mock_publish,
-        patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index,
+        patch("nada_ai.ingest.search_index_sync.index_sids_op") as mock_index,
     ):
-        process_item(_settings(search_backend="opensearch"), item)
+        process_item(_settings(search_backend="opensearch"), _partial_item(4))
 
-    mock_publish.assert_called_once()
+    assert mock_publish.call_args.args[1] == 4
     mock_index.assert_not_called()
 
 
 def test_partial_change_class_indexes_in_full_when_the_study_is_not_indexed_yet():
-    item = _partial_item("WLD_2021_TEST_v01")
     with (
-        patch("nada_ai.ingest.service.apply_study_options_op", return_value={"updated": False, "reason": "not_indexed"}),
-        patch("nada_ai.ingest.search_index_sync.index_ids_op", return_value=_INDEXED_OK) as mock_index,
+        patch(
+            "nada_ai.ingest.service.apply_study_options_op", return_value={"updated": False, "reason": "not_indexed"}
+        ),
+        patch("nada_ai.ingest.search_index_sync.index_sids_op", return_value=_INDEXED_OK) as mock_index,
     ):
-        action = process_item(_settings(search_backend="opensearch"), item)
+        action = process_item(_settings(search_backend="opensearch"), _partial_item(4))
 
-    assert mock_index.call_args.kwargs["idnos"] == ["WLD_2021_TEST_v01"]
-    assert mock_index.call_args.kwargs["metadata_type"] == "microdata"
+    assert mock_index.call_args.args[1] == [4]
     assert action == "indexed"
 
 
 def test_partial_change_class_indexes_in_full_on_qdrant():
-    item = _partial_item("WLD_2021_TEST_v01")
     with (
         patch("nada_ai.ingest.service.apply_study_options_op") as mock_publish,
-        patch("nada_ai.ingest.search_index_sync.index_ids_op", return_value=_INDEXED_OK) as mock_index,
+        patch("nada_ai.ingest.search_index_sync.index_sids_op", return_value=_INDEXED_OK) as mock_index,
     ):
-        process_item(_settings(search_backend="qdrant"), item)
+        process_item(_settings(search_backend="qdrant"), _partial_item(4))
 
     mock_publish.assert_not_called()
     mock_index.assert_called_once()
@@ -1015,14 +903,12 @@ def test_a_citation_item_syncs_that_one_citation_on_opensearch():
     item = _citation_item(7)
     with (
         patch("nada_ai.ingest.citations_index.sync_citation_op", return_value=_CITATION_OK) as mock_sync,
-        patch("nada_ai.ingest.search_index_sync.index_ids_op") as mock_index,
-        patch("nada_ai.ingest.search_index_sync.lookup_metadata_type") as mock_lookup,
+        patch("nada_ai.ingest.search_index_sync.index_sids_op") as mock_index,
     ):
         action = process_item(_settings(search_backend="opensearch"), item)
 
     mock_sync.assert_called_once_with(_settings(search_backend="opensearch"), 7)
     mock_index.assert_not_called()
-    mock_lookup.assert_not_called()
     assert action == "indexed"
 
 
@@ -1031,7 +917,7 @@ def test_a_deleted_citation_is_removed_from_the_index():
     with (
         patch("nada_ai.ingest.citations_index.delete_citation_op") as mock_delete,
         patch("nada_ai.ingest.citations_index.sync_citation_op") as mock_sync,
-        patch("nada_ai.ingest.search_index_sync.delete_by_idno_op") as mock_study_delete,
+        patch("nada_ai.ingest.search_index_sync.delete_by_sids_op") as mock_study_delete,
     ):
         action = process_item(_settings(search_backend="opensearch"), item)
 

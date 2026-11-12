@@ -42,11 +42,11 @@ uv run python -m nada_ai.filters.cli ensure-indexes
 
 Admin API (when `NADA_ADMIN_API_KEY` is set):
 
-- `POST /admin/filters/sync` — body `{records: [{idno, filters}]}`
-- `GET /admin/filters/{idno}`
+- `POST /admin/filters/sync` — body `{records: [{sid, filters}]}`
+- `GET /admin/filters/{sid}`
 - `POST /admin/filters/ensure-indexes`
 
-Sync updates **all points** sharing the same `metadata.idno` (all langdoc chunks).
+`sid` is the study's NADA internal id. Sync updates **all points** sharing the same `metadata.sid` (all langdoc chunks).
 
 ## NADA metadata-extract API
 
@@ -118,7 +118,7 @@ Dynamic facet keys are listed in [`config/dynamic_filter_facets.json`](../config
 {"facetable": ["doctype", "countries", ...], "excluded": []}
 ```
 
-**`facetable` keys don't require manual curation anymore.** Every `sync_filters_for_idno` call (CLI, admin API, or batch sync) auto-registers any key present in the incoming filters dict that isn't already known — and on Qdrant, immediately creates its payload index — so a new key NADA starts sending shows up as a working facet on its very next sync, with no `POST /admin/facets` step required. This is safe because NADA's `filters` field is a stable, purpose-built projection rather than arbitrary metadata.
+**`facetable` keys don't require manual curation anymore.** Every `sync_filters_for_sid` call (CLI, admin API, or batch sync) auto-registers any key present in the incoming filters dict that isn't already known — and on Qdrant, immediately creates its payload index — so a new key NADA starts sending shows up as a working facet on its very next sync, with no `POST /admin/facets` step required. This is safe because NADA's `filters` field is a stable, purpose-built projection rather than arbitrary metadata.
 
 `excluded` is a deny-list: calling `DELETE /admin/facets/{key}` (or `remove_facet_keys`) both removes a key from `facetable` *and* adds it to `excluded`, so auto-registration won't resurrect it the next time NADA sends data containing it. `POST /admin/facets` (`add_facet_keys`) always wins over a prior exclusion — an explicit add clears the key from `excluded` too.
 

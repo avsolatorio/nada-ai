@@ -106,13 +106,14 @@ flowchart LR
 ## Quickstart
 
 **Requirements**: Python 3.11+, [uv](https://docs.astral.sh/uv/), Docker (for the
-vector store), and network access to a NADA catalog (defaults to the public Data
+search engine; or install it natively, see the [host setup](opensearch-host-setup.md)),
+and network access to a NADA catalog (defaults to the public Data
 Compass instance if you don't set one — see below).
 
 ```bash
 git clone <this repo> && cd nada-ai
 cp .env.example .env
-uv sync --extra local --extra qdrant
+uv sync --extra local
 ```
 
 > **macOS + Docker Desktop**: the `docker` CLI lives at `~/.docker/bin/docker` and is
@@ -136,15 +137,17 @@ necessarily the catalog you actually want.
 > available? Comment out `AI4DATA_METADATA_CATALOG_EXTRACT_PATH` in `.env` and nada-ai
 > falls back to the classic per-idno flow automatically — no other change needed.
 
-Bring up a local Qdrant + API stack (recommended local path — see the
-[Qdrant pipeline guide](qdrant-pipeline-guide.md) for the fully worked walkthrough,
-including a host-only ingest path that skips Docker for the API):
+Set `NADA_ADMIN_API_KEY` in `.env` (the OpenSearch compose file refuses to start without it), then bring up a
+local OpenSearch + API stack. The [OpenSearch setup guide](opensearch-setup-guide.md) is the fully worked
+walkthrough, including production clusters, and the [host setup](opensearch-host-setup.md) covers running without
+Docker:
 
 ```bash
-docker compose -f docker-compose.qdrant.yml -f docker-compose.dev.yml up --build -d
+docker compose -f docker-compose.opensearch.yml -f docker-compose.dev.yml up --build -d
 ```
 
-Create the index/collection and pull the catalog in:
+Create the indexes and pull the catalog in (`index_from_catalog` indexes one catalog type per run, `timeseries` by
+default; pass `--catalog_type=survey` and so on for the others):
 
 ```bash
 uv run python -m nada_ai.ingest.cli create_index
@@ -169,14 +172,16 @@ standalone MCP server:
 uv run python -m nada_ai.mcp_server --port 8025
 ```
 
-Prefer OpenSearch instead of Qdrant (the default)? Same shape, different compose file
-(it sets `NADA_SEARCH_BACKEND=opensearch` itself, and needs `NADA_ADMIN_API_KEY` in `.env`):
+Prefer Qdrant instead of OpenSearch (the default)? Same shape, different compose file
+(it sets `NADA_SEARCH_BACKEND=qdrant` itself; install the `qdrant` extra with
+`uv sync --extra local --extra qdrant` for host-side CLI use):
 
 ```bash
-docker compose -f docker-compose.opensearch.yml -f docker-compose.dev.yml up --build -d
+docker compose -f docker-compose.qdrant.yml -f docker-compose.dev.yml up --build -d
 ```
 
-See [Compose files](#compose-files) for running it next to the Qdrant stack.
+See the [Qdrant pipeline guide](qdrant-pipeline-guide.md), and [Compose files](#compose-files) for running both
+stacks side by side.
 
 ---
 
@@ -240,15 +245,17 @@ MCP search tool, the ingest pipeline) is written against a single backend-agnost
 contract (`src/nada_ai/search/ports.py::SearchBackendPort`) so the choice is purely
 operational.
 
-| | Qdrant (default) | OpenSearch |
+| | OpenSearch (default) | Qdrant |
 |---|---|---|
-| Vector search | native HNSW | k-NN plugin |
-| Keyword leg | FastEmbed BM25 sparse vectors (`NADA_QDRANT_SPARSE_LEXICAL`) | BM25 (native) |
-| Hybrid fusion | RRF (reciprocal rank fusion) with collapse-group prefetch | weighted score combination |
-| Server-side embeddings | not supported — always client-side | optional, via ML Commons (`opensearch_ml` backend) |
-| Best for | simpler local dev loop, native sparse+dense hybrid | teams already standardized on OpenSearch/Elasticsearch tooling |
+| NADA catalog search (`/studies/search`, `/variables/search`, `/citations/search`) | supported | not supported (`unsupported_capability`) |
+| Vector search | k-NN plugin (FAISS HNSW) | native HNSW |
+| Keyword leg | BM25 (native) | FastEmbed BM25 sparse vectors (`NADA_QDRANT_SPARSE_LEXICAL`) |
+| Hybrid fusion | weighted score combination | RRF (reciprocal rank fusion) with collapse-group prefetch |
+| Server-side embeddings | optional, via ML Commons (`opensearch_ml` backend) | not supported — always client-side |
+| Best for | NADA deployments, development and production | `/search` and MCP-only setups, native sparse+dense hybrid |
 
-Both are covered end-to-end, including Docker Compose setups, in the
+Setup: [OpenSearch setup guide](opensearch-setup-guide.md) (Docker, production, embedding options),
+[OpenSearch host setup](opensearch-host-setup.md) (no Docker), and the
 [Qdrant pipeline guide](qdrant-pipeline-guide.md).
 
 ### Embeddings
@@ -349,16 +356,14 @@ flowchart LR
 5. Every document is passed through `ingest/quality.py::check_source_document` along
    the way — see [Ingest quality reports](#ingest-quality-reports).
 
-**Performance**: how expensive step 1 is depends on
-`AI4DATA_METADATA_CATALOG_EXTRACT_PATH`. Enabled (the `.env.example` default) —
-`get_metadata_ids` paginates NADA's bulk `search-metadata-extract/studies` endpoint
-once, warming the local metadata cache (including filters) for every idno on each
-page; the later per-idno `MetadataLoader` fetch is then a cache hit, not a second
-network call. Disabled — every idno gets its own `/api/catalog/json/{idno}` call, an
-N+1 pattern. The bulk endpoint is admin-only (requires
+**Studies are read by id.** Indexing never looks a study up by idno (NADA reuses an
+idno when a study is deleted and created again, and some idnos cannot travel in a URL).
+A study's full record is fetched from NADA's metadata-extract API by its internal id
+(`search-metadata-extract/studies?sids=`), or paged from the catalog in id order
+(`studies?offset=&limit=`), and handed to ai4data's handler as is: nothing is fetched
+or cached by idno (`ingest/study_sources.py`). The extract API is admin-only (requires
 `AI4DATA_METADATA_CATALOG_X_API_KEY`/`_AUTH_BEARER`/`_COOKIES` for an admin-capable
-account on the target instance); comment the setting out to fall back to the classic
-flow, which works against a public/anonymous-read catalog.
+account on the target instance) and `AI4DATA_METADATA_CATALOG_EXTRACT_PATH` must be set.
 
 ### Running ingestion
 
@@ -373,8 +378,7 @@ a thin loop over the single-type operation, not a new op of its own):
 uv run python -m nada_ai.ingest.cli create_index
 uv run python -m nada_ai.ingest.cli put_index_template   # OpenSearch only
 uv run python -m nada_ai.ingest.cli index_from_catalog    # pull + index ONE catalog_type (default: timeseries)
-uv run python -m nada_ai.ingest.cli index                 # index pre-fetched records
-uv run python -m nada_ai.ingest.cli index_ids --idnos idno1,idno2   # targeted re-index
+uv run python -m nada_ai.ingest.cli index --sids 516,517  # targeted re-index, by NADA internal id
 uv run python -m nada_ai.ingest.cli setup_ingest_pipeline  # OpenSearch ML Commons only
 ```
 
@@ -401,17 +405,19 @@ curl -X POST localhost:8020/admin/ingest/from-catalog \
 curl -X POST localhost:8020/admin/ingest/from-catalog/all \
   -H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY" -H 'content-type: application/json' -d '{}'
 
-# Targeted batch re-index by idno (role: write)
+# Targeted batch re-index by NADA internal id (role: write)
 curl -X POST localhost:8020/admin/catalog/index \
   -H "X-NADA-Admin-Key: $NADA_ADMIN_API_KEY" -H 'content-type: application/json' \
-  -d '{"idnos": ["idno1", "idno2"]}'
+  -d '{"sids": [516, 517]}'
 ```
 
 Jobs run through `JobRegistry` (`app/jobs.py`), which enforces single-flight semantics
 per job type and honors `NADA_MAX_CONCURRENT_INGEST_JOBS` (default `1`) — ingestion is
 CPU/memory-heavy (embedding compute), so concurrent full-catalog jobs are capped by
-default. A `POST /webhooks/catalog` endpoint accepts catalog lifecycle events and
-triggers targeted background reindex jobs, for push-based updates instead of polling.
+default. A `POST /webhooks/catalog` endpoint accepts catalog lifecycle events
+(`{"event", "sid"}`) and triggers targeted background reindex jobs, for push-based
+updates instead of polling. Every per-study route takes the NADA internal id:
+`/admin/catalog/{sid}/…`, `/admin/docs/{sid}`, `/admin/filters/{sid}`.
 
 ### Ingest quality reports
 
@@ -429,8 +435,8 @@ ingestion on data you don't control.
 and can be stopped and resumed instead of running as an opaque, unstoppable block:
 
 - **Progress**: `GET /jobs/{id}` (and `GET /jobs`) includes a `progress` object —
-  `{"processed", "total", "failed", "current_idno", "percent"}` — updated once per
-  idno as the run goes, not just once at the end.
+  `{"processed", "total", "failed", "current_sid", "percent"}` (`current_citation_id` in a citation job) — updated
+  once per study (or citation) as the run goes, not just once at the end.
 - **Stop**: `DELETE /jobs/{id}` (role `write`) sets a cancel token the ingest loop
   checks once per idno. Note the asymmetry this implies: the job's *status* flips
   to `cancelled` almost immediately (the wrapping coroutine really is cancelled),
@@ -714,7 +720,7 @@ in `src/nada_ai/settings.py` unless noted.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NADA_SEARCH_BACKEND` | `qdrant` | `qdrant` or `opensearch` |
+| `NADA_SEARCH_BACKEND` | `opensearch` | `opensearch` or `qdrant` |
 | `NADA_INDEX_NAME` | `nada-metadata` | Index name (OpenSearch) / collection name (Qdrant, unless overridden) |
 
 ### OpenSearch
@@ -722,13 +728,9 @@ in `src/nada_ai/settings.py` unless noted.
 | Variable | Default | Purpose |
 |---|---|---|
 | `NADA_OPENSEARCH_URL` | `http://localhost:9200` | Cluster URL |
-| `NADA_OPENSEARCH_AUTH_MODE` | `basic` | `basic` or `aws_sigv4` |
 | `NADA_OPENSEARCH_USER` / `NADA_OPENSEARCH_PASSWORD` | unset | Basic auth |
 | `NADA_OPENSEARCH_CA_CERTS` | unset | Custom CA bundle path |
 | `NADA_OPENSEARCH_VERIFY_CERTS` | `true` | TLS verification |
-| `NADA_AWS_REGION` | unset | Required for SigV4 if not implicit from boto3 |
-| `NADA_AWS_SERVICE` | `es` | `es` (managed domain) or `aoss` (OpenSearch Serverless) |
-| `NADA_AWS_PROFILE` | unset | Named boto3 profile |
 | `NADA_OPENSEARCH_PUT_COMPOSABLE_INDEX_TEMPLATE` | `true` | Apply knn_vector composable template pre-create/ingest |
 | `NADA_OPENSEARCH_INDEX_TEMPLATE_PRIORITY` | `500` | Template priority |
 | `NADA_OPENSEARCH_CLUSTER_AUTO_CREATE_INDEX` | unset | Cluster-level `action.auto_create_index` override |
@@ -759,6 +761,7 @@ in `src/nada_ai/settings.py` unless noted.
 | `NADA_EMBEDDING_MODEL_KWARGS_JSON` | `{"dtype": "auto"}` | Extra `SentenceTransformer(...)` kwargs (JSON) |
 | `NADA_EMBEDDING_DEVICE` | unset (auto) | Force device (`cpu`/`cuda`/`mps`) |
 | `NADA_EMBEDDING_BATCH_SIZE` | `32` | Encode batch size |
+| `NADA_EMBEDDING_MAX_SEQ_LENGTH` | `1024` | Longest input embedded, in tokens; longer texts are cut off for the vector only (stored text and keyword search keep all of it). A batch is padded to its longest text, so without a cap one very long text can run the process out of memory. Measured on CPU (harrier-270m, batch of 32 texts at the cap): +0.75 GB at 512, +1.25 GB at 1024, +2.1 GB at 2048. Each chunk stores the cap its vector was made with, and a vector is reused only at the same cap, so a change re-embeds each chunk as it is next indexed |
 | `NADA_OPENSEARCH_ML_MODEL_ID` | unset (required for `opensearch_ml`) | Deployed ML Commons model id |
 | `NADA_OPENSEARCH_ML_EMBEDDING_DIMENSION` | unset (required) | Vector length — must match the knn_vector mapping |
 | `NADA_OPENSEARCH_ML_INGEST_PIPELINE_NAME` | `nada-text-embedding` | Ingest pipeline name |
@@ -892,7 +895,9 @@ docker compose -f docker-compose.qdrant.yml -f docker-compose.dev.yml up --build
 ```
 
 For a production-like run, drop the `docker-compose.dev.yml` overlay and let the
-image serve its own baked-in source instead of the bind mount.
+image serve its own baked-in source instead of the bind mount. The OpenSearch compose file
+still runs OpenSearch without security; for production clusters see
+[OpenSearch setup guide: Production](opensearch-setup-guide.md#10-production).
 
 ### TLS / corporate proxies
 
@@ -1025,7 +1030,8 @@ src/nada_ai/
 
 ---
 
-For the fully worked Qdrant setup (host-only ingest and full-Docker variants,
-metadata-extract catalog configuration, verification steps, and troubleshooting), see
+For the fully worked OpenSearch setup (local Docker stack, production clusters, embedding
+options, connecting NADA), see the [OpenSearch setup guide](opensearch-setup-guide.md) and,
+without Docker, the [OpenSearch host setup](opensearch-host-setup.md). For Qdrant, see
 the [Qdrant pipeline guide](qdrant-pipeline-guide.md). For the facet-filter sync
 story, see [Dynamic filters](dynamic-filters.md).

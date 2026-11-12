@@ -119,7 +119,9 @@ def documents_for(sid: int, s: dict[str, Any]) -> list[Document]:
         # the chunk idno is the record's schema idno, which differs from NADA's on purpose
         meta: dict[str, Any] = {"type": "microdata", "idno": f"schema_{sid}", "qfield": qfield}
         if doc_meta:
+            # a page chunk records its PDF (NADA resource), as ai4data writes it
             meta["doc_meta"] = doc_meta
+            meta["resource_id"] = "41"
         docs.append(Document(page_content=text, metadata=meta))
     return docs
 
@@ -212,7 +214,7 @@ def test_semantic_and_hybrid_search_on_the_real_index() -> None:
                 passages = found[4]["passages"]
                 assert {p["page"] for p in passages} == {3, 6}
                 assert [p["score"] for p in passages] == sorted((p["score"] for p in passages), reverse=True)
-                assert all(p["total_pages"] == 10 and p["excerpt"] for p in passages)
+                assert all(p["total_pages"] == 10 and p["excerpt"] and p["resource_id"] == 41 for p in passages)
                 assert "passages" not in found[1]
 
                 # a concept no keyword mentions is found only by the vector leg

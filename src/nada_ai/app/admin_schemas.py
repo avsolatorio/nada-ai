@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, model_validator
+
+PositiveInt = Annotated[int, Field(ge=1)]
 
 
 class CreateIndexRequest(BaseModel):
@@ -12,11 +14,12 @@ class CreateIndexRequest(BaseModel):
 
 
 class SyncVariablesRequest(BaseModel):
-    idnos: list[str] | None = Field(
+    sids: list[PositiveInt] | None = Field(
         default=None,
         max_length=1000,
         description=(
-            "Studies whose variables to replace (NADA idnos). Omit to walk the whole catalog's variables instead. "
+            "Studies whose variables to replace (NADA internal ids). Omit to walk the whole catalog's variables "
+            "instead. "
             "Neither touches the study document or its chunks, so nothing is embedded."
         ),
     )
@@ -34,8 +37,13 @@ class SyncCitationsRequest(BaseModel):
 
 
 class IndexFromCatalogRequest(BaseModel):
-    catalog_type: str = Field(default="timeseries", description="timeseries | indicator | survey | microdata | document | geospatial | timeseriesdb | indicator-db | table | script | image | video")
-    ps: int = Field(default=100, ge=1, le=1000, description="Catalog page size.")
+    catalog_type: str = Field(
+        default="timeseries",
+        description="timeseries | indicator | survey | microdata | document | geospatial | timeseriesdb | indicator-db | table | script | image | video",
+    )
+    ps: int = Field(
+        default=20, ge=1, le=100, description="Full study records fetched per request from NADA (at most 100)."
+    )
     limit: int | None = Field(default=None, ge=1, description="Stop after first N catalog rows; None means no limit.")
     force: bool = Field(default=False)
     recreate_index: bool = Field(default=False)
@@ -54,7 +62,7 @@ class IndexFromCatalogRequest(BaseModel):
     resume: bool = Field(
         default=False,
         description=(
-            "Skip idnos already completed by a previous run of this catalog_type that "
+            "Skip studies already completed by a previous run of this catalog_type that "
             "was stopped/cancelled or crashed partway through (see GET checkpoint file "
             "under NADA_INGEST_CHECKPOINT_DIR). Has no effect if there is no checkpoint."
         ),
@@ -73,7 +81,12 @@ class ReconcileSearchIndexResponse(BaseModel):
 
 
 class IndexFromCatalogAllRequest(BaseModel):
-    ps: int = Field(default=100, ge=1, le=1000, description="Catalog page size, applied to every type.")
+    ps: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Full study records fetched per request from NADA (at most 100), for every type.",
+    )
     limit: int | None = Field(default=None, ge=1, description="Per-type row cap; None means no limit.")
     force: bool = Field(default=False)
     recreate_index: bool = Field(
@@ -155,7 +168,7 @@ class DeleteDocsResponse(BaseModel):
 
 
 class FilterRecord(BaseModel):
-    idno: str = Field(..., min_length=1)
+    sid: PositiveInt
     filters: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -171,28 +184,26 @@ class SyncFiltersResponse(BaseModel):
 
 class GetFiltersResponse(BaseModel):
     backend: str
-    idno: str
+    sid: int
     found: bool
     point_count: int
     filter_fields: list[dict[str, Any]] | None = None
 
 
 class CatalogIndexRequest(BaseModel):
-    metadata_type: str = Field(default="indicator", description="indicator | document | microdata | geospatial")
-    force: bool = Field(default=False, description="Bypass MetadataLoader cache.")
+    force: bool = Field(default=False, description="Embed every chunk again (no stored vector is reused).")
 
 
 class CatalogBatchIndexRequest(BaseModel):
-    idnos: list[str] = Field(..., min_length=1)
-    metadata_type: str = Field(default="indicator")
-    force: bool = Field(default=False)
+    sids: list[PositiveInt] = Field(..., min_length=1, description="NADA internal study ids")
+    force: bool = Field(default=False, description="Embed every chunk again (no stored vector is reused).")
     recreate_index: bool = Field(default=False, description="Drop and recreate the index before bulk indexing.")
     show_progress_bar: bool = Field(default=False, description="tqdm bars in API are usually noise; default off.")
     buffer_size: int = Field(default=200, ge=1, le=10000)
 
 
 class CatalogBatchDeleteRequest(BaseModel):
-    idnos: list[str] = Field(..., min_length=1)
+    sids: list[PositiveInt] = Field(..., min_length=1, description="NADA internal study ids")
 
 
 class CatalogFiltersRequest(BaseModel):
@@ -200,7 +211,7 @@ class CatalogFiltersRequest(BaseModel):
 
 
 class CatalogStatusResponse(BaseModel):
-    idno: str
+    sid: int
     backend: str
     indexed: bool
     doc_count: int

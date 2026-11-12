@@ -14,8 +14,8 @@ which engine is running and what it supports.
    NADA's own `surveys.idno` (taken from the extract `core_fields.idno`, not from the record's schema idno, which can
    differ). NADA drops a hit whose `idno` does not match its DB row and logs it (this flags an index that no longer
    matches the DB).
-3. **NADA resolves vocabulary; nada-ai matches ids.** Country names, ISO codes, regions, form codes and timeseries
-   databases are turned into ids by NADA before the call. Regions become country ids.
+3. **NADA resolves vocabulary; nada-ai matches ids.** Country names, ISO codes and form codes are turned into ids by
+   NADA before the call.
 4. **Nothing is dropped silently.** Unknown filter keys and malformed values are rejected with an error. The effective
    search is echoed in `applied`.
 5. **No versioning.** The contract evolves by adding optional fields. Clients must ignore unknown response fields and
@@ -59,7 +59,8 @@ Examples: `request_minimal.json`, `request_query.json`, `request_browse_all_filt
 | `sort` | `{by, order}` \| null | null | See 5.3. |
 | `limit` | int 1..100 | 15 | |
 | `offset` | int 0..10000 | 0 | |
-| `include_facets` | bool | false | Reserved for dynamic filters. `true` gives `unsupported_capability` unless `capabilities.facets`. |
+| `cursor` | string \| null | null | Browse only: a `next_cursor`/`prev_cursor` of an earlier page of the same browse, in place of `offset` (6.1). |
+| `facets` | `{keys, user}` \| null | null | Facet counts to return (6.2): `keys` from `countries`, `regions`, `collections`, `form_ids`, `data_class_ids`, `tags`, `databases`, `years`; `user` lists user-defined facet names. Needs `capabilities.facets`, otherwise `unsupported_capability`. Empty means none. |
 | `include_debug` | bool | false | Adds an engine-specific `debug` object to the response. |
 
 ## 5. Filters and sorting
@@ -83,20 +84,21 @@ proposed **step 3 index field** (flat fields; names follow the NADA extract keys
 |---|---|---|---|---|
 | `types` | string list | NADA dataset types (`survey`, `timeseries`, `document`, `geospatial`, `table`, `image`, `video`, `script`, `timeseriesdb`) | `dataset_type` | `surveys.type` |
 | `countries` | int list | Country ids | `countries` | `survey_countries.cid` |
+| `regions` | int list | Region ids (of the study's countries); ANDed with `countries` | `regions` | `region_countries` |
 | `year_from`, `year_to` | int 1..9999 | Data collection year range, inclusive. Only `year_from`: at or after. Only `year_to`: at or before. `year_from > year_to` is rejected. | `years` (range query) | `survey_years.data_coll_year` |
 | `repository` | string | Active repository scope; matches primary or secondary membership | `repositories` | `surveys.repositoryid` plus `survey_repos` |
 | `collections` | string list | Collection facet (repository ids), ANDed with `repository` | `repositories` | same |
 | `form_ids` | int list | Data access form ids | `formid` | `surveys.formid` |
 | `data_class_ids` | int list | Data classification ids | `data_class_id` | `surveys.data_class_id` |
 | `tags` | string list | Study tags | `tags` | `survey_tags.tag` |
+| `topics` | int list | Topic ids | `topics` | `survey_topics.tid` |
+| `databases` | string list | Timeseries database idnos | `ts_databases` | `timeseries_db_links.db_idno` |
 | `facets` | `{name: [term ids]}` | User-defined facets; any-of within a name, AND across names | `fq_<name>` | `survey_facets.term_id` |
-| `sids` | int list | Restrict to these internal ids (used for timeseries database selection) | `sid` | `surveys.id` |
+| `sids` | int list | Restrict to these internal ids | `sid` | `surveys.id` |
 | `created_from`, `created_to` | int (unix seconds) | Created range, inclusive | `created` | `surveys.created` |
 
-Value limits: `types` 20, `countries` 300, `collections` 100, `form_ids` 50, `data_class_ids` 50, `tags` 50,
-`sids` 5000 entries; facet names match `[A-Za-z0-9_-]{1,64}`.
-
-Derived data is deliberately not indexed. `regions` is not a filter: NADA expands a region to its country ids.
+Value limits: `types` 20, `countries` 300, `regions` 300, `collections` 100, `form_ids` 50, `data_class_ids` 50,
+`tags` 50, `topics` 500, `databases` 100, `sids` 5000 entries; facet names match `[A-Za-z0-9_-]{1,64}`.
 
 ### 5.3 Sort
 
@@ -119,12 +121,15 @@ Examples: `response_hybrid.json`, `response_browse.json`, `response_types_filter
 |---|---|
 | `engine` | Engine that answered |
 | `found` | Studies in the pageable result set (6.1) |
-| `limit`, `offset` | Echo of the paging window |
-| `truncated` | True when `found` exceeds `limits.max_offset`: only that many results can be paged |
+| `limit`, `offset` | Echo of the paging window (`offset`: where the page starts, also on a page reached by cursor) |
+| `truncated` | True when a search other than a browse finds more than `limits.max_offset`: only that many can be paged |
+| `max_offset` | Rows reachable by `offset` (10,000) |
+| `next_cursor`, `prev_cursor` | Browse only: cursors of the next and previous pages (null at either end, and always null for a query) |
 | `search_counts_by_type` | Distinct studies per NADA dataset type in the result set, **ignoring the `types` filter** (tab counts) |
 | `hits[]` | `sid`, `idno`, `rank` (1-based across the whole set), `score`, `matched_by`, optional `passages` |
-| `applied` | Effective `query`, `mode`, `filters`, `sort`, `limit`, `offset` |
+| `applied` | Effective `query`, `mode`, `filters`, `sort`, `limit`, `offset`, `paging` (`offset` or `cursor`) |
 | `warnings[]` | `{code, message}`; codes `semantic_unavailable`, `sort_adjusted` |
+| `facets` | Facet counts when the request asked for them (6.2), else null |
 | `timing_ms` | Optional timings |
 | `debug` | Present only when requested |
 
@@ -133,7 +138,9 @@ comparable only within one response). It is null in browse, in `hybrid` (the fus
 are ordered by different rules, so their scores could not be compared) and when the results are ordered by another sort.
 `matched_by` is `["lexical"]`, `["semantic"]` or both, or `["idno"]` alone for an exact idno match (6.1); empty
 in browse. `passages` lists matching pages for document
-studies (`page` is 1-based, `excerpt` is whitespace-normalised text); it replaces parsing raw engine hits.
+studies (`resource_id` is the NADA resource of the PDF the page is in, `page` is 1-based, `excerpt` is
+whitespace-normalised text); a document can have several PDFs, so the same page number can appear once per PDF. It
+replaces parsing raw engine hits.
 
 ### 6.1 What `found` means
 
@@ -147,7 +154,15 @@ studies (`page` is 1-based, `excerpt` is whitespace-normalised text); it replace
 - **Nothing is cut.** The keyword matches are never capped: `found` counts all of them. Only the semantic side is bounded
   (`limits.semantic_window`, starting at 50), because a vector search always has nearest studies.
 - **Paging depth.** `offset + limit` must be at most `limits.max_offset` (10,000) in every mode, and a larger request is
-  `offset_out_of_range`. `truncated` is true when `found` exceeds that depth, so the last results cannot be paged.
+  `offset_out_of_range`. A query never finds that many studies in practice; when one does, `truncated` is true and the
+  rest cannot be paged.
+- **Browsing past 10,000 studies** (no query) continues by cursor: every browse page returns `next_cursor` and
+  `prev_cursor`; send one as `cursor`, with the same filters and sort, in place of `offset`. It is OpenSearch
+  `search_after` on the browse's sort, which always ends on `sid` (a previous page reads the sort reversed and flips it
+  back), so every page costs the same at any depth; `found` and the per-type counts stay exact on every page. A cursor
+  is opaque, unsigned, never expires; one that does not fit the sort is `cursor_invalid`, and a cursor sent with a
+  query is `invalid_request` (relevance orders, fused in `hybrid`, have nothing a cursor could continue from). Same
+  format as the variable search's (`nada_ai.search.cursor`).
 - **Order in `hybrid` with a relevance sort.** The best keyword matches (`fusion_window`, starting at 50) and the semantic
   studies are fused by rank (reciprocal rank fusion, equal weights): a study found by both comes first and the two lists
   otherwise alternate. Ahead of that fused order, for a query of at least three real words (stopwords aside), any keyword
@@ -173,7 +188,28 @@ studies (`page` is 1-based, `excerpt` is whitespace-normalised text); it replace
   a match weighs least.
 - The relevance floor and cutoff of the semantic side, and the two windows, are server settings, not request parameters.
 
-### 6.2 Mode handling
+### 6.2 Facets
+
+Design and reasoning: `studies-search-facets.md`.
+
+```json
+"facets": {
+  "values": {"countries": {"buckets": [{"value": "12", "count": 40}], "more": false}},
+  "user": {"datakind": {"buckets": [{"value": "4", "count": 9}], "more": false}},
+  "years": {"min": 1990, "max": 2022}
+}
+```
+
+- The counts are distinct studies in the result set: the query and every filter narrow them, except that **each facet
+  ignores its own filter** (`years` ignores `year_from`/`year_to`, a user facet its own terms), so it lists the values
+  that can be added to the selection. `repository`, `sids`, `created_*`, `topics` and the tab (`types`) always apply.
+- `value` is a string (ids too); buckets are ordered by count, then value; at most `studies_facet_size` (setting,
+  default 500) per facet, `more` is true when some were left out. Selected values beyond them are added when they
+  match; a value is never listed with count 0.
+- In `semantic` and `hybrid` the semantic studies are those found with every filter applied, so in a facet with a
+  selection the other values count only keyword matches and the semantic studies that were returned.
+
+### 6.3 Mode handling
 
 - `auto` degrades gracefully: if the semantic leg is unavailable it returns lexical results with a
   `semantic_unavailable` warning, and `applied.mode` shows what ran.
@@ -194,6 +230,8 @@ All errors on these routes use one envelope and never the framework default:
 | `unknown_filter` | 422 | A filter key is not in the registry (`details.filters`, `details.supported`) |
 | `invalid_filter_value` | 422 | A filter value is malformed or out of range (`details.filter`) |
 | `offset_out_of_range` | 422 | `offset + limit` is beyond what the mode can page |
+| `search_timeout` | 504 | OpenSearch did not answer within `search_timeout_seconds` (setting, default 5): one slow query, not an outage |
+| `cursor_invalid` | 422 | A `cursor` that is not one of this browse (unreadable, edited, another sort): start again from the first page |
 | `unsupported_capability` | 501 | The active engine cannot do this (for example `studies_search` on Qdrant) |
 | `index_not_ready` | 503 | Index missing, empty or being rebuilt |
 | `backend_unavailable` | 503 | The engine cannot be reached, or access cannot be checked (no credential configured, key store unreadable) |
@@ -218,13 +256,13 @@ Encoded in `StudySearchResponse.invariant_violations()` and reused by the implem
 
 - Hit ranks are contiguous from `offset + 1`; `len(hits) <= limit`; `offset + len(hits) <= found`; no duplicate `sid`.
 - Counts add up to `found` without a `types` filter; with one, `found` equals the sum over the selected types.
-- `truncated` is true exactly when `found` exceeds `max_offset`.
+- `truncated` is true exactly when a search other than a browse has `found` above `max_offset`.
 - Browse: no score or `matched_by`. Relevance: every hit has `matched_by`.
 - A nonsense query returns `found: 0` (acceptance test in step 7).
 
 ## 10. Out of scope for this contract
 
-Dynamic facets (`include_facets` reserved), a reranker, and the admin route clean-up (including moving `{idno}` admin paths
+A reranker, and the admin route clean-up (including moving `{idno}` admin paths
 to `{sid}`). Citations search is a separate contract: `citations-search-contract.md`.
 
 **Variables search is now implemented, as its own, separate contract** — `POST /variables/search`, lexical only, no

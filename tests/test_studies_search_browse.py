@@ -16,6 +16,7 @@ from nada_ai.app import info as info_module
 from nada_ai.app.main import app, state
 from nada_ai.app.studies_errors import StudiesApiError
 from nada_ai.app.studies_schemas import (
+    MAX_OFFSET,
     EffectiveMode,
     Engine,
     ErrorResponse,
@@ -231,7 +232,8 @@ def _os(
             "took": 4,
             "hits": {
                 "total": {"value": found, "relation": "eq"},
-                "hits": [{"_source": {"sid": sid, "idno": idno}} for sid, idno in rows],
+                # sort values of every study sort: (missing) key, (missing) tie-breaker, sid
+                "hits": [{"_source": {"sid": sid, "idno": idno}, "sort": [None, None, sid]} for sid, idno in rows],
             },
             "aggregations": {"by_type": {"buckets": [{"key": k, "doc_count": v} for k, v in counts.items()]}},
         }
@@ -313,13 +315,6 @@ def test_semantic_and_hybrid_need_the_local_embedding_backend(monkeypatch: pytes
             code, error = _error(response)
             assert code == "unsupported_capability"
             assert error["details"] == {"capability": mode, "engine": "opensearch"}
-
-
-def test_facets_are_not_implemented(monkeypatch: pytest.MonkeyPatch) -> None:
-    with _running(monkeypatch, _os()) as client:
-        response = _post(client, {"include_facets": True})
-    assert response.status_code == 501
-    assert _error(response)[1]["details"]["capability"] == "facets"
 
 
 def test_debug_output_needs_the_admin_role(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -503,3 +498,66 @@ def test_blank_or_quotes_with_nothing_in_them_are_a_browse(query: str) -> None:
 
 def test_a_quoted_phrase_is_kept_as_typed() -> None:
     assert StudySearchRequest(query='  "child labour" ').query == '"child labour"'
+
+
+# ---------------------------------------------------------------------------------------
+# Browse cursors: past max_offset
+# ---------------------------------------------------------------------------------------
+
+
+def test_a_browse_page_carries_the_cursors_of_the_next_and_previous_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _running(monkeypatch, _os(found=40)) as client:
+        body = _post(client, {"offset": 15, "limit": 3}).json()
+    assert body["max_offset"] == MAX_OFFSET and body["applied"]["paging"] == "offset"
+    assert body["next_cursor"] and body["prev_cursor"]  # rows before and after this page
+
+
+def test_a_next_cursor_continues_the_browse_with_search_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    client_mock = _os(found=20_000)
+    with _running(monkeypatch, client_mock) as client:
+        first = _post(client, {"offset": 9_997, "limit": 3}).json()
+        rows = [(30, "A"), (31, "B"), (32, "C"), (33, "D")]  # one more than a page: another follows
+        client_mock.search.return_value["hits"]["hits"] = [
+            {"_source": {"sid": sid, "idno": idno}, "sort": [None, None, sid]} for sid, idno in rows
+        ]
+        response = _post(client, {"cursor": first["next_cursor"], "limit": 3})
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["offset"], body["applied"]["paging"]) == (10_000, "cursor")
+    assert [h["rank"] for h in body["hits"]] == [10_001, 10_002, 10_003]
+    assert [h["sid"] for h in body["hits"]] == [30, 31, 32]
+    sent = client_mock.search.call_args.kwargs["body"]
+    assert sent["search_after"] == [None, None, 21] and sent["size"] == 4 and "from" not in sent
+
+
+def test_a_cursor_does_not_page_a_keyword_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _running(monkeypatch, _os(found=40)) as client:
+        cursor = _post(client, {"limit": 3}).json()["next_cursor"]
+        response = _post(client, {"query": "health", "mode": "lexical", "cursor": cursor})
+    assert response.status_code == 422
+    assert _error(response)[0] == "invalid_request"
+
+
+def test_a_cursor_of_another_sort_is_cursor_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _running(monkeypatch, _os(found=40)) as client:
+        garbage = _post(client, {"cursor": "not-a-cursor"})
+    assert garbage.status_code == 422
+    assert _error(garbage)[0] == "cursor_invalid"
+
+
+def test_a_browse_is_never_truncated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """More studies than max_offset is no longer a limit for a browse: its cursors page past it."""
+    with _running(monkeypatch, _os(found=MAX_OFFSET + 500)) as client:
+        body = _post(client, {}).json()
+    assert body["truncated"] is False and body["next_cursor"]
+
+
+def test_reverse_sort_flips_every_field_and_where_missing_values_go() -> None:
+    from nada_ai.search.backend.opensearch.studies_search import reverse_sort, sort_clause
+
+    forward = sort_clause(SortField.title, SortOrder.asc)
+    assert reverse_sort(forward) == [
+        {"title_sort": {"order": "desc", "missing": "_first"}},
+        {"year_start": {"order": "asc", "missing": "_first"}},
+        {"sid": {"order": "desc", "missing": "_first"}},
+    ]

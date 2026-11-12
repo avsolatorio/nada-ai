@@ -6,8 +6,7 @@ This module defines the wire contract only; it contains no search logic. The wri
 Design rules (see the spec for the reasoning):
 
 * Studies are identified by the NADA internal id ``sid`` (``surveys.id``); ``idno`` is returned as a guard.
-* NADA resolves vocabulary (country names, regions, form codes, ...) into ids before calling; nada-ai only
-  matches ids.
+* NADA resolves vocabulary (country names, form codes, ...) into ids before calling; nada-ai only matches ids.
 * Nothing is dropped silently: unknown filter keys and malformed values are rejected, and the effective
   search is echoed back in ``applied``.
 * The contract is not versioned. New optional fields may be added; clients must ignore unknown response
@@ -92,6 +91,7 @@ class ErrorCode(StrEnum):
     unknown_filter = "unknown_filter"
     invalid_filter_value = "invalid_filter_value"
     offset_out_of_range = "offset_out_of_range"
+    cursor_invalid = "cursor_invalid"
     unsupported_capability = "unsupported_capability"
     index_not_ready = "index_not_ready"
     backend_unavailable = "backend_unavailable"
@@ -100,6 +100,7 @@ class ErrorCode(StrEnum):
     unauthorized = "unauthorized"
     forbidden = "forbidden"
     rate_limited = "rate_limited"
+    search_timeout = "search_timeout"
 
 
 ERROR_HTTP_STATUS: dict[ErrorCode, int] = {
@@ -107,6 +108,7 @@ ERROR_HTTP_STATUS: dict[ErrorCode, int] = {
     ErrorCode.unknown_filter: 422,
     ErrorCode.invalid_filter_value: 422,
     ErrorCode.offset_out_of_range: 422,
+    ErrorCode.cursor_invalid: 422,
     ErrorCode.unsupported_capability: 501,
     ErrorCode.index_not_ready: 503,
     ErrorCode.backend_unavailable: 503,
@@ -115,6 +117,7 @@ ERROR_HTTP_STATUS: dict[ErrorCode, int] = {
     ErrorCode.unauthorized: 401,
     ErrorCode.forbidden: 403,
     ErrorCode.rate_limited: 429,
+    ErrorCode.search_timeout: 504,
 }
 
 
@@ -138,6 +141,7 @@ class FilterSpec(BaseModel):
 CANONICAL_FILTERS: tuple[FilterSpec, ...] = (
     FilterSpec(key="types", type="string_list", description="NADA dataset types (surveys.type); any-of"),
     FilterSpec(key="countries", type="int_list", description="Country ids; any-of"),
+    FilterSpec(key="regions", type="int_list", description="Region ids (of the study's countries); any-of"),
     FilterSpec(key="year_from", type="int", description="Data collection year lower bound (inclusive)"),
     FilterSpec(key="year_to", type="int", description="Data collection year upper bound (inclusive)"),
     FilterSpec(key="repository", type="string", description="Active repository scope (primary or secondary)"),
@@ -145,6 +149,8 @@ CANONICAL_FILTERS: tuple[FilterSpec, ...] = (
     FilterSpec(key="form_ids", type="int_list", description="Data access form ids; any-of"),
     FilterSpec(key="data_class_ids", type="int_list", description="Data classification ids; any-of"),
     FilterSpec(key="tags", type="string_list", description="Study tags; any-of"),
+    FilterSpec(key="topics", type="int_list", description="Topic ids; any-of"),
+    FilterSpec(key="databases", type="string_list", description="Timeseries database idnos; any-of"),
     FilterSpec(key="facets", type="facet_map", description="User-defined facets: name -> term ids (any-of per name)"),
     FilterSpec(key="sids", type="int_list", description="Restrict to these internal study ids"),
     FilterSpec(key="created_from", type="int", description="Created timestamp lower bound (unix seconds)"),
@@ -167,6 +173,7 @@ class StudyFilters(BaseModel):
 
     types: list[Token] | None = Field(default=None, max_length=20)
     countries: list[PositiveInt] | None = Field(default=None, max_length=300)
+    regions: list[PositiveInt] | None = Field(default=None, max_length=300)
     year_from: int | None = Field(default=None, ge=1, le=9999)
     year_to: int | None = Field(default=None, ge=1, le=9999)
     repository: Token | None = None
@@ -174,6 +181,8 @@ class StudyFilters(BaseModel):
     form_ids: list[PositiveInt] | None = Field(default=None, max_length=50)
     data_class_ids: list[PositiveInt] | None = Field(default=None, max_length=50)
     tags: list[Token] | None = Field(default=None, max_length=50)
+    topics: list[PositiveInt] | None = Field(default=None, max_length=500)
+    databases: list[Token] | None = Field(default=None, max_length=100)
     facets: dict[FacetName, list[PositiveInt]] | None = None
     sids: list[PositiveInt] | None = Field(default=None, max_length=5000)
     created_from: int | None = Field(default=None, ge=0)
@@ -181,7 +190,18 @@ class StudyFilters(BaseModel):
 
     @model_validator(mode="after")
     def _normalise(self) -> StudyFilters:
-        for name in ("types", "countries", "collections", "form_ids", "data_class_ids", "tags", "sids"):
+        for name in (
+            "types",
+            "countries",
+            "regions",
+            "collections",
+            "form_ids",
+            "data_class_ids",
+            "tags",
+            "topics",
+            "databases",
+            "sids",
+        ):
             values = getattr(self, name)
             if values is not None:
                 values = _dedupe(values)
@@ -198,6 +218,73 @@ class StudyFilters(BaseModel):
     def active(self) -> dict[str, Any]:
         """Normalised filters that constrain the search (what ``applied.filters`` echoes)."""
         return self.model_dump(exclude_none=True)
+
+
+# --------------------------------------------------------------------------------------
+# Facets
+# --------------------------------------------------------------------------------------
+
+
+class FacetKey(StrEnum):
+    """A facet the study search counts; each one ignores its own filter (see ``docs/studies-search-facets.md``)."""
+
+    countries = "countries"
+    regions = "regions"
+    collections = "collections"
+    form_ids = "form_ids"
+    data_class_ids = "data_class_ids"
+    tags = "tags"
+    databases = "databases"
+    years = "years"
+
+
+class FacetRequest(BaseModel):
+    """Which facet counts to return: built-in facets by key, user-defined facets by name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    keys: list[FacetKey] = Field(default_factory=list, max_length=len(FacetKey))
+    user: list[FacetName] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def _normalise(self) -> FacetRequest:
+        self.keys = _dedupe(self.keys)
+        self.user = _dedupe(self.user)
+        return self
+
+    def empty(self) -> bool:
+        return not self.keys and not self.user
+
+
+class FacetBucket(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: str = Field(description="The filter value (ids as strings)")
+    count: int = Field(ge=0, description="Distinct studies")
+
+
+class FacetValues(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    buckets: list[FacetBucket]
+    more: bool = Field(description="True when values beyond ``studies_facet_size`` were left out")
+
+
+class YearRange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min: int | None
+    max: int | None
+
+
+class StudyFacets(BaseModel):
+    """Facet counts over the search's result set; each facet ignores its own filter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    values: dict[FacetKey, FacetValues] = Field(default_factory=dict)
+    user: dict[FacetName, FacetValues] = Field(default_factory=dict)
+    years: YearRange | None = None
 
 
 # --------------------------------------------------------------------------------------
@@ -221,7 +308,14 @@ class StudySearchRequest(BaseModel):
     sort: StudySort | None = None
     limit: int = Field(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT)
     offset: int = Field(default=0, ge=0, le=MAX_OFFSET)
-    include_facets: bool = Field(default=False, description="Reserved; requires the ``facets`` capability")
+    cursor: str | None = Field(
+        default=None,
+        description="Browse only: a next_cursor or prev_cursor of an earlier page of this browse, in place of offset, "
+        "to page past max_offset",
+    )
+    facets: FacetRequest | None = Field(
+        default=None, description="Facet counts to return; requires the ``facets`` capability"
+    )
     include_debug: bool = False
 
     @model_validator(mode="after")
@@ -231,6 +325,8 @@ class StudySearchRequest(BaseModel):
             parts = split_quoted(query)
             # blank, or quotes with nothing in them: nothing is asked for, so it is a browse
             self.query = query if parts.phrases or parts.rest else None
+        if self.facets is not None and self.facets.empty():
+            self.facets = None
         return self
 
 
@@ -244,6 +340,7 @@ class Passage(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    resource_id: int = Field(ge=1, description="NADA resource id of the PDF the page is in")
     page: int = Field(ge=1, description="1-based page number")
     total_pages: int | None = Field(default=None, ge=1)
     score: float | None = None
@@ -281,6 +378,7 @@ class Applied(BaseModel):
     sort: AppliedSort
     limit: int
     offset: int
+    paging: Literal["offset", "cursor"] = "offset"
 
 
 class ResponseWarning(BaseModel):
@@ -298,7 +396,13 @@ class StudySearchResponse(BaseModel):
     limit: int
     offset: int
     truncated: bool = Field(
-        description="True when ``found`` exceeds ``limits.max_offset``: only that many can be paged"
+        description="True when a search other than a browse finds more than ``max_offset`` studies: only that many "
+        "can be paged (a browse pages past them with its cursors)"
+    )
+    max_offset: int = Field(default=MAX_OFFSET, description="Rows reachable by offset; a browse continues by cursor")
+    next_cursor: str | None = Field(default=None, description="Browse only: cursor of the next page; null on the last")
+    prev_cursor: str | None = Field(
+        default=None, description="Browse only: cursor of the previous page; null on the first"
     )
     search_counts_by_type: dict[str, int] = Field(
         description="Distinct studies per NADA dataset type, ignoring the ``types`` filter"
@@ -306,6 +410,7 @@ class StudySearchResponse(BaseModel):
     hits: list[StudyHit]
     applied: Applied
     warnings: list[ResponseWarning] = Field(default_factory=list)
+    facets: StudyFacets | None = Field(default=None, description="Present when the request asked for facets")
     timing_ms: dict[str, float] | None = None
     debug: dict[str, Any] | None = None
 
@@ -330,8 +435,9 @@ class StudySearchResponse(BaseModel):
         elif sum(self.search_counts_by_type.values()) != self.found:
             problems.append("search_counts_by_type must add up to found when no types filter is applied")
 
-        if self.truncated != (self.found > MAX_OFFSET):
-            problems.append("truncated must be true exactly when found exceeds max_offset")
+        pageable = self.applied.mode == EffectiveMode.browse  # a browse pages past max_offset with its cursors
+        if self.truncated != (self.found > MAX_OFFSET and not pageable):
+            problems.append("truncated must be true exactly when a search other than a browse exceeds max_offset")
 
         if self.applied.mode == EffectiveMode.browse:
             if any(h.score is not None or h.matched_by for h in self.hits):
@@ -385,6 +491,12 @@ class Limits(BaseModel):
     max_offset: int
     semantic_window: int = Field(description="The most studies the semantic side adds to a relevance search")
     max_query_length: int
+    variables_max_offset: int = Field(description="Variable search: rows reachable by offset paging (then cursors)")
+    citations_max_offset: int = Field(description="Citation search: rows reachable by offset paging (then cursors)")
+    variables_count_cap: int = Field(
+        description="Variable search: matches counted exactly before found is a lower bound"
+    )
+    search_timeout_seconds: float = Field(description="Seconds a search request to OpenSearch may take")
 
 
 class IndexInfo(BaseModel):

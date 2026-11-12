@@ -137,13 +137,13 @@ def test_chunk_filters_point_at_the_chunk_fields() -> None:
     )
     assert clauses == [
         {"term": {"metadata.filter_facets.published": 1}},
-        {"terms": {"metadata.filter_facets.countries": [16]}},
-        {"range": {"metadata.filter_facets.years": {"gte": 2010}}},
         {"term": {"metadata.filter_facets.repositories": "demo"}},
-        {"terms": {"metadata.filter_facets.formid": [1]}},
-        {"terms": {"metadata.filter_facets.fq_author": [7]}},
         {"terms": {"metadata.sid": [2]}},
         {"range": {"metadata.created": {"gte": 5}}},
+        {"terms": {"metadata.filter_facets.countries": [16]}},
+        {"terms": {"metadata.filter_facets.formid": [1]}},
+        {"range": {"metadata.filter_facets.years": {"gte": 2010}}},
+        {"terms": {"metadata.filter_facets.fq_author": [7]}},
     ]  # `types` is applied after the cut, on every leg
 
 
@@ -160,13 +160,23 @@ def test_study_and_chunk_filters_are_the_same_filters_on_different_paths() -> No
 # ---------------------------------------------------------------------------------------
 
 
-def _passage(page: int | None, score: float, text: str = "text", total: int | None = 12, qfield: str = "passages"):
+def _passage(
+    page: int | None,
+    score: float,
+    text: str = "text",
+    total: int | None = 12,
+    qfield: str = "passages",
+    resource_id: str | None = "7",
+):
     doc_meta: dict[str, Any] = {}
     if page is not None:
         doc_meta["page"] = page
     if total is not None:
         doc_meta["total_pages"] = total
-    return {"_score": score, "_source": {"metadata": {"qfield": qfield, "doc_meta": doc_meta}, "page_content": text}}
+    meta: dict[str, Any] = {"qfield": qfield, "doc_meta": doc_meta}
+    if resource_id is not None:
+        meta["resource_id"] = resource_id
+    return {"_score": score, "_source": {"metadata": meta, "page_content": text}}
 
 
 def test_passages_are_pages_best_first_with_a_normalised_excerpt() -> None:
@@ -177,8 +187,20 @@ def test_passages_are_pages_best_first_with_a_normalised_excerpt() -> None:
         _passage(2, 0.75, "best copy of page three"),
     ]
     assert passages_from_inner_hits(inner, POLICY) == [
-        {"page": 1, "score": 0.83, "total_pages": 12, "excerpt": "first page"},
-        {"page": 3, "score": 0.75, "total_pages": 12, "excerpt": "best copy of page three"},
+        {"resource_id": 7, "page": 1, "score": 0.83, "total_pages": 12, "excerpt": "first page"},
+        {"resource_id": 7, "page": 3, "score": 0.75, "total_pages": 12, "excerpt": "best copy of page three"},
+    ]
+
+
+def test_the_same_page_of_two_pdfs_is_two_passages() -> None:
+    inner = [
+        _passage(2, 0.75, "report", resource_id="7"),
+        _passage(2, 0.75, "annex", resource_id="9"),
+        _passage(2, 0.70, "annex again", resource_id="9"),
+    ]
+    assert passages_from_inner_hits(inner, POLICY) == [
+        {"resource_id": 7, "page": 3, "score": 0.75, "total_pages": 12, "excerpt": "report"},
+        {"resource_id": 9, "page": 3, "score": 0.75, "total_pages": 12, "excerpt": "annex"},
     ]
 
 
@@ -189,7 +211,13 @@ def test_only_passage_chunks_with_a_page_count() -> None:
         _passage(-1, 0.9),
         _passage(4, 0.8, text="   ", total=None),
     ]
-    assert passages_from_inner_hits(inner, POLICY) == [{"page": 5, "score": 0.8}]
+    assert passages_from_inner_hits(inner, POLICY) == [{"resource_id": 7, "page": 5, "score": 0.8}]
+
+
+def test_a_passage_without_its_pdf_is_left_out() -> None:
+    # indexed before page chunks recorded their PDF: the catalog could not open it
+    inner = [_passage(1, 0.9, resource_id=None), _passage(2, 0.9, resource_id="x"), _passage(3, 0.9, resource_id="0")]
+    assert passages_from_inner_hits(inner, POLICY) == []
 
 
 def test_long_excerpts_are_cut() -> None:
@@ -331,7 +359,7 @@ def _cluster(
     client = MagicMock()
     client.requests = []
 
-    async def search(index: str, body: dict[str, Any]) -> dict[str, Any]:
+    async def search(index: str, body: dict[str, Any], **_: Any) -> dict[str, Any]:
         client.requests.append((index, body))
         if _is_idno_probe(body):  # checked first: it must never be answered by an unrelated configured response
             return idno if idno is not None else _lookup_response([])
@@ -426,7 +454,9 @@ def test_semantic_asks_the_chunk_index_then_the_study_index() -> None:
         (5, "NADA_5", ["semantic"]),
         (9, "NADA_9", ["semantic"]),
     ]
-    assert page.hits[1]["passages"] == [{"page": 4, "score": 0.77, "total_pages": 12, "excerpt": "text"}]
+    assert page.hits[1]["passages"] == [
+        {"resource_id": 7, "page": 4, "score": 0.77, "total_pages": 12, "excerpt": "text"}
+    ]
     assert page.counts_by_type == {"geospatial": 1, "document": 1}
     assert page.found == 2
 

@@ -11,7 +11,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from nada_ai.app.studies_schemas import MAX_OFFSET, Engine, PositiveInt, Token
+from nada_ai.app.studies_schemas import Engine, PositiveInt, Token
+from nada_ai.app.variables_schemas import Paging
 
 DEFAULT_LIMIT = 15
 MAX_LIMIT = 100
@@ -62,13 +63,16 @@ class CitationSearchRequest(BaseModel):
     sort: CitationSortLiteral = CitationSortLiteral.relevance
     order: SortOrder = Field(default=SortOrder.asc, description="Direction of a title or year sort.")
     limit: PositiveInt = Field(default=DEFAULT_LIMIT, le=MAX_LIMIT)
-    offset: int = Field(default=0, ge=0, le=MAX_OFFSET)
+    offset: int = Field(default=0, ge=0, description="Offset paging, up to limits.citations_max_offset rows.")
+    cursor: str | None = Field(
+        default=None, description="A next_cursor or prev_cursor of an earlier page of this search, in place of offset."
+    )
 
 
 class CitationHit(BaseModel):
     """A matching citation by id; the caller reads the citation itself from its database (``citation_id``)."""
 
-    rank: int
+    rank: int = Field(ge=1, description="1-based position in the whole result list (offset + index + 1)")
     citation_id: int
     uuid: str | None
     score: float | None
@@ -80,15 +84,17 @@ class CitationApplied(BaseModel):
     sort: CitationSortLiteral
     order: SortOrder
     limit: int
-    offset: int
+    paging: Paging
 
 
 class CitationSearchResponse(BaseModel):
     engine: Engine
     found: int
     limit: int
-    offset: int
-    truncated: bool
+    offset: int = Field(description="0-based position of the first hit in the whole result list")
+    max_offset: int = Field(description="Rows reachable by offset paging; past them, page with the cursors")
+    next_cursor: str | None = Field(description="Cursor of the next page; null on the last page")
+    prev_cursor: str | None = Field(description="Cursor of the previous page; null on the first page")
     hits: list[CitationHit]
     applied: CitationApplied
     timing_ms: dict[str, float]

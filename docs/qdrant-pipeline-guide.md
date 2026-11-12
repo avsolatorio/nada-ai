@@ -1,5 +1,9 @@
 # Qdrant pipeline guide
 
+> **Qdrant is the alternative backend.** The default is OpenSearch, and NADA's catalog search (`/studies/search`,
+> `/variables/search`, `/citations/search`) runs only on OpenSearch. See the
+> [OpenSearch setup guide](./opensearch-setup-guide.md).
+
 End-to-end instructions for ingesting NADA catalog metadata into **Qdrant** and searching via the **nada-ai** API. Covers both **running ingest on the host** (Qdrant in Docker) and **running everything in Docker**.
 
 This guide includes the optional **metadata-extract** catalog backend (`search-metadata-extract/studies`), which fetches full metadata in one paginated pass instead of catalog search + per-idno JSON.
@@ -125,12 +129,14 @@ Extract studies expose downloadable files on `study.resources` (sibling to `meta
 Cached PDFs are written to:
 
 ```text
-{AI4DATA_DISCOVERY_DATA_PATH}/document_cache/document/document_{idno}--{resource_id}.pdf
+{AI4DATA_DISCOVERY_DATA_PATH}/document_cache/document/document_{idno}--{resource_id}--{filesize}.pdf
 ```
 
-Example: `document_RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1--772.pdf`.
+Example: `document_RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1--772--3667934.pdf`. The size (bytes, as NADA reports the stored
+file) names the version of the file: a PDF replaced under the same resource is downloaded again, and the resource's
+older cached copies are removed.
 
-Ensure catalog auth (`AI4DATA_METADATA_CATALOG_X_API_KEY` and/or cookies) covers the catalog host so admin download URLs succeed. After upgrading to this naming scheme, re-run ingest with `--force` or remove stale `document_{idno}.pdf` files from the cache.
+Ensure catalog auth (`AI4DATA_METADATA_CATALOG_X_API_KEY` and/or cookies) covers the catalog host so admin download URLs succeed.
 
 ### URL reference (host vs Docker)
 
@@ -392,7 +398,8 @@ curl -s "${H[@]}" -X POST http://localhost:8020/admin/ingest/from-catalog \
 curl -s http://localhost:8020/jobs/<job_id>
 ```
 
-See the main [README](../README.md#admin--ingest-endpoints-http) for the full admin API table.
+See [Admin API](GUIDE.md#admin-api-auth-rbac-audit-rate-limiting) in the developer guide for auth and roles, and the
+OpenAPI page at `/docs` on a running API for every admin route.
 
 ### B8. Stop / reset
 
@@ -537,13 +544,10 @@ docker logs nada-ai-api-qdrant-dev 2>&1 | tail -100
 docker logs nada-ai-qdrant-dev 2>&1 | tail -50
 ```
 
-**Re-ingest one idno**
+**Re-ingest one study** (by its NADA internal id; its type comes from its record)
 
 ```bash
-uv run python -m nada_ai.ingest.cli index \
-  --idnos=RWA_NISR_DOC_2025_CPI-MR_MAY_FR_V1 \
-  --metadata_type=document \
-  --force=True
+uv run python -m nada_ai.ingest.cli index --sids=516 --force=True
 ```
 
 ---

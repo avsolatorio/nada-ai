@@ -275,7 +275,7 @@ def _client(*responses: dict[str, Any], indexed: int = 10, idno_match: dict[str,
     client = MagicMock()
     queue = list(responses)
 
-    async def search(index: str, body: dict[str, Any]) -> dict[str, Any]:
+    async def search(index: str, body: dict[str, Any], **_: Any) -> dict[str, Any]:
         if _is_idno_probe(body):
             return idno_match if idno_match is not None else _response([], counts={})
         return queue.pop(0)
@@ -512,6 +512,35 @@ def test_a_query_opensearch_rejects_is_query_rejected(monkeypatch: pytest.Monkey
         response = c.post("/studies/search", json={"query": "poverty"})
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "query_rejected"
+
+
+def test_a_search_that_takes_too_long_is_search_timeout_not_an_outage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One slow query is answered search_timeout (504), which NADA does not count as nada-ai being down."""
+    from opensearchpy.exceptions import ConnectionTimeout
+
+    client = _client()
+    client.search = AsyncMock(side_effect=ConnectionTimeout("TIMEOUT", "timed out", Exception("timed out")))
+    with _running(monkeypatch, client) as c:
+        response = c.post("/studies/search", json={"query": "poverty", "mode": "lexical"})
+    assert response.status_code == 504
+    assert response.json()["error"]["code"] == "search_timeout"
+
+
+def test_every_opensearch_request_is_bounded_by_the_search_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NADA_SEARCH_TIMEOUT_SECONDS", "2.5")
+    os_client = _client(_response(PAGE[:3], total=4, counts={"survey": 4}))
+    with _running(monkeypatch, os_client) as c:
+        assert c.post("/studies/search", json={"query": "poverty", "mode": "lexical"}).status_code == 200
+    assert {call.kwargs.get("request_timeout") for call in os_client.search.call_args_list} == {2.5}
+
+
+def test_the_empty_index_check_of_a_zero_result_search_is_bounded_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NADA_SEARCH_TIMEOUT_SECONDS", "2.5")
+    os_client = _client(_response([], total=0, counts={}))
+    with _running(monkeypatch, os_client) as c:
+        assert c.post("/studies/search", json={"query": "poverty", "mode": "lexical"}).status_code == 200
+    os_client.count.assert_called_once()
+    assert os_client.count.call_args.kwargs["request_timeout"] == 2.5
 
 
 def _post(client: TestClient, body: dict[str, Any]):

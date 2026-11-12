@@ -9,6 +9,9 @@
       16,
       191
     ],
+    "regions": [
+      4
+    ],
     "year_from": 2000,
     "year_to": 2020,
     "repository": "demo",
@@ -25,6 +28,12 @@
     ],
     "tags": [
       "poverty"
+    ],
+    "topics": [
+      12
+    ],
+    "databases": [
+      "WB_WDI"
     ],
     "facets": {
       "authentity": [
@@ -49,6 +58,16 @@
   },
   "limit": 50,
   "offset": 100,
-  "include_facets": false,
+  "facets": {
+    "keys": [
+      "countries",
+      "regions",
+      "collections",
+      "years"
+    ],
+    "user": [
+      "authentity"
+    ]
+  },
   "include_debug": false
 }

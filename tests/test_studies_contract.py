@@ -167,7 +167,7 @@ def test_request_defaults() -> None:
     assert request.query is None
     assert request.mode.value == "auto"
     assert (request.limit, request.offset) == (15, 0)
-    assert request.include_facets is False
+    assert request.facets is None
 
 
 # ---------------------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Sync external filter dicts to ``metadata.filter_fields`` on all points for an idno."""
+"""Sync external filter dicts to the filters of every indexed document of a study (by its NADA id, ``sid``)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from nada_ai.filters.indexes import (
 from nada_ai.ingest.qdrant_writer import _client as qdrant_client
 from nada_ai.search.backend.opensearch.client import build_client
 from nada_ai.search.backend.opensearch.mapping import METADATA_OBJECT_KEY, metadata_field
-from nada_ai.search.backend.opensearch.studies import sids_for_idnos
 from nada_ai.search.dynamic_filters import (
     FILTER_FACETS_KEY,
     FILTER_FIELDS_KEY,
@@ -42,7 +41,7 @@ class FilterBackfillResult(TypedDict):
 
 
 class FilterSyncResult(TypedDict):
-    idno: str
+    sid: int
     updated_points: int
     found: bool
 
@@ -135,26 +134,19 @@ def backfill_filter_facets(settings: Settings, *, show_progress_bar: bool = Fals
     )
 
 
-def _idno_filter(idno: str) -> qm.Filter:
-    return qm.Filter(
-        must=[
-            qm.FieldCondition(
-                key=metadata_field("idno"),
-                match=qm.MatchValue(value=idno),
-            )
-        ]
-    )
+def _sid_filter(sid: int) -> qm.Filter:
+    return qm.Filter(must=[qm.FieldCondition(key=metadata_field("sid"), match=qm.MatchValue(value=sid))])
 
 
-def _sync_qdrant(settings: Settings, idno: str, normalized: list[dict[str, list[str]]]) -> FilterSyncResult:
+def _sync_qdrant(settings: Settings, sid: int, normalized: list[dict[str, list[str]]]) -> FilterSyncResult:
     coll = settings.qdrant_collection
     client = qdrant_client(settings)
     try:
-        idno_fl = _idno_filter(idno)
-        count_resp = client.count(collection_name=coll, count_filter=idno_fl)
+        sid_fl = _sid_filter(sid)
+        count_resp = client.count(collection_name=coll, count_filter=sid_fl)
         point_count = int(count_resp.count)
         if point_count == 0:
-            return FilterSyncResult(idno=idno, updated_points=0, found=False)
+            return FilterSyncResult(sid=sid, updated_points=0, found=False)
 
         # Merge into nested metadata; a top-level {"metadata": {...}} would replace the whole object.
         client.set_payload(
@@ -164,31 +156,23 @@ def _sync_qdrant(settings: Settings, idno: str, normalized: list[dict[str, list[
                 FILTER_FACETS_KEY: normalized_to_facets_map(normalized),
             },
             key=METADATA_OBJECT_KEY,
-            points=qm.FilterSelector(filter=idno_fl),
+            points=qm.FilterSelector(filter=sid_fl),
             wait=True,
         )
-        return FilterSyncResult(idno=idno, updated_points=point_count, found=True)
+        return FilterSyncResult(sid=sid, updated_points=point_count, found=True)
     finally:
         client.close()
 
 
-def _sync_opensearch(settings: Settings, idno: str, normalized: list[dict[str, list[str]]]) -> FilterSyncResult:
-    """Rewrite one study's flat ``filter_facets`` on its chunk documents and on its study document.
-
-    The study is found by NADA idno in the study index; chunks are matched by ``sid`` as well as by their stored
-    idno (the record's schema idno, which can differ from NADA's).
-    """
+def _sync_opensearch(settings: Settings, sid: int, normalized: list[dict[str, list[str]]]) -> FilterSyncResult:
+    """Rewrite one study's flat ``filter_facets`` on its chunk documents and on its study document."""
     client = build_client(settings)
     try:
-        sids = sorted(sids_for_idnos(client, settings.studies_index, [idno]).values())
-        chunk_match: list[dict[str, Any]] = [{"term": {metadata_field("idno"): idno}}]
-        if sids:
-            chunk_match.append({"terms": {metadata_field("sid"): sids}})
-        chunk_query = {"bool": {"should": chunk_match, "minimum_should_match": 1}}
-
+        indexed = client.exists(index=settings.studies_index, id=str(sid))
+        chunk_query = {"term": {metadata_field("sid"): sid}}
         count_resp = client.count(index=settings.index_name, body={"query": chunk_query}, ignore_unavailable=True)
-        if int(count_resp.get("count") or 0) == 0 and not sids:
-            return FilterSyncResult(idno=idno, updated_points=0, found=False)
+        if int(count_resp.get("count") or 0) == 0 and not indexed:
+            return FilterSyncResult(sid=sid, updated_points=0, found=False)
 
         facets = normalized_to_facets_map(normalized)
         chunk_script = {
@@ -201,13 +185,13 @@ def _sync_opensearch(settings: Settings, idno: str, normalized: list[dict[str, l
         resp = client.update_by_query(
             index=settings.index_name, body={"query": chunk_query, "script": chunk_script}, refresh=True
         )
-        if sids:
+        if indexed:
             # The study index keeps only a few fields in its _source, so it is never updated in place (that would drop
             # its searchable text): the study document is rewritten from NADA's extract record instead.
             from nada_ai.ingest.service import apply_study_options_op
 
-            apply_study_options_op(settings, idno)
-        return FilterSyncResult(idno=idno, updated_points=int(resp.get("updated") or 0), found=True)
+            apply_study_options_op(settings, sid)
+        return FilterSyncResult(sid=sid, updated_points=int(resp.get("updated") or 0), found=True)
     finally:
         try:
             client.transport.close()
@@ -256,83 +240,22 @@ def auto_register_new_facet_keys(settings: Settings, keys: list[str]) -> list[st
     return new_keys
 
 
-def sync_filters_for_idno(settings: Settings, idno: str, filters_dict: dict[str, Any]) -> FilterSyncResult:
-    """Normalize and write ``filter_fields`` to every indexed point for ``idno``.
+def sync_filters_for_sid(settings: Settings, sid: int, filters_dict: dict[str, Any]) -> FilterSyncResult:
+    """Normalize and write the filters of every indexed document of study ``sid``.
 
     Also auto-registers (and, on Qdrant, indexes) any key present in
     ``filters_dict`` that isn't already a known facet — see
     ``auto_register_new_facet_keys``. This runs before the write so the
     facet index exists before the data that would populate it lands.
     """
-    idno = idno.strip()
-    if not idno:
-        raise ValueError("idno must be non-empty")
+    sid = int(sid)
+    if sid <= 0:
+        raise ValueError("sid must be a positive integer")
     normalized = normalize_external_filters(filters_dict)
     auto_register_new_facet_keys(settings, [entry["key"] for entry in normalized])
     if settings.search_backend == "qdrant":
-        return _sync_qdrant(settings, idno, normalized)
-    return _sync_opensearch(settings, idno, normalized)
-
-
-def fetch_filters_for_idno(
-    settings: Settings,
-    idno: str,
-    *,
-    raw_metadata: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    """Return NADA's raw filters dict for ``idno``, preferring already-fetched data.
-
-    If ``raw_metadata`` (e.g. content ingest's raw catalog metadata from
-    ``ai4data``'s ``MetadataLoader``) already carries ``_extract_filters`` —
-    populated by ``ai4data``'s own extract-mode fetch, see
-    ``ai4data.discovery.catalog.extract.study_to_catalog_metadata`` — reuses
-    it for free, no extra API call. Otherwise makes one explicit call to the
-    metadata-extract API (``nada_ai.filters.metadata_extract``).
-
-    Returns ``None`` (never raises) when no filters data is available —
-    filter sync is always best-effort and must never block content indexing.
-    """
-    if isinstance(raw_metadata, dict):
-        cached = raw_metadata.get("_extract_filters")
-        if isinstance(cached, dict):
-            return cached
-
-    from nada_ai.filters.metadata_extract import MetadataExtractError, fetch_study_records
-
-    try:
-        records = fetch_study_records(settings, idno)
-    except MetadataExtractError as e:
-        logger.debug("No filters available for idno=%s: %s", idno, e)
-        return None
-    except Exception as e:  # noqa: BLE001 - best-effort, must never break the caller
-        logger.warning("Unexpected error fetching filters for idno=%s: %s", idno, e)
-        return None
-
-    if not records:
-        return None
-    filters = records[0].get("filters")
-    return filters if isinstance(filters, dict) else None
-
-
-def sync_filters_for_idno_from_nada(
-    settings: Settings,
-    idno: str,
-    *,
-    raw_metadata: dict[str, Any] | None = None,
-) -> FilterSyncResult | None:
-    """Fetch (see ``fetch_filters_for_idno``) and sync filters for one idno in one call.
-
-    Used by the search-index queue reconciliation (``ingest.search_index_sync``)
-    where the idno's points already exist by the time this runs, so the
-    ``sync_filters_for_idno`` patch-existing-points write is safe. Returns
-    ``None`` (rather than syncing an empty filter set) when no filters data
-    was available for this idno at all, distinct from a sync that ran and
-    found no matching points (``FilterSyncResult(found=False, ...)``).
-    """
-    filters = fetch_filters_for_idno(settings, idno, raw_metadata=raw_metadata)
-    if filters is None:
-        return None
-    return sync_filters_for_idno(settings, idno, filters)
+        return _sync_qdrant(settings, sid, normalized)
+    return _sync_opensearch(settings, sid, normalized)
 
 
 def sync_filters_batch(
@@ -341,40 +264,44 @@ def sync_filters_batch(
     *,
     show_progress_bar: bool = False,
 ) -> list[FilterSyncResult]:
+    """Sync ``[{sid, filters}, ...]`` records (a record without ``filters`` holds them at its top level)."""
     results: list[FilterSyncResult] = []
     iterator: Any = records
     if show_progress_bar and records:
         from tqdm.auto import tqdm
 
-        iterator = tqdm(records, unit="idno", desc="Sync filter_fields")
+        iterator = tqdm(records, unit="study", desc="Sync filter_fields")
 
     for record in iterator:
-        idno = str(record.get("idno") or "").strip()
-        if not idno:
-            results.append(FilterSyncResult(idno="", updated_points=0, found=False))
+        try:
+            sid = int(record.get("sid") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        if sid <= 0:
+            results.append(FilterSyncResult(sid=0, updated_points=0, found=False))
             continue
         filters_raw = record.get("filters")
         if filters_raw is None:
-            filters_raw = {k: v for k, v in record.items() if k != "idno"}
-        results.append(sync_filters_for_idno(settings, idno, filters_raw))
+            filters_raw = {k: v for k, v in record.items() if k != "sid"}
+        results.append(sync_filters_for_sid(settings, sid, filters_raw))
     return results
 
 
-def get_filter_fields_for_idno(settings: Settings, idno: str) -> dict[str, Any]:
-    """Read ``filter_fields`` and point count for an idno (sample from first matching point)."""
-    idno = idno.strip()
+def get_filter_fields_for_sid(settings: Settings, sid: int) -> dict[str, Any]:
+    """Read the stored filters and document count of study ``sid`` (sampled from its first document)."""
+    sid = int(sid)
     if settings.search_backend == "qdrant":
         coll = settings.qdrant_collection
         client = qdrant_client(settings)
         try:
-            idno_fl = _idno_filter(idno)
-            count_resp = client.count(collection_name=coll, count_filter=idno_fl)
+            sid_fl = _sid_filter(sid)
+            count_resp = client.count(collection_name=coll, count_filter=sid_fl)
             point_count = int(count_resp.count)
             if point_count == 0:
-                return {"idno": idno, "found": False, "point_count": 0, "filter_fields": None}
+                return {"sid": sid, "found": False, "point_count": 0, "filter_fields": None}
             batch, _ = client.scroll(
                 collection_name=coll,
-                scroll_filter=idno_fl,
+                scroll_filter=sid_fl,
                 limit=1,
                 with_payload=True,
                 with_vectors=False,
@@ -386,7 +313,7 @@ def get_filter_fields_for_idno(settings: Settings, idno: str) -> dict[str, Any]:
                 ff = meta.get(FILTER_FIELDS_KEY)
                 facets = meta.get(FILTER_FACETS_KEY)
             return {
-                "idno": idno,
+                "sid": sid,
                 "found": True,
                 "point_count": point_count,
                 "filter_fields": ff,
@@ -397,14 +324,10 @@ def get_filter_fields_for_idno(settings: Settings, idno: str) -> dict[str, Any]:
 
     client = build_client(settings)
     try:
-        sids = sorted(sids_for_idnos(client, settings.studies_index, [idno]).values())
-        should: list[dict[str, Any]] = [{"term": {metadata_field("idno"): idno}}]
-        if sids:
-            should.append({"terms": {metadata_field("sid"): sids}})
         body = {
             "size": 1,
             "track_total_hits": True,
-            "query": {"bool": {"should": should, "minimum_should_match": 1}},
+            "query": {"term": {metadata_field("sid"): sid}},
             "_source": {"includes": [metadata_field(FILTER_FACETS_KEY)]},
         }
         resp = client.search(index=settings.index_name, body=body, ignore_unavailable=True)
@@ -412,11 +335,11 @@ def get_filter_fields_for_idno(settings: Settings, idno: str) -> dict[str, Any]:
         total = resp.get("hits", {}).get("total") or {}
         point_count = int(total.get("value") or 0) if isinstance(total, dict) else int(total or 0)
         if not hits:
-            return {"idno": idno, "found": False, "point_count": 0, "filter_fields": None}
+            return {"sid": sid, "found": False, "point_count": 0, "filter_fields": None}
         meta = (hits[0].get("_source") or {}).get("metadata") or {}
         facets = meta.get(FILTER_FACETS_KEY)
         return {
-            "idno": idno,
+            "sid": sid,
             "found": True,
             "point_count": point_count,
             "filter_fields": facets_to_filter_field_rows(facets),
@@ -434,7 +357,9 @@ def ensure_filter_indexes_op(settings: Settings) -> dict[str, Any]:
     if settings.search_backend == "qdrant":
         client = qdrant_client(settings)
         try:
-            indexes = ensure_qdrant_filter_field_indexes(client, settings.qdrant_collection, strict=True, settings=settings)
+            indexes = ensure_qdrant_filter_field_indexes(
+                client, settings.qdrant_collection, strict=True, settings=settings
+            )
             ready = qdrant_dynamic_facet_indexes_ready(client, settings.qdrant_collection, settings)
             return {
                 "backend": "qdrant",

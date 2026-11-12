@@ -34,7 +34,11 @@ def _cap_native_thread_pools(num_threads: int) -> None:
 
 @lru_cache(maxsize=8)
 def _load_model(
-    model_id: str, model_kwargs_tuple: tuple[tuple[str, str], ...], device: str | None, num_threads: int | None
+    model_id: str,
+    model_kwargs_tuple: tuple[tuple[str, str], ...],
+    device: str | None,
+    num_threads: int | None,
+    max_seq_length: int,
 ) -> Any:
     if num_threads is not None:
         _cap_native_thread_pools(num_threads)
@@ -60,8 +64,19 @@ def _load_model(
 
     kwargs = dict(model_kwargs_tuple)
     if kwargs:
-        return SentenceTransformer(model_id, device=device, model_kwargs=kwargs)
-    return SentenceTransformer(model_id, device=device)
+        model = SentenceTransformer(model_id, device=device, model_kwargs=kwargs)
+    else:
+        model = SentenceTransformer(model_id, device=device)
+    _cap_max_seq_length(model, max_seq_length)
+    return model
+
+
+def _cap_max_seq_length(model: Any, max_seq_length: int) -> None:
+    """Embed at most ``max_seq_length`` tokens of a text (``embedding_max_seq_length``); a model's own lower limit
+    stays. Without a cap a model takes as many tokens as it supports, and a batch is padded to its longest text."""
+    own = model.max_seq_length
+    if own is None or own > max_seq_length:
+        model.max_seq_length = max_seq_length
 
 
 class EmbeddingService:
@@ -75,11 +90,17 @@ class EmbeddingService:
             t,
             self._settings.embedding_device,
             self._settings.embedding_num_threads,
+            self._settings.embedding_max_seq_length,
         )
 
     @property
     def model(self) -> Any:
         return self._model
+
+    @property
+    def input_cap(self) -> int:
+        """Longest input, in tokens, this model embeds: ``embedding_max_seq_length``, or the model's own lower limit."""
+        return int(self._model.max_seq_length)
 
     def embedding_dimension(self) -> int:
         # sentence-transformers 5+ prefers get_embedding_dimension; older models use get_sentence_embedding_dimension.

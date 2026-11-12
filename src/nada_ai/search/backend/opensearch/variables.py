@@ -1,8 +1,9 @@
 """The variable document: one per variable in the variable index, built from NADA's metadata-extract data.
 
-Mirrors ``studies.py``'s shape, but the source is flat (``core_fields`` + ``filters``, no nested metadata/facets):
-see ``build_variable_document``/``build_variables_by_survey``/``build_variable_batch`` in NADA's
-``Catalog_search_metadata_extract.php``.
+The variable only, plus its study's title (to sort by). Everything else about the study (published, type, countries,
+years, collections, repository, data access) is read from the study index at search time (see ``variables_search``),
+so a change to the study never has to touch its variables. Source: ``build_variable_document``/
+``build_variables_by_survey``/``build_variable_batch`` in NADA's ``Catalog_search_metadata_extract.php``.
 """
 
 from __future__ import annotations
@@ -10,8 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from nada_ai.search.backend.opensearch.mapping import VARIABLE_TEXT_FIELDS
-
-_KEYWORD_CORE_FIELDS = ("fid", "vid", "idno", "title", "nation", "dataset_type")
+from nada_ai.search.cursor import sort_key
 
 
 def _as_int(value: Any) -> int | None:
@@ -21,8 +21,8 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
-def variable_to_source(uid: int, core_fields: dict[str, Any], filters: dict[str, Any]) -> dict[str, Any]:
-    """Variable document from one variable's extract ``core_fields`` and ``filters``.
+def variable_to_source(uid: int, core_fields: dict[str, Any]) -> dict[str, Any]:
+    """Variable document from one variable's extract ``core_fields``.
 
     ``sid`` is ``core_fields.catalog_id``, NADA's own ``surveys.id`` (the study index's ``_id``), so a variable hit
     resolves to its study without another lookup. Fields NADA leaves empty are omitted.
@@ -35,26 +35,17 @@ def variable_to_source(uid: int, core_fields: dict[str, Any], filters: dict[str,
         text = str(core_fields.get(field) or "").strip()
         if text:
             source[field] = text
-    for field in _KEYWORD_CORE_FIELDS:
-        value = str(core_fields.get(field) or "").strip()
-        if value:
-            source[field] = value
-    source["published"] = _as_int(filters.get("published")) or 0
-    for field in ("year_start", "year_end"):
-        number = _as_int(filters.get(field))
-        if number is not None:
-            source[field] = number
-    countries = filters.get("countries")
-    if isinstance(countries, list) and countries:
-        source["countries"] = [n for c in countries if (n := _as_int(c)) is not None]
+    title = str(core_fields.get("title") or "").strip()
+    if title:
+        source["title"] = sort_key(title)  # the study title is only sorted on, never returned
     return source
 
 
-def variable_bulk_action(index: str, uid: int, core_fields: dict[str, Any], filters: dict[str, Any]) -> dict[str, Any]:
+def variable_bulk_action(index: str, uid: int, core_fields: dict[str, Any]) -> dict[str, Any]:
     """``bulk`` action that (re)writes the variable document; ``_id`` is the ``uid``, so a re-index replaces it."""
     return {
         "_op_type": "index",
         "_index": index,
         "_id": str(int(uid)),
-        "_source": variable_to_source(uid, core_fields, filters),
+        "_source": variable_to_source(uid, core_fields),
     }

@@ -30,6 +30,8 @@ pytestmark = [
 
 
 class _Embedding:
+    input_cap = 1024
+
     def embedding_dimension(self) -> int:
         return 4
 

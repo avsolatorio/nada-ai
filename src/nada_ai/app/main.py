@@ -181,31 +181,32 @@ async def demo_search_ui(s: AppState = Depends(get_state)) -> HTMLResponse:
 
 
 @app.get(
-    "/demo/documents/{idno}/pages/{page}.png",
+    "/demo/documents/{idno}/resources/{resource_id}/pages/{page}.png",
     include_in_schema=False,
     responses={200: {"content": {"image/png": {}}}},
     dependencies=[Depends(rate_limited("search_rate_limiter"))],
 )
 async def demo_document_page_preview(
     idno: str,
+    resource_id: int,
     page: int,
     dpi: int = Query(default=120, ge=36, le=300, description="Render resolution (72 dpi = 1x)."),
 ) -> Response:
-    """Render one cached PDF page as PNG for the search demo carousel."""
+    """Render one page (0-based) of a document's PDF (its NADA resource) as PNG for the search demo carousel."""
     if page < 0:
         raise HTTPException(status_code=400, detail="page must be non-negative")
-    pdf_path = resolve_document_pdf_path(idno)
-    if not pdf_path.is_file():
+    pdf_path = resolve_document_pdf_path(idno, resource_id)
+    if pdf_path is None:
         raise HTTPException(
             status_code=404,
-            detail="PDF not cached for this idno; ingest the document type first.",
+            detail="PDF not cached for this document resource; index the document first.",
         )
     try:
         png = await asyncio.to_thread(render_pdf_page_png, pdf_path, page, dpi=dpi)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        logger.error("PDF render failed for %s page %d: %s", idno, page, e)
+        logger.error("PDF render failed for %s resource %d page %d: %s", idno, resource_id, page, e)
         raise HTTPException(status_code=503, detail="Failed to render PDF page") from e
     return Response(
         content=png,

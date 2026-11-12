@@ -1719,6 +1719,8 @@
           hit,
           score: hit._score,
           qfield: m.qfield != null ? String(m.qfield) : "",
+          // the NADA resource (PDF) a page chunk was read from
+          resource_id: m.resource_id != null ? String(m.resource_id) : null,
           page_content: src.page_content != null ? String(src.page_content) : "",
           doc_meta: dm,
           page,
@@ -1748,9 +1750,11 @@
 
         function addPassage(v) {
           if (!isPassageVariant(v)) return;
-          const prev = byPage.get(v.page);
+          // a document can have several PDFs: the same page number in two of them is two passages
+          const key = (v.resource_id == null ? "" : v.resource_id) + "|" + v.page;
+          const prev = byPage.get(key);
           if (!prev || (v.score != null && (prev.score == null || v.score > prev.score))) {
-            byPage.set(v.page, v);
+            byPage.set(key, v);
           }
         }
 
@@ -1860,6 +1864,7 @@
 
         const idno = carousel.dataset.idno || "";
         const page = slide.dataset.page;
+        const resourceId = slide.dataset.resourceId || "";
         const labelEl = $("doc-carousel-lightbox-label");
         const img = lb.querySelector(".doc-carousel-lightbox__img");
         const excerptEl = $("doc-carousel-lightbox-excerpt");
@@ -1877,7 +1882,7 @@
             pdfPage +
             (scoreTxt ? " · score " + scoreTxt : "");
         }
-        if (img && idno && page != null) {
+        if (img && idno && resourceId && page != null) {
           img.alt = "PDF page " + pdfPage;
           img.classList.remove("doc-carousel__img--failed");
           img.onload = function () {
@@ -1889,6 +1894,8 @@
           img.src =
             "/demo/documents/" +
             encodeURIComponent(idno) +
+            "/resources/" +
+            encodeURIComponent(resourceId) +
             "/pages/" +
             encodeURIComponent(page) +
             ".png?dpi=" +
@@ -1994,28 +2001,37 @@
         lb.querySelector(".doc-carousel-lightbox__close")?.focus();
       }
 
-      function renderDocumentCarousel(idno, passages, activePage) {
+      function renderDocumentCarousel(idno, passages, active) {
         if (!passages.length || idno === "—") return "";
         let startIdx = 0;
-        if (activePage != null) {
-          const idx = passages.findIndex((p) => p.page === activePage);
+        if (active && active.page != null) {
+          const idx = passages.findIndex(
+            (p) => p.page === active.page && p.resource_id === active.resource_id
+          );
           if (idx >= 0) startIdx = idx;
         }
         const slides = passages
           .map((v, idx) => {
             const active = idx === startIdx ? "true" : "false";
             const scoreStr = v.score != null ? Number(v.score).toFixed(4) : "—";
+            // a document can have several PDFs: the page names its own (no resource: no preview)
             const imgUrl =
-              "/demo/documents/" +
-              encodeURIComponent(idno) +
-              "/pages/" +
-              encodeURIComponent(String(v.page)) +
-              ".png?dpi=120";
+              v.resource_id == null
+                ? ""
+                : "/demo/documents/" +
+                  encodeURIComponent(idno) +
+                  "/resources/" +
+                  encodeURIComponent(v.resource_id) +
+                  "/pages/" +
+                  encodeURIComponent(String(v.page)) +
+                  ".png?dpi=120";
             return (
               '<article class="doc-carousel__slide" data-slide-index="' +
               idx +
               '" data-page="' +
               v.page +
+              '" data-resource-id="' +
+              escapeHtml(v.resource_id == null ? "" : v.resource_id) +
               '" data-active="' +
               active +
               '">' +
@@ -2231,10 +2247,10 @@
         if (isDocument && h.inner_hits) {
           const { passages, others } = splitDocumentVariants(h);
           const outerVariant = variantFromHit(h);
-          const activePage = isPassageVariant(outerVariant) ? outerVariant.page : null;
+          const active = isPassageVariant(outerVariant) ? outerVariant : null;
           if (passages.length) {
             innerHtml =
-              renderDocumentCarousel(idno, passages, activePage) +
+              renderDocumentCarousel(idno, passages, active) +
               renderOtherVariantsList(others);
             snippetCls += " hit-card__snippet--dim";
           } else {

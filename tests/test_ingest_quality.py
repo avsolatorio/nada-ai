@@ -1,5 +1,5 @@
 """Tests for the non-blocking ingest quality-report system (ingest/quality.py)
-and its wiring through iter_langdoc_records / index_ids_op / index_from_catalog_op.
+and its wiring through iter_langdoc_records / index_sids_op / index_from_catalog_op.
 """
 
 from __future__ import annotations
@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 from nada_ai.ingest.quality import QualityReport, check_source_document
+from nada_ai.ingest.study_sources import StudySource
 from nada_ai.settings import Settings
 
 # ── pure function / accumulator tests ──────────────────────────────────────
@@ -47,7 +48,9 @@ def test_quality_report_accumulates_counts_and_samples():
     report.observe({"page_content": "", "metadata": {"idno": "A", "type": "indicator"}})
     report.observe({"page_content": "", "metadata": {"idno": "B", "type": "indicator"}})
     report.observe({"page_content": "", "metadata": {"idno": "C", "type": "indicator"}})
-    report.observe({"page_content": "fine long enough description here", "metadata": {"idno": "D", "type": "indicator"}})
+    report.observe(
+        {"page_content": "fine long enough description here", "metadata": {"idno": "D", "type": "indicator"}}
+    )
 
     assert report.checked == 4
     out = report.to_dict()
@@ -89,17 +92,23 @@ class _FakeHandler:
 
 
 class _FakeLoader:
-    """Stand-in for ai4data.discovery.metadata.handler.MetadataLoader."""
+    """Stand-in for the pipeline's ``_RecordLoader`` (ai4data's loader handed the study's record)."""
 
-    _by_idno: dict[str, list[_FakeDoc]] = {}
+    _docs: dict[int, list[_FakeDoc]] = {}
 
-    def __init__(self, idno: str, metadata_type: str, force: bool = False, include_resources: bool = True) -> None:
-        self.idno = idno
-        self.metadata_type = metadata_type
-        self.metadata = {"_extract_filters": {}, "_extract_core_fields": {"catalog_id": 1, "idno": idno}}
+    def __init__(self, source: StudySource) -> None:
+        self.sid = source.sid
+        self.metadata = {
+            "_extract_filters": {},
+            "_extract_core_fields": {"catalog_id": source.sid, "idno": source.idno},
+        }
 
     def get_metadata_handler(self) -> _FakeHandler:
-        return _FakeHandler(self._by_idno.get(self.idno, []))
+        return _FakeHandler(self._docs.get(self.sid, []))
+
+
+def _source(sid: int) -> StudySource:
+    return StudySource(sid=sid, idno=f"IDNO-{sid}", metadata_type="indicator", metadata={})
 
 
 def test_iter_langdoc_records_observes_quality_report(monkeypatch, tmp_path):
@@ -113,12 +122,12 @@ def test_iter_langdoc_records_observes_quality_report(monkeypatch, tmp_path):
     """
     import nada_ai.ingest.pipeline as pipeline_module
 
-    _FakeLoader._by_idno = {
-        "GOOD": [_FakeDoc("a perfectly fine and long enough description", {"idno": "GOOD", "type": "indicator"})],
-        "NOMETA": [_FakeDoc("also a perfectly fine and long enough description", {"type": "indicator"})],
+    _FakeLoader._docs = {
+        1: [_FakeDoc("a perfectly fine and long enough description", {"idno": "GOOD", "type": "indicator"})],
+        2: [_FakeDoc("also a perfectly fine and long enough description", {"type": "indicator"})],
     }
 
-    monkeypatch.setattr(pipeline_module, "MetadataLoader", _FakeLoader)
+    monkeypatch.setattr(pipeline_module, "_RecordLoader", _FakeLoader)
     monkeypatch.setattr(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata.get("idno") or "NOMETA")
 
     settings = Settings(
@@ -134,7 +143,7 @@ def test_iter_langdoc_records_observes_quality_report(monkeypatch, tmp_path):
         pipeline_module.iter_langdoc_records(
             settings,
             None,
-            [("GOOD", "indicator"), ("NOMETA", "indicator")],
+            [_source(1), _source(2)],
             show_progress_bar=False,
             quality_report=report,
         )
@@ -150,10 +159,10 @@ def test_iter_langdoc_records_without_quality_report_is_unaffected(monkeypatch, 
     """quality_report=None (the default) must not change what's yielded."""
     import nada_ai.ingest.pipeline as pipeline_module
 
-    _FakeLoader._by_idno = {
-        "GOOD": [_FakeDoc("a perfectly fine and long enough description", {"idno": "GOOD", "type": "indicator"})],
+    _FakeLoader._docs = {
+        1: [_FakeDoc("a perfectly fine and long enough description", {"idno": "GOOD", "type": "indicator"})],
     }
-    monkeypatch.setattr(pipeline_module, "MetadataLoader", _FakeLoader)
+    monkeypatch.setattr(pipeline_module, "_RecordLoader", _FakeLoader)
     monkeypatch.setattr(pipeline_module, "get_langdoc_uuid", lambda doc: doc.metadata["idno"])
 
     settings = Settings(
@@ -163,24 +172,21 @@ def test_iter_langdoc_records_without_quality_report_is_unaffected(monkeypatch, 
         opensearch_ml_embedding_dimension=8,
         dynamic_filter_facets_path=str(tmp_path / "facets.json"),
     )
-    results = list(
-        pipeline_module.iter_langdoc_records(
-            settings, None, [("GOOD", "indicator")], show_progress_bar=False
-        )
-    )
+    results = list(pipeline_module.iter_langdoc_records(settings, None, [_source(1)], show_progress_bar=False))
     assert len(results) == 1
     assert results[0][0] == "GOOD"
 
 
-def test_index_ids_op_includes_quality_report(monkeypatch):
-    """index_ids_op must include the accumulated quality report in its result dict."""
+def test_index_sids_op_includes_quality_report(monkeypatch):
+    """index_sids_op must include the accumulated quality report in its result dict."""
     import nada_ai.ingest.service as service_module
 
-    def fake_run_bulk_index(settings, pairs, **kwargs):
+    def fake_run_bulk_index(settings, sources, **kwargs):
         report = kwargs["quality_report"]
-        for idno, _ in pairs:
-            report.observe({"page_content": "", "metadata": {"idno": idno, "type": "indicator"}})
-        return len(pairs), None
+        sources = list(sources)
+        for source in sources:
+            report.observe({"page_content": "", "metadata": {"idno": source.idno, "type": "indicator"}})
+        return len(sources), None
 
     monkeypatch.setattr(service_module, "run_bulk_index", fake_run_bulk_index)
 
@@ -189,7 +195,15 @@ def test_index_ids_op_includes_quality_report(monkeypatch):
         qdrant_collection = "test-coll"
         report_search_index_state_enabled = False
 
-    result = service_module.index_ids_op(FakeSettings(), ["A", "B"], "indicator")
+    records = [
+        {
+            "core_fields": {"catalog_id": sid, "idno": f"I{sid}"},
+            "filters": {"dataset_type": "timeseries"},
+            "metadata": {},
+        }
+        for sid in (1, 2)
+    ]
+    result = service_module.index_sids_op(FakeSettings(), [1, 2], records=records)
 
     assert result["indexed"] == 2
     assert "quality" in result

@@ -7,12 +7,13 @@ duration of that loop:
 
 1. **Progress** — how far along the run is, right now.
 2. **Resumability** — if the run is stopped (or crashes) partway through,
-   which idnos are already done, so a follow-up run doesn't start from zero.
+   which studies are already done, so a follow-up run doesn't start from zero.
 
-``IngestProgressTracker`` addresses both: it is stepped once per idno as the
-pipeline processes it, forwards a live snapshot to the job (via ``on_update``,
-normally ``JobRegistry.set_progress`` bound to the job's id), and periodically
-persists a checkpoint file so a resumed run can skip idnos already completed.
+``IngestProgressTracker`` addresses both: it is stepped once per study (by its
+NADA internal id, ``sid``) as the pipeline processes it, forwards a live
+snapshot to the job (via ``on_update``, normally ``JobRegistry.set_progress``
+bound to the job's id), and periodically persists a checkpoint file so a
+resumed run can skip studies already completed.
 
 Checkpoints are plain JSON, one file per ``catalog_type``, written atomically
 (temp file + ``os.replace``) — no database or new service dependency. This is
@@ -54,16 +55,16 @@ def checkpoint_path(settings: Settings, catalog_type: str) -> Path:
 class IngestCheckpoint:
     catalog_type: str
     total: int = 0
-    completed_idnos: set[str] = field(default_factory=set)
-    failed: dict[str, str] = field(default_factory=dict)
+    completed_sids: set[int] = field(default_factory=set)
+    failed: dict[int, str] = field(default_factory=dict)
     updated_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "catalog_type": self.catalog_type,
             "total": self.total,
-            "completed_idnos": sorted(self.completed_idnos),
-            "failed": self.failed,
+            "completed_sids": sorted(self.completed_sids),
+            "failed": {str(sid): error for sid, error in self.failed.items()},
             "updated_at": self.updated_at,
         }
 
@@ -72,8 +73,8 @@ class IngestCheckpoint:
         return cls(
             catalog_type=str(data.get("catalog_type") or ""),
             total=int(data.get("total") or 0),
-            completed_idnos=set(data.get("completed_idnos") or []),
-            failed=dict(data.get("failed") or {}),
+            completed_sids={int(sid) for sid in data.get("completed_sids") or []},
+            failed={int(sid): str(error) for sid, error in (data.get("failed") or {}).items()},
             updated_at=float(data.get("updated_at") or 0.0),
         )
 
@@ -143,40 +144,40 @@ class IngestProgressTracker:
         self._since_save = 0
         # Pre-seed counts from a resumed checkpoint so progress reflects the
         # whole run, not just the segment still to do.
-        self.processed = len(self.checkpoint.completed_idnos) + len(self.checkpoint.failed)
+        self.processed = len(self.checkpoint.completed_sids) + len(self.checkpoint.failed)
         self.failed_count = len(self.checkpoint.failed)
         # Studies whose chunks are handed to the writer but not all confirmed written yet, by sid (every chunk
-        # carries ``metadata.sid``, set from the study itself): [idno, chunks left, first write error]. A study is
+        # carries ``metadata.sid``, set from the study itself): [chunks left, first write error]. A study is
         # marked (and so checkpointed) only once all of its chunks are confirmed.
         self._unconfirmed: dict[int, list[Any]] = {}
 
-    def expect(self, idno: str, sid: int, chunks: int) -> None:
-        """Study ``sid``'s ``chunks`` documents are about to be handed to the writer; ``idno`` is marked once the
-        writer has :meth:`confirm`-ed every one. Until then it is not in the checkpoint, so a resume after a cancel or
-        crash retries it instead of skipping chunks that were never written."""
-        entry = self._unconfirmed.setdefault(sid, [idno, 0, None])
-        entry[1] += chunks
+    def expect(self, sid: int, chunks: int) -> None:
+        """Study ``sid``'s ``chunks`` documents are about to be handed to the writer; it is marked once the writer
+        has :meth:`confirm`-ed every one. Until then it is not in the checkpoint, so a resume after a cancel or crash
+        retries it instead of skipping chunks that were never written."""
+        entry = self._unconfirmed.setdefault(sid, [0, None])
+        entry[0] += chunks
 
     def confirm(self, sid: int, ok: bool, error: str | None = None) -> None:
         """The writer's outcome for one of study ``sid``'s chunks: the backend accepted it (``ok``) or rejected it."""
         entry = self._unconfirmed.get(sid)
         if entry is None:
             return
-        if not ok and entry[2] is None:
-            entry[2] = f"write failed: {error or 'unknown error'}"
-        entry[1] -= 1
-        if entry[1] == 0:
+        if not ok and entry[1] is None:
+            entry[1] = f"write failed: {error or 'unknown error'}"
+        entry[0] -= 1
+        if entry[0] == 0:
             del self._unconfirmed[sid]
-            self.mark(entry[0], ok=entry[2] is None, error=entry[2])
+            self.mark(sid, ok=entry[1] is None, error=entry[1])
 
-    def mark(self, idno: str, ok: bool, error: str | None = None) -> None:
+    def mark(self, sid: int, ok: bool, error: str | None = None) -> None:
         self.processed += 1
         if ok:
-            self.checkpoint.completed_idnos.add(idno)
-            self.checkpoint.failed.pop(idno, None)
+            self.checkpoint.completed_sids.add(sid)
+            self.checkpoint.failed.pop(sid, None)
         else:
             self.failed_count += 1
-            self.checkpoint.failed[idno] = (error or "unknown error")[:500]
+            self.checkpoint.failed[sid] = (error or "unknown error")[:500]
 
         if self._on_update is not None:
             percent = round(100 * self.processed / self.total, 1) if self.total else None
@@ -185,7 +186,7 @@ class IngestProgressTracker:
                     "processed": self.processed,
                     "total": self.total,
                     "failed": self.failed_count,
-                    "current_idno": idno,
+                    "current_sid": sid,
                     "percent": percent,
                 }
             )
@@ -212,7 +213,7 @@ class CancelToken:
     ``asyncio.Task.cancel()`` alone does not stop work already dispatched to a
     worker thread via ``asyncio.to_thread`` — the thread runs to completion
     regardless, so "Stop" previously kept burning CPU/RAM until the whole
-    catalog finished. Checking this token once per idno makes Stop actually
+    catalog finished. Checking this token once per study makes Stop actually
     stop within one document's processing time.
     """
 

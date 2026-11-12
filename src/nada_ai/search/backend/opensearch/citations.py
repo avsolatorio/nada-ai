@@ -10,6 +10,7 @@ import json
 from typing import Any
 
 from nada_ai.search.backend.opensearch.mapping import CITATION_TEXT_FIELDS
+from nada_ai.search.cursor import sort_key
 
 
 def _as_int(value: Any) -> int | None:
@@ -64,7 +65,7 @@ def citation_to_source(
         if text:
             source[field] = text
     if source.get("title"):
-        source["title_sort"] = source["title"]
+        source["title_sort"] = sort_key(source["title"])
     doi = str(core_fields.get("doi") or "").strip()
     if doi:
         source["doi"] = doi
