@@ -245,6 +245,8 @@ def apply_study_options_op(settings: Settings, sid: int) -> dict[str, Any]:
     from nada_ai.ingest.study_sources import fetch_studies_by_sids
 
     batch = fetch_studies_by_sids(settings, [sid])
+    if batch["errors"]:
+        raise ValueError(f"NADA could not build the extract of study {sid}: {batch['errors'][0].get('message')}")
     if not batch["studies"]:
         raise ValueError(f"Study {sid} is not in NADA's catalog")
     record = batch["studies"][0]
@@ -588,7 +590,11 @@ def sync_citations_op(
 
 
 class _Seen:
-    """Passes studies through, noting each one's idno by sid (for the state report)."""
+    """Passes studies through, noting each one's idno by sid (for the state report) once the pipeline is done with it.
+
+    A study is noted when the pipeline asks for the next one (or the sources run out), not when it is handed over: a
+    cancelled pipeline takes the next study, sees the cancel and stops without loading it, and that study must not be
+    reported indexed. What the pipeline is done with is written before it returns (its last buffer is flushed)."""
 
     def __init__(self, sources: Iterable[StudySource]) -> None:
         self._sources = sources
@@ -597,10 +603,10 @@ class _Seen:
 
     def __iter__(self) -> Iterator[StudySource]:
         for source in self._sources:
+            yield source
             self.idno_by_sid[source.sid] = source.idno
             if source.metadata_type == "microdata":
                 self.microdata.append(source.sid)
-            yield source
 
 
 def _index_sources(

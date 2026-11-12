@@ -12,6 +12,7 @@ from typing import Any
 from langchain_core.documents import Document as LangchainDocument
 
 from nada_ai.ingest.microdata_enrich import append_microdata_discoverability_text
+from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, EMBEDDING_INPUT_CAP_FIELD
 from nada_ai.search.dynamic_filters import FILTER_FACETS_KEY, FILTER_FIELDS_KEY
 
 
@@ -24,12 +25,15 @@ def langdoc_to_source(
     *,
     sid: int,
     created: int | None = None,
+    embedding_input_cap: int | None = None,
 ) -> dict[str, Any]:
     """Build the canonical JSON document: ``page_content``, ``metadata`` facets, optional ``embedding``.
 
     ``sid`` is the NADA internal study id (``surveys.id``). It is required: it is stored as ``metadata.sid``
     on every document of the study and is the key used to replace or delete a study. ``created`` (the study's
     created timestamp) is stored as ``metadata.created`` so the vector search can filter on it before searching.
+    ``embedding_input_cap`` (the input cap ``embedding`` was made with) is stored beside the vector, so a stored
+    vector is reused only at the same cap.
 
     Pass ``embedding=None`` when an OpenSearch ingest pipeline (e.g. ``text_embedding``)
     fills ``embedding`` server-side. Qdrant upserts pass the dense vector separately and
@@ -68,7 +72,9 @@ def langdoc_to_source(
         "metadata": pruned_meta if pruned_meta else {},
     }
     if embedding is not None:
-        source["embedding"] = embedding
+        source[EMBEDDING_FIELD] = embedding
+        if embedding_input_cap is not None:
+            source[EMBEDDING_INPUT_CAP_FIELD] = int(embedding_input_cap)
     return source
 
 

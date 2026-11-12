@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from nada_ai.settings import Settings
 
 
@@ -71,6 +73,11 @@ def _index(settings, sids, records, bulk, **kwargs):
 def _reported(mock_report) -> dict[int, tuple[str, str | None]]:
     items = mock_report.call_args.args[1]
     assert all(i["object_type"] == "survey" for i in items)
+    return {i["object_id"]: (i["status"], i.get("error")) for i in items}
+
+
+def _reported_any(mock_report) -> dict[int, tuple[str, str | None]]:
+    items = mock_report.call_args.args[1]
     return {i["object_id"]: (i["status"], i.get("error")) for i in items}
 
 
@@ -154,6 +161,40 @@ def test_index_sids_op_reports_a_study_nada_does_not_have_as_failed():
 
     assert _reported(mock_report) == {1: ("indexed", None), 9: ("failed", "not in NADA's catalog")}
     assert result["load_errors"][0]["stage"] == "fetch"
+
+
+def test_a_cancelled_run_reports_only_the_studies_it_got_through(tmp_path, monkeypatch):
+    """Like the pipeline: it takes the next study, sees the cancel and stops without loading it. That study is not
+    reported indexed (a reconcile picks it up)."""
+    from nada_ai.ingest.progress import CancelToken
+
+    token = CancelToken()
+
+    def bulk(settings, sources, **kwargs):
+        for source in sources:
+            if kwargs["cancel_token"].is_set():
+                break
+            if source.sid == 1:
+                token.set()  # cancelled while study 1 is in hand; it is still written
+        return 1, None
+
+    records = [_record(1), _record(2), _record(3)]
+    result, _, mock_report = _run_catalog(
+        tmp_path, monkeypatch, records, settings=_settings(search_backend="opensearch"), bulk=bulk, cancel_token=token
+    )
+    assert result["cancelled"] is True
+    assert _reported_any(mock_report) == {1: ("indexed", None)}
+
+
+def test_applying_study_options_says_why_nada_could_not_build_the_extract():
+    import nada_ai.ingest.service as service_module
+
+    batch = {"studies": [], "missing": [], "errors": [{"catalog_id": 7, "message": "metadata is not valid JSON"}]}
+    with (
+        patch("nada_ai.ingest.study_sources.fetch_studies_by_sids", return_value=batch),
+        pytest.raises(ValueError, match="could not build the extract of study 7: metadata is not valid JSON"),
+    ):
+        service_module.apply_study_options_op(_settings(search_backend="opensearch"), 7)
 
 
 def test_index_sids_op_reports_a_record_with_no_ingest_path_as_failed():
@@ -612,7 +653,10 @@ def _publish_state(
         "filters": {"published": [published], "countries": ["1"]},
     }
     with (
-        patch("nada_ai.ingest.study_sources.fetch_studies_by_sids", return_value={"studies": [record]}) as fetch,
+        patch(
+            "nada_ai.ingest.study_sources.fetch_studies_by_sids",
+            return_value={"studies": [record], "missing": [], "errors": []},
+        ) as fetch,
         patch.object(service_module, "build_client", return_value=client),
         patch("nada_ai.ingest.variables_index.sync_survey_variables_op", return_value={"errors": []}) as sync,
     ):

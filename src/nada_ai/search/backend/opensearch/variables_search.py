@@ -148,7 +148,8 @@ async def allowed_sids(client: Any, studies_index: str, filters: StudyFilters, t
         sids = [int(b["key"]) for b in agg["buckets"]]
         if not sids:
             published = {"query": {"term": {f"{FILTER_FACETS_KEY}.published": 1}}}
-            if int((await client.count(index=studies_index, body=published))["count"]) == 0:
+            counted = await client.count(index=studies_index, body=published, request_timeout=timeout_seconds)
+            if int(counted["count"]) == 0:
                 raise IndexNotReady(studies_index)
     except NotFoundError as e:
         raise IndexNotReady(studies_index) from e
@@ -239,7 +240,10 @@ async def search_variables(job: VariableSearchJob) -> VariablePage:
             found, lower_bound = _total(hits)
             # Zero results is either "nothing matches" or "nothing is indexed" (e.g. a backfill that stopped before
             # its first write); only the second is an error.
-            if found == 0 and int((await job.client.count(index=job.index))["count"]) == 0:
+            if (
+                found == 0
+                and int((await job.client.count(index=job.index, request_timeout=job.timeout_seconds))["count"]) == 0
+            ):
                 raise IndexNotReady(job.index)
     except NotFoundError as e:
         raise IndexNotReady(job.index) from e

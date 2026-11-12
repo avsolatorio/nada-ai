@@ -56,6 +56,11 @@ def test_langdoc_to_source_stores_sid_as_integer() -> None:
     assert source["metadata"]["idno"] == "A"
 
 
+def test_langdoc_to_source_stores_the_input_cap_beside_a_vector_only() -> None:
+    assert langdoc_to_source(_doc("A"), [0.1], sid=1, embedding_input_cap=1024)["embedding_input_cap"] == 1024
+    assert "embedding_input_cap" not in langdoc_to_source(_doc("A"), None, sid=1, embedding_input_cap=1024)
+
+
 def test_langdoc_to_source_coerces_numeric_sid() -> None:
     assert langdoc_to_source(_doc("A"), None, sid="42")["metadata"]["sid"] == 42  # type: ignore[arg-type]
 
@@ -142,6 +147,8 @@ def test_run_bulk_index_refuses_before_touching_the_index(tmp_path) -> None:
 
 
 class _FakeEmbedding:
+    input_cap = 1024
+
     def encode_corpus(self, texts: list[str], show_progress_bar: bool = False) -> np.ndarray:
         return np.array([[float(len(t)), 1.0, 0.0, 0.0] for t in texts])
 
@@ -192,6 +199,7 @@ def test_every_document_of_a_study_carries_its_sid_and_a_study_without_one_is_no
     sids = {(source["metadata"]["idno"], source["metadata"]["sid"]) for _id, _vec, source in records}
     assert sids == {("A", 11), ("B", 22)}
     assert len(records) == 3  # C contributed nothing
+    assert {source["embedding_input_cap"] for _id, _vec, source in records} == {1024}  # beside each vector
     assert len(load_errors) == 1
     assert (load_errors[0]["sid"], load_errors[0]["idno"]) == (33, "C")
     assert load_errors[0]["stage"] == "extract"

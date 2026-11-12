@@ -534,6 +534,15 @@ def test_every_opensearch_request_is_bounded_by_the_search_timeout(monkeypatch: 
     assert {call.kwargs.get("request_timeout") for call in os_client.search.call_args_list} == {2.5}
 
 
+def test_the_empty_index_check_of_a_zero_result_search_is_bounded_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NADA_SEARCH_TIMEOUT_SECONDS", "2.5")
+    os_client = _client(_response([], total=0, counts={}))
+    with _running(monkeypatch, os_client) as c:
+        assert c.post("/studies/search", json={"query": "poverty", "mode": "lexical"}).status_code == 200
+    os_client.count.assert_called_once()
+    assert os_client.count.call_args.kwargs["request_timeout"] == 2.5
+
+
 def _post(client: TestClient, body: dict[str, Any]):
     return client.post("/studies/search", json=body)
 

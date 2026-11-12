@@ -106,3 +106,11 @@ def test_documents_index_capped_text_sort_keys() -> None:
     assert study["nation_sort"] == expected
     assert variable_to_source(1, {"catalog_id": 1, "name": "v1", "title": title})["title"] == expected
     assert citation_to_source({"citation_id": 1, "title": title}, {}, {})["title_sort"] == expected
+
+
+@pytest.mark.parametrize("missing", [-(2**63), 2**63 - 1])
+def test_the_sort_value_of_a_missing_number_round_trips(missing: int) -> None:
+    # OpenSearch sorts a document with no value as Long.MIN_VALUE or Long.MAX_VALUE (by order and missing first/last)
+    year_then_id = (SortValueKind.number, SortValueKind.id)
+    cursor = Cursor(Direction.after, (missing, 9), 30, 100, False)
+    assert decode(encode(cursor), year_then_id) == cursor

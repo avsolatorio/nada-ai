@@ -112,7 +112,9 @@ class Settings(BaseSettings):
     #: text and keyword search keep all of it). A batch is padded to its longest text, and some models accept tens of
     #: thousands of tokens (harrier: 32,768), so one very long text could take the memory of a whole batch at that
     #: length and get the process killed. Applied when the model loads; a model's own lower limit is kept.
-    embedding_max_seq_length: int = Field(default=512, ge=16)
+    #: Each chunk stores the cap its vector was made with (``embedding_input_cap``), and a stored vector is reused only
+    #: at the same cap, so changing this re-embeds each chunk as it is next indexed. 1024 covers a full PDF page.
+    embedding_max_seq_length: int = Field(default=1024, ge=16)
     #: Caps ``torch.set_num_threads`` for the local SentenceTransformers backend.
     #: Unset (default) leaves PyTorch's own default, which is every visible CPU
     #: core — on a shared/local machine this is what turns "index the catalog"

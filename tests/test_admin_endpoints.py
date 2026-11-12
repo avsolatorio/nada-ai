@@ -936,6 +936,15 @@ def test_variables_stats_501_on_qdrant(monkeypatch):
     assert _variables_stats(monkeypatch, MagicMock(), backend="qdrant").status_code == 501
 
 
+def test_variables_stats_past_the_published_study_limit_is_not_an_outage(monkeypatch):
+    mock = MagicMock()
+    too_many = {"aggregations": {"sids": {"buckets": [{"key": 1, "doc_count": 1}], "sum_other_doc_count": 5}}}
+    mock.search = AsyncMock(return_value=too_many)
+    r = _variables_stats(monkeypatch, mock)
+    assert r.status_code == 422
+    assert "too many published studies" in r.json()["detail"]
+
+
 def _by_study(monkeypatch, client_mock, backend="opensearch"):
     return _variables_stats(monkeypatch, client_mock, backend, path="/admin/variables/by-study")
 

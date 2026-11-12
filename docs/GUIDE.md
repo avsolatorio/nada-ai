@@ -761,7 +761,7 @@ in `src/nada_ai/settings.py` unless noted.
 | `NADA_EMBEDDING_MODEL_KWARGS_JSON` | `{"dtype": "auto"}` | Extra `SentenceTransformer(...)` kwargs (JSON) |
 | `NADA_EMBEDDING_DEVICE` | unset (auto) | Force device (`cpu`/`cuda`/`mps`) |
 | `NADA_EMBEDDING_BATCH_SIZE` | `32` | Encode batch size |
-| `NADA_EMBEDDING_MAX_SEQ_LENGTH` | `512` | Longest input embedded, in tokens; longer texts are cut off for the vector only (stored text and keyword search keep all of it). A batch is padded to its longest text, so without a cap one very long text can run the process out of memory |
+| `NADA_EMBEDDING_MAX_SEQ_LENGTH` | `1024` | Longest input embedded, in tokens; longer texts are cut off for the vector only (stored text and keyword search keep all of it). A batch is padded to its longest text, so without a cap one very long text can run the process out of memory. Measured on CPU (harrier-270m, batch of 32 texts at the cap): +0.75 GB at 512, +1.25 GB at 1024, +2.1 GB at 2048. Each chunk stores the cap its vector was made with, and a vector is reused only at the same cap, so a change re-embeds each chunk as it is next indexed |
 | `NADA_OPENSEARCH_ML_MODEL_ID` | unset (required for `opensearch_ml`) | Deployed ML Commons model id |
 | `NADA_OPENSEARCH_ML_EMBEDDING_DIMENSION` | unset (required) | Vector length — must match the knn_vector mapping |
 | `NADA_OPENSEARCH_ML_INGEST_PIPELINE_NAME` | `nada-text-embedding` | Ingest pipeline name |

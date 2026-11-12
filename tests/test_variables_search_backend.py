@@ -240,6 +240,16 @@ def test_the_search_is_routed_by_preference_and_bounded_by_the_timeout() -> None
     assert client.search.call_args_list[0].kwargs["request_timeout"] == 3.0  # the study index read too
 
 
+def test_the_empty_index_checks_of_a_zero_result_search_are_bounded_by_the_timeout() -> None:
+    no_studies = _client(sids=[])  # no allowed study: is the study index empty?
+    asyncio.run(search_variables(_job(client=no_studies, timeout_seconds=3.0)))
+    no_rows = _client([], total=0)  # no variable matches: is the variable index empty?
+    asyncio.run(search_variables(_job(client=no_rows, timeout_seconds=3.0)))
+    for client in (no_studies, no_rows):
+        client.count.assert_called_once()
+        assert client.count.call_args.kwargs["request_timeout"] == 3.0
+
+
 def test_a_count_past_the_cap_is_a_lower_bound_carried_by_the_cursors() -> None:
     rows = [_row(i, 10.0 - i) for i in range(1, 16)]
     page = asyncio.run(search_variables(_job(client=_client(rows, total=20_000, relation="gte"), offset=15)))

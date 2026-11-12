@@ -257,6 +257,8 @@ class _FakeVec:
 
 
 class _FakeEmbedding:
+    input_cap = 1024
+
     def encode_corpus(self, texts: list[str], show_progress_bar: bool = True) -> list[_FakeVec]:
         return [_FakeVec() for _ in texts]
 

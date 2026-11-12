@@ -17,7 +17,7 @@ from nada_ai.ingest.progress import CancelToken, IngestProgressTracker
 from nada_ai.ingest.quality import QualityReport
 from nada_ai.ingest.study_sources import StudySource
 from nada_ai.search.backend.opensearch.embeddings import EmbeddingService
-from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, TEXT_FIELD
+from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, EMBEDDING_INPUT_CAP_FIELD, TEXT_FIELD
 from nada_ai.search.backend.qdrant.sparse_lexical import embed_documents_sparse
 from nada_ai.search.canonical import stored_filter_field_name
 from nada_ai.settings import Settings
@@ -49,7 +49,9 @@ def _client(settings: Settings) -> QdrantClient:
 
 
 def _payload_for_point(source: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in source.items() if k != EMBEDDING_FIELD}
+    """The point's payload: the source without its vector (stored as the point's vector) and the vector's input cap
+    (only the OpenSearch writer reuses stored vectors)."""
+    return {k: v for k, v in source.items() if k not in (EMBEDDING_FIELD, EMBEDDING_INPUT_CAP_FIELD)}
 
 
 def _sid_of(source: dict[str, Any]) -> int | None:

@@ -130,7 +130,7 @@ There is no in-app model manager. Management is env vars + disk cache + (if the 
 | `NADA_QUERY_PROMPT` | Literal prefix; overrides the name when set |
 | `NADA_EMBEDDING_DEVICE` | e.g. `cpu` in Docker, `mps` on Apple Silicon (host) |
 | `NADA_EMBEDDING_BATCH_SIZE` | Ingest batch size (default 32) |
-| `NADA_EMBEDDING_MAX_SEQ_LENGTH` | Longest input embedded, in tokens (default 512); longer texts are cut off for the vector only |
+| `NADA_EMBEDDING_MAX_SEQ_LENGTH` | Longest input embedded, in tokens (default 1024, a full PDF page); longer texts are cut off for the vector only. Each chunk stores the cap its vector was made with, and a vector is reused only at the same cap, so a change re-embeds each chunk as it is next indexed |
 | `NADA_QDRANT_SPARSE_LEXICAL` | On by default; `false` skips BM25 |
 | `NADA_QDRANT_SPARSE_MODEL_ID` | Default `Qdrant/bm25` |
 

@@ -5,6 +5,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 EMBEDDING_FIELD = "embedding"
+#: The input cap, in tokens, a chunk's vector was made with (see ``EmbeddingService.input_cap``): a stored vector is
+#: reused only at the same cap.
+EMBEDDING_INPUT_CAP_FIELD = "embedding_input_cap"
 TEXT_FIELD = "page_content"
 METADATA_OBJECT_KEY = "metadata"
 FILTER_FACETS_KEY = "filter_facets"
@@ -163,6 +166,7 @@ def index_body(embedding_dimension: int | None) -> dict[str, Any]:
         },
     }
     if embedding_dimension is not None:
+        properties[EMBEDDING_INPUT_CAP_FIELD] = {"type": "long"}  # long: what a write before ensure-indexes maps it as
         properties[EMBEDDING_FIELD] = {
             "type": "knn_vector",
             "dimension": embedding_dimension,

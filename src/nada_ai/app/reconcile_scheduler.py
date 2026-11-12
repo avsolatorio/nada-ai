@@ -182,8 +182,8 @@ class Scheduler:
         self._generation_rechecked = False
         #: deaths of the process with an item in hand, by (queue id, changed), from the in-flight file found at start
         self._item_deaths: dict[tuple[int, int], int] = {}
-        #: the in-flight file of an item acked failed for its deaths stays until NADA takes that ack
-        self._death_ack_pending = False
+        #: the queue id of an item acked failed for its deaths: its in-flight file stays until NADA records that ack
+        self._death_ack_pending: int | None = None
 
     # -- start / stop -----------------------------------------------------------------------------------------------
 
@@ -277,7 +277,7 @@ class Scheduler:
             logger.warning("search-index scheduler: the last process died while processing %s; trying it again", what)
             self._item_deaths[key] = deaths
             return
-        self._death_ack_pending = True
+        self._death_ack_pending = key[0]
         message = (
             f"NADA-AI stopped while processing this item {deaths} times in a row (the process was killed, e.g. out of "
             "memory), so it is not tried again. Retry it once the cause is fixed."
@@ -737,14 +737,16 @@ class Scheduler:
                 1 for r in results if r.get("applied") or r.get("error") == "QUEUE_NOT_FOUND"
             )
             for result in results:
-                if not result.get("applied") and result.get("error") not in ("QUEUE_CHANGED", "QUEUE_NOT_FOUND"):
+                taken = result.get("applied") or result.get("error") in ("QUEUE_CHANGED", "QUEUE_NOT_FOUND")
+                if not taken:
                     logger.error("NADA did not record ack %s: %s", result.get("id"), result.get("error"))
                     exclude.add(int(result.get("id") or 0))
+                elif self._death_ack_pending is not None and int(result.get("id") or 0) == self._death_ack_pending:
+                    # NADA has the failed ack of the item that killed the process (or the row is gone or changed)
+                    self._death_ack_pending = None
+                    self._clear_inflight()
         if resend:
             self.st.unsent_acks = []
-            if self._death_ack_pending:
-                self._death_ack_pending = False
-                self._clear_inflight()  # NADA has the failed ack of the item that killed the process
         return True
 
     def _ack_failed(self, chunk: list[dict[str, Any]], exclude: set[int], message: str) -> bool:

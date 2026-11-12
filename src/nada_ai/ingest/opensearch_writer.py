@@ -19,7 +19,7 @@ from nada_ai.search.backend.opensearch.index_template import (
     put_cluster_auto_create_index,
     put_composable_index_template,
 )
-from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD
+from nada_ai.search.backend.opensearch.mapping import EMBEDDING_FIELD, EMBEDDING_INPUT_CAP_FIELD
 from nada_ai.search.backend.opensearch.ml.setup import ensure_text_embedding_ingest_pipeline
 from nada_ai.search.backend.opensearch.studies import study_bulk_action
 from nada_ai.settings import Settings
@@ -160,14 +160,16 @@ class OpenSearchIngestWriter(IngestWriterPort):
             logger.info("Pruned %d stale chunk document(s) of re-indexed studies", pruned)
         return pruned
 
-    def _stored_vector_lookup(self, client: Any, *, force: bool, recreated: bool) -> Any:
+    def _stored_vector_lookup(self, client: Any, *, force: bool, recreated: bool, input_cap: int | None) -> Any:
         """A ``chunk ids -> stored vectors`` lookup for the local backend, or ``None`` when reuse is not valid.
 
         Reuse needs the index's vectors to come from the configured model (``_meta.embedding_model``), so it is off
-        for a forced re-embed, a just-recreated (empty) index, and an index stamped with another model.
+        for a forced re-embed, a just-recreated (empty) index, and an index stamped with another model. A vector is
+        reused only when it was made with the current input cap (``embedding_input_cap``, ``input_cap``): one made
+        with another cap, or stored before the cap was recorded, is embedded again.
         """
         settings = self._settings
-        if force or recreated or settings.embedding_backend != "local":
+        if force or recreated or settings.embedding_backend != "local" or input_cap is None:
             return None
         meta = (client.indices.get_mapping(index=settings.index_name).get(settings.index_name) or {}).get(
             "mappings", {}
@@ -176,11 +178,16 @@ class OpenSearchIngestWriter(IngestWriterPort):
             return None
 
         def lookup(ids: list[str]) -> dict[str, list[float]]:
-            resp = client.mget(index=settings.index_name, body={"ids": ids}, _source_includes=[EMBEDDING_FIELD])
+            resp = client.mget(
+                index=settings.index_name,
+                body={"ids": ids},
+                _source_includes=[EMBEDDING_FIELD, EMBEDDING_INPUT_CAP_FIELD],
+            )
             found: dict[str, list[float]] = {}
             for doc in resp.get("docs", []):
-                vector = (doc.get("_source") or {}).get(EMBEDDING_FIELD) if doc.get("found") else None
-                if vector:
+                source = (doc.get("_source") or {}) if doc.get("found") else {}
+                vector = source.get(EMBEDDING_FIELD)
+                if vector and source.get(EMBEDDING_INPUT_CAP_FIELD) == input_cap:
                     found[doc["_id"]] = vector
             return found
 
@@ -238,7 +245,12 @@ class OpenSearchIngestWriter(IngestWriterPort):
                 load_errors=load_errors,
                 empty_docs=empty_docs,
                 studies=studies,
-                stored_vectors=self._stored_vector_lookup(client, force=force, recreated=recreate_target),
+                stored_vectors=self._stored_vector_lookup(
+                    client,
+                    force=force,
+                    recreated=recreate_target,
+                    input_cap=_embedding.input_cap if _embedding is not None else None,
+                ),
                 study_documents=True,
             )
             # One stream: every chunk, and each study's own document (``_id`` = sid, so a re-index replaces it) right

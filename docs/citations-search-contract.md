@@ -47,7 +47,10 @@ for the first `max_offset` rows, then cursors (`search_after`, stateless, no exp
 of the page's first hit (on a cursor page it comes from the cursor), and `rank` is `offset + index + 1`. `next_cursor`
 is null on the last page and `prev_cursor` on the first; every page carries them, but a client only needs them past
 `max_offset`. A cursor page does not count again: `found` is the first page's count, carried in the cursor.
-`applied.paging` is `offset` or `cursor`.
+`applied.paging` is `offset` or `cursor`. The title sort key (`title_sort`) is the title's first 256 characters, so a
+cursor stays within its size limit whatever the title; a citation indexed before that cap keeps its whole title as the
+key until it is indexed again, and a cursor taken at a longer one is `cursor_invalid`. After deploying the cap, rebuild
+the citation index (below) once.
 
 `GET /info` reports `capabilities.citations_search: true` on OpenSearch.
 

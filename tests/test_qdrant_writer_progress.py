@@ -11,6 +11,8 @@ from nada_ai.settings import Settings
 
 
 class _Embedding:
+    input_cap = 1024
+
     def embedding_dimension(self) -> int:
         return 3
 
@@ -46,3 +48,10 @@ def test_a_rejected_point_is_confirmed_as_failed() -> None:
     progress = _run([_record("p1", 1), _record("p2", 2)], upsert=upsert)
     # the batch fails, then each point is retried alone: p1 lands, p2 does not
     assert progress.confirm.call_args_list == [call(1, True, None), call(2, False, "bad payload")]
+
+
+def test_a_point_payload_carries_neither_the_vector_nor_its_input_cap() -> None:
+    from nada_ai.ingest.qdrant_writer import _payload_for_point
+
+    source = {"page_content": "t", "metadata": {"sid": 1}, "embedding": [0.1], "embedding_input_cap": 1024}
+    assert _payload_for_point(source) == {"page_content": "t", "metadata": {"sid": 1}}

@@ -97,6 +97,11 @@ class EmbeddingService:
     def model(self) -> Any:
         return self._model
 
+    @property
+    def input_cap(self) -> int:
+        """Longest input, in tokens, this model embeds: ``embedding_max_seq_length``, or the model's own lower limit."""
+        return int(self._model.max_seq_length)
+
     def embedding_dimension(self) -> int:
         # sentence-transformers 5+ prefers get_embedding_dimension; older models use get_sentence_embedding_dimension.
         get_dim = getattr(self._model, "get_embedding_dimension", None)

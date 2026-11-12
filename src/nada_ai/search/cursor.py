@@ -44,7 +44,9 @@ MAX_CURSOR_LENGTH = 4096
 #: Largest id accepted: the ids (sid, uid, citation_id) are OpenSearch ``integer`` fields.
 MAX_ID = 2**31 - 1
 
-#: Largest magnitude of a number accepted: the numeric sort fields are at most OpenSearch ``long``.
+#: The range of a number accepted: the numeric sort fields are at most OpenSearch ``long``. Both ends occur: a document
+#: with no value sorts with ``Long.MIN_VALUE`` or ``Long.MAX_VALUE`` as its sort value.
+MIN_NUMBER = -(2**63)
 MAX_NUMBER = 2**63 - 1
 
 
@@ -98,12 +100,12 @@ def _reject_constant(name: str) -> Any:
 
 
 def _is_number(value: Any) -> bool:
-    """A finite int or float within ``MAX_NUMBER`` (a JSON integer can be any size: ``10**1000`` is no number here)."""
+    """A finite int or float within a ``long`` (a JSON integer can be any size: ``10**1000`` is no number here)."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         return False
-    if isinstance(value, int):
-        return abs(value) <= MAX_NUMBER
-    return math.isfinite(value) and abs(value) <= MAX_NUMBER
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    return MIN_NUMBER <= value <= MAX_NUMBER
 
 
 def _check_value(value: Any, kind: SortValueKind) -> Any:

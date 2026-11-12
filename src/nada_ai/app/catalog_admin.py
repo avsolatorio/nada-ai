@@ -18,13 +18,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 from nada_ai.app._ingest import content_sync_job_key, guarded_ingest
-from nada_ai.app.admin import _ids_key, _submit_or_409
+from nada_ai.app.admin import Sid, _ids_key, _submit_or_409
 from nada_ai.app.admin_schemas import (
     CatalogBatchDeleteRequest,
     CatalogBatchIndexRequest,
@@ -43,9 +43,6 @@ from nada_ai.ingest.service import delete_by_sids_op, index_sids_op
 logger = logging.getLogger(__name__)
 
 catalog_router = APIRouter(prefix="/admin/catalog", tags=["catalog"])
-
-#: A study, by its NADA internal id (``surveys.id``).
-Sid = Annotated[int, Path(ge=1, description="NADA internal study id")]
 
 
 @catalog_router.get(

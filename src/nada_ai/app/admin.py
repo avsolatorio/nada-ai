@@ -583,12 +583,14 @@ async def _published_sids(s: AppState) -> list[int]:
     """The published studies' ids, read from the study index (none while it is missing or empty): the studies whose
     variables search can return."""
     from nada_ai.app.studies_schemas import StudyFilters
-    from nada_ai.search.backend.opensearch.variables_search import IndexNotReady, allowed_sids
+    from nada_ai.search.backend.opensearch.variables_search import IndexNotReady, TooManyStudies, allowed_sids
 
     try:
         return await allowed_sids(s.client, s.settings.studies_index, StudyFilters(), s.settings.search_timeout_seconds)
     except IndexNotReady:
         return []
+    except TooManyStudies as e:  # a limit of these totals, not an outage
+        raise HTTPException(status_code=422, detail=f"too many published studies to total: {e}") from e
     except Exception as e:
         logger.error("published studies read failed: %s", e)
         raise HTTPException(status_code=503, detail="backend unavailable") from e

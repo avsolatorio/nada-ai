@@ -243,7 +243,8 @@ def iter_langdoc_records(
     ``stored_vectors``, if given (local embedding backend only), maps chunk ids to the vectors already stored for
     them. A chunk id is a hash of the chunk's type, idno, field and text, so a stored vector belongs to exactly
     this text: those chunks are not embedded again, only the new or changed ones. The caller decides when reuse is
-    valid (same embedding model, not a forced re-embed).
+    valid (same embedding model and input cap, not a forced re-embed). Each vector is stored with the input cap it
+    was made with (``embedding_input_cap``).
 
     Every document carries ``metadata.sid``, the NADA internal study id. A study whose
     extract data lacks it is not indexed: it is reported in ``load_errors`` (``stage``
@@ -308,6 +309,7 @@ def iter_langdoc_records(
                 filter_facets=filter_facets,
                 sid=study.sid,
                 created=study.core_fields.get("created"),
+                embedding_input_cap=embedding.input_cap,
             )
             if quality_report is not None:
                 quality_report.observe(source)

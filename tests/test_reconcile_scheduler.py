@@ -681,3 +681,20 @@ async def test_start_reads_the_inflight_file_left_by_a_dead_process():
             assert [(a["id"], a["result"]) for a in second.st.unsent_acks] == [(2, "failed")]
         finally:
             await second.stop()
+
+
+def test_the_death_record_stays_while_nada_answers_but_does_not_record_the_failed_ack():
+    dying = Scheduler(_state())
+    dying._item_deaths[(2, 1700000002)] = ITEM_DEATH_LIMIT - 1
+    dying._write_inflight(_item(2))
+    restarted = _restart()
+
+    nada = FakeNada([_item(2)])
+    nada.ack_error = AckRefused("DB is read-only", 400)  # NADA answers, but records nothing
+    with (
+        patch.object(reconcile_scheduler, "ack_batch", nada.ack_batch),
+        patch.object(reconcile_scheduler, "get_status", nada.get_status),
+    ):
+        asyncio.run(restarted._send_acks(list(restarted.st.unsent_acks), set(), resend=True))
+    assert restarted._inflight_path.exists()  # a restart acks it failed again
+    assert [(a["id"], a["result"]) for a in _restart().st.unsent_acks] == [(2, "failed")]
